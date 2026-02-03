@@ -1,0 +1,25 @@
+Backdoored packages on the Python Package Index (PyPI) are a persistent supply chain threat where attackers upload malicious libraries, often using techniques like
+typosquatting (mimicking popular package names) to trick developers into installing them. These packages are designed to steal credentials, execute remote commands, or install ransomware on both Windows and Linux systems. 
+Recent and Notable Backdoored Packages
+
+    Colorama/Colorizr Campaign (May/June 2025): Attackers targeted Python and NPM users with packages that mimicked the popular colorama library, delivering backdoors that enabled remote access, data exfiltration, and persistence.
+    SilentSync RAT (August 2025): Malicious packages termncolor, sisaws, and secmeasure were found distributing the "SilentSync" Remote Access Trojan (RAT) to steal data and grab screen captures.
+    "Fabrice" (Nov 2024): A malicious package discovered stealing AWS access keys and secret keys.
+    Ultralytics Compromise (Dec 2024): A malicious version (8.3.41) of the popular ultralytics AI library was published, containing code to download a crypto coinminer.
+    W4SP Stealer (2023): Multiple campaigns involved 116+ malicious packages delivering the W4SP stealer to grab cryptocurrency and credentials.
+    SentinelSneak (Dec 2022): A package posing as a SentinelOne SDK was found to have a backdoor, dubbed "SentinelSneak," which didn't execute until called, delaying detection. 
+
+Common Attack Techniques
+
+    Typosquatting: Creating packages with slight misspellings of popular libraries (e.g., requests vs. requesst).
+    Dependency Confusion: Tricking systems into downloading a malicious package from a public repository instead of a legitimate internal one.
+    Compromised Accounts: Gaining access to legit developer accounts to inject malicious code into updates.
+    Malicious Install Scripts: Using setup.py scripts to execute code immediately upon installation. 
+
+Mitigation and Protection
+PyPI staff works to remove malware, but the open nature of the repository makes it a continuous battle. Developers should: 
+
+    Verify Package Names: Double-check spelling for common libraries.
+    Inspect setup.py: Look for suspicious base64 strings, external network requests, or obfuscated code.
+    Use Pinning: Always pin package versions to avoid accidentally downloading a compromised update.
+    Monitor Dependencies: Use automated tools to scan for known malicious packages. 
