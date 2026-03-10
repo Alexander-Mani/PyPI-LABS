@@ -1,0 +1,26 @@
+simulator:
+  base_url: "http://127.0.0.1:8080"
+
+detection:
+  # Which detectors to run (can be combined)
+  static_tools:
+    - "bandit"
+    - "semgrep"
+  llm_providers:
+    - "anthropic"   # set API key via env: ANTHROPIC_API_KEY
+    # - "openai"    # OPENAI_API_KEY
+    # - "gemini"    # GEMINI_API_KEY
+    # - "deepseek"  # DEEPSEEK_API_KEY
+    # - "mistral"   # MISTRAL_API_KEY
+    # - "meta"      # META_API_KEY
+
+  # Prompt/config store path (system prompts for LLM detectors)
+  prompt_store: "prompts/"
+
+storage:
+  results_db: "data/results.db"
+
+logging:
+  file: "logs/analyzer.log"
+  level: "INFO"
+  console_output: true
