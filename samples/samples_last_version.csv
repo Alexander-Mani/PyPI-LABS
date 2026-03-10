@@ -1,0 +1,10 @@
+Attack_Vector,Package_Name,Malicious_Version,Infection_Date,LKGR,Safe_Download_Command
+Dependency Confusion,torchtriton,2.0.0+0d7e753227,2022-12-25,N/A,pip download pytorch-triton --no-deps
+Dependency Confusion,totallysafe,Unknown,2015-2019,N/A,N/A
+Account Takeover,num2words,0.5.15,2025-07-28,0.5.14,pip download num2words==0.5.14 --no-deps
+Account Takeover,ultralytics,8.3.41,2024-12-04,8.3.40,pip download ultralytics==8.3.40 --no-deps
+Multi-stage Execution,secmeasure,0.1.0,2025-08-03,N/A,N/A
+Multi-stage Execution,sisaws,2.1.6,2025-08-04,N/A,pip download sisa --no-deps
+Multi-stage Execution,termncolor,1.0.0,2025-09-18,N/A,pip download termcolor==2.3.0 --no-deps
+Typosquatting,colourama,0.1.6,2018-10-01,N/A,pip download colorama==0.4.6 --no-deps
+Typosquatting,nmap-python,1.0.0,2015-2019,N/A,pip download python-nmap==0.7.1 --no-deps
