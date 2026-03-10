@@ -1,0 +1,23 @@
+server:
+  host: "127.0.0.1"
+  port: 8080
+  debug: false
+
+storage:
+  index_dir: "data/index"        # flat-file package storage root
+  metadata_db: "data/sim.db"     # SQLite metadata store
+
+attack_simulation:
+  # Typosquatting: disable name-similarity (Levenshtein) guards
+  allow_similar_names: true
+
+  # Dependency confusion: accept arbitrary high version numbers
+  allow_arbitrary_versions: true
+
+  # Credential takeover: enforce version bump on each upload
+  enforce_version_bump: true
+
+logging:
+  file: "logs/simulator.log"
+  level: "INFO"
+  console_output: true
