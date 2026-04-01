@@ -2,13 +2,127 @@
 import json
 from typing import Optional, Iterable, Dict, Any
 from .db_core import DBCore
-# Probably agood idea to maybe create a model fro something
+
+# ---------------------------------------------------------------------------
+# Evaluation pipeline schema
+# ---------------------------------------------------------------------------
+
+_EVAL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS eval_run (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id     TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS eval_result (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id          TEXT    NOT NULL,
+    package_name    TEXT    NOT NULL,
+    version         TEXT    NOT NULL,
+    pipeline        TEXT    NOT NULL,
+    detector        TEXT    NOT NULL,
+    verdict         INTEGER NOT NULL,
+    heuristic_flags TEXT    NOT NULL,
+    exec_time_ms    INTEGER NOT NULL,
+    api_cost_usd    REAL    NOT NULL,
+    details         TEXT,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_eval_result_run ON eval_result(run_id);
+CREATE INDEX IF NOT EXISTS idx_eval_result_pkg ON eval_result(package_name);
+"""
+
 
 class DBManager(DBCore):
     """
     Inherits all connection logic from DBCore.
-    Adds specific methods for the ingestion and scanning pipeline.
+    Adds specific methods for the evaluation pipeline.
+    Uses a separate database (eval_results.db) independent of url_metadata.db.
     """
+
+    # Point to a dedicated eval DB — does not share url_metadata.db.
+    DB_PATH = DBCore.BASE_DIR / "data" / "eval_results.db"
+
+    def __init__(self):
+        super().__init__()
+        self._init_eval_schema()
+
+    def initialize_db(self) -> None:
+        # DBCore.initialize_db() reads schema.sql for the url table which is
+        # not used here. Skip it entirely; _init_eval_schema handles our tables.
+        pass
+
+    def _init_eval_schema(self) -> None:
+        self.cursor.executescript(_EVAL_SCHEMA)
+        self.conn.commit()
+
+    # ------------------------------------------------------------------
+    # Evaluation pipeline CRUD
+    # ------------------------------------------------------------------
+
+    def create_eval_run(self, run_id: str) -> None:
+        self.write_one(
+            "INSERT OR IGNORE INTO eval_run (run_id) VALUES (?)",
+            (run_id,),
+        )
+
+    def insert_eval_result(
+        self,
+        run_id: str,
+        package_name: str,
+        version: str,
+        pipeline: str,
+        detector: str,
+        verdict: bool,
+        heuristic_flags: list,
+        exec_time_ms: int,
+        api_cost_usd: float,
+        details: dict | None = None,
+    ) -> int | None:
+        return self.write_one(
+            """INSERT INTO eval_result
+               (run_id, package_name, version, pipeline, detector, verdict,
+                heuristic_flags, exec_time_ms, api_cost_usd, details)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                run_id,
+                package_name,
+                version,
+                pipeline,
+                detector,
+                int(verdict),
+                json.dumps(heuristic_flags),
+                exec_time_ms,
+                api_cost_usd,
+                json.dumps(details) if details else None,
+            ),
+        )
+
+    def get_eval_results_for_run(self, run_id: str) -> list[dict]:
+        rows = self.fetch_many(
+            "SELECT * FROM eval_result WHERE run_id=? ORDER BY created_at",
+            (run_id,),
+        )
+        for r in rows:
+            if r.get("heuristic_flags"):
+                r["heuristic_flags"] = json.loads(r["heuristic_flags"])
+            if r.get("details"):
+                r["details"] = json.loads(r["details"])
+        return rows
+
+    def get_eval_summary(self, run_id: str) -> dict[str, dict]:
+        rows = self.fetch_many(
+            """SELECT detector, pipeline,
+                      SUM(CASE WHEN verdict=1 THEN 1 ELSE 0 END) AS malicious_count,
+                      SUM(CASE WHEN verdict=0 THEN 1 ELSE 0 END) AS benign_count,
+                      COUNT(*) AS total
+               FROM eval_result
+               WHERE run_id=?
+               GROUP BY detector, pipeline""",
+            (run_id,),
+        )
+        return {f"{r['detector']}:{r['pipeline']}": dict(r) for r in rows}
 
 # Examples from prev project
     # def _to_text_or_json(self, v):
