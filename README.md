@@ -50,13 +50,23 @@ Feeds packages from the sample dataset into the simulator in the correct chronol
 
 ### Analyzer (`src/analyzer/`)
 
-Detects supply chain attacks by diffing consecutive package versions and running detection tools on the changes.
+Two parallel detection pipelines. The diff-based pipeline connects to the live simulator; the evaluation pipeline runs directly against the sample archives on disk.
 
-- `main.py` -- `DetectionAnalyzer` (orchestrates: poll simulator, fetch archives, diff, detect, store results)
-- `diff.py` -- `DiffEngine`, `PackageExtractor`, `DiffParser` (extracts `.tar.gz`/`.whl` archives, computes unified diffs, filters non-code files)
-- `detection_controller.py` -- `DetectionController`, `StaticDetectorAdapter`, `LLMDetectorAdapter` (runs Bandit/Semgrep and LLM APIs on parsed diffs)
-- `sql.py` -- `SQL` (SQLite CRUDs for detection results, run tracking)
-- `config.yaml` -- simulator URL, detector selection, LLM provider config, results DB path
+**Diff-based pipeline** (connected to simulator):
+- `main.py` -- `DetectionAnalyzer` (poll simulator → fetch archives → diff → detect → store)
+- `diff.py` -- `DiffEngine`, `PackageExtractor`, `DiffParser` (extracts `.tar.gz`/`.whl`, computes unified diffs)
+- `detection_controller.py` -- `DetectionController`, `StaticDetectorAdapter`, `LLMDetectorAdapter` (Bandit/Semgrep + LLM on diffs)
+- `sql.py` -- `SQL` (SQLite CRUDs for diff-pipeline results)
+- `config.yaml` -- simulator URL, detector selection, LLM provider, results DB path
+
+**Entry-point scanning evaluation pipeline** (offline, against sample archives):
+- `evaluate.py` -- `EvaluationRunner` (discovers archives → extract → filter → detect → print TP/TN/FP/FN/F1 table)
+- `entry_extractor.py` -- `EntryPointExtractor`, `PackageInfo` (unpacks `.tar.gz`/`.whl`/`.zip`, extracts `setup.py`, `__init__.py`, `pyproject.toml` and their 1-level imports)
+- `heuristic_filter.py` -- `HeuristicFilter` (flags `base64_or_hex`, `network_in_install_hook`, `shell_execution`, `bundled_binary` before LLM evaluation)
+- `detection_controller.py` also contains `EvalController`, `EntryPointStaticAdapter`, `EntryPointLLMAdapter`, `AgenticAdapter` (appended; existing diff classes unchanged)
+- `configs/` -- per-model YAML configs (`model_name`, `temperature`, `system_prompt`, `user_template`); `claude_opus.yaml`, `gpt.yaml`, `gemini.yaml`, `claude_agentic.yaml`
+- `TODO.md` -- sequential task checklist for the evaluation module
+- `CONCERNS.md` -- documented design decisions and data interpretation caveats
 
 ---
 
@@ -78,9 +88,21 @@ The dataset covers four real-world attack vectors with 9 packages total. Each ha
 
 Malicious samples are sourced from the [Backstabber's Knife Collection](https://dasfreak.github.io/Backstabbers-Knife-Collection/) and contemporary threat intelligence databases. Benign samples are real historical releases downloaded directly from PyPI.
 
+The benign dataset is structured in four tiers, each serving a distinct pipeline role:
+
+| Tier | Location | Packages | Purpose |
+|---|---|---|---|
+| Differential baselines | `benign/{num2words,ultralytics}/` | All versions ≤ LKGR | Account-takeover intra-package diff |
+| Targeted controls | `benign/{colorama,python-nmap,termcolor,sisa}/` | All versions of target | Typosquatting/multi-stage cross-package diff |
+| Synthetic stubs | `benign/{torchtriton,totallysafe}/` | 1 generated version | Dependency-confusion metadata+SAST baseline |
+| High-volume controls | `benign/controls/{boto3,...}/` | All historical versions | Latency benchmark + false-positive baseline |
+
+The high-volume controls cover the 10 most-downloaded PyPI packages (`boto3`, `urllib3`, `requests`, `certifi`, `botocore`, `setuptools`, `packaging`, `idna`, `charset-normalizer`, `python-dateutil`) — approximately 5,500 versions total. They are kept under `benign/controls/` and skipped by the evaluation runner's default mode to avoid thousands of redundant API calls.
+
 **Sample management scripts:**
-- `samples/download_benign.py` -- downloads all historical versions from PyPI for each target package
+- `samples/download_benign.py` -- downloads versions from PyPI for differential baseline and targeted control tiers
 - `samples/create_synthetic.py` -- builds minimal benign stubs for dependency confusion packages
+- `samples/download_controls.py` -- downloads all historical versions of the top-10 packages into `benign/controls/`; supports `--dry-run`
 
 ---
 
@@ -91,19 +113,30 @@ Malicious samples are sourced from the [Backstabber's Knife Collection](https://
 git clone https://github.com/Alexander-Mani/PyPi-SCADA.git
 cd PyPi-SCADA
 python -m venv .venv && source .venv/bin/activate
-pip install flask loguru rich pyyaml requests bandit semgrep
+pip install -r requirements.txt
 
 # 2. Collect benign samples
 python samples/download_benign.py
 python samples/create_synthetic.py
+# Optional: high-volume controls (≈5 500 files, takes a while)
+python samples/download_controls.py
 
-# 3. Start the simulator
+# 3. Run the offline evaluation pipeline (no simulator needed)
+#    SAST only — no API keys required
+python src/analyzer/evaluate.py
+#    With LLM pipelines — set keys first
+export ANTHROPIC_API_KEY=...
+export OPENAI_API_KEY=...       # optional
+export GEMINI_API_KEY=...       # optional
+python src/analyzer/evaluate.py
+
+# 4. Start the simulator (for the diff-based pipeline)
 cd src/simulator && python main.py
 
-# 4. Inject packages (in another terminal)
+# 5. Inject packages (in another terminal)
 cd src/injector && bash controller.sh all
 
-# 5. Run the analyzer (in another terminal)
+# 6. Run the diff-based analyzer (in another terminal)
 cd src/analyzer && python main.py
 ```
 
