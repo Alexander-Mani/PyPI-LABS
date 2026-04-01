@@ -1,0 +1,8 @@
+pyyaml
+flask
+loguru
+rich
+requests
+anthropic
+bandit
+semgrep

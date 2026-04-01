@@ -13,7 +13,7 @@ import yaml
 from flask import Flask, request, abort, send_from_directory
 
 # Shared utilities (one level up)
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from src.utils.logger import setup_logger, get_logger
 
 from simple import SimpleAPI, ProjectIndex
