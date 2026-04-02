@@ -43,7 +43,8 @@ Attack simulation flags control the simulator's acceptance behavior:
 
 Feeds packages from the sample dataset into the simulator in the correct chronological order.
 
-- `controller.sh` -- shell wrapper around `twine` that uploads `.tar.gz`/`.whl` files to the simulator's `/legacy/` endpoint
+- `controller.sh` -- shell wrapper around `twine` that uploads `.tar.gz`/`.whl` files to the simulator's `/legacy/` endpoint (local dev workflow)
+- `upload_samples.py` -- VM-targeted batch uploader; scans a pre-extracted `samples-extracted/` directory, sorts benign and control archives by version before upload, and extracts password-protected malicious zips before uploading the inner archive (VM deployment workflow)
 - `pull_benign.py` -- downloads benign version pairs from PyPI into the dataset directory
 - `benign_samples.yaml` -- defines which version pairs to download per attack category
 - `config.yaml` -- simulator URLs, dataset paths, twine credentials
@@ -149,6 +150,27 @@ cd src/analyzer && python main.py
 - Config-driven via YAML (no hardcoded secrets; API keys via environment variables)
 - All logging through shared `src/utils/logger.py` (loguru)
 - Flat-file storage for the simulator's package index
+
+---
+
+## Deploying to a VM
+
+For deployment to the provisioned experiment VM the pipeline must run under an
+unprivileged `pypi-runner` account (no sudo). Full setup instructions are in
+[`DEPLOYMENT_MANIFEST.md`](DEPLOYMENT_MANIFEST.md). Security decisions — including
+the rationale for the unprivileged account, API key handling, network isolation during
+evaluation, and tmpfs extraction of malicious archives — are documented in
+[`RISK_DIARY.md`](RISK_DIARY.md).
+
+Use `upload_samples.py` (not `controller.sh`) on the VM:
+
+```bash
+python src/injector/upload_samples.py \
+  --samples-dir /home/pypi-runner/samples-extracted \
+  --simulator-url http://127.0.0.1:8080
+```
+
+See `docs/USAGE.md` section 3 for the full CLI reference.
 
 ---
 

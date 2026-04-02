@@ -138,6 +138,80 @@ credentials:
 
 ---
 
+## 3. VM Deployment — `upload_samples.py`
+
+For the provisioned VM environment where samples arrive as a pre-zipped archive
+(`benign_and_controlls.zip`) and individual password-protected malicious zip files,
+use `upload_samples.py` instead of `controller.sh`.
+
+See `DEPLOYMENT_MANIFEST.md` for full setup steps (account creation, sample
+extraction, venv). The account and security constraints are documented in
+`RISK_DIARY.md`.
+
+### Prerequisites
+
+- Simulator running on `http://127.0.0.1:8080`
+- Samples extracted into a directory with this layout:
+
+```
+samples-extracted/
+├── benign/       # per-package subdirs of .tar.gz / .whl
+├── controls/     # same layout; infrastructure packages
+└── malicious/    # password-protected .zip files (password: "infected")
+```
+
+### Run
+
+```bash
+cd ~/pypi-scada-repo
+source venv/bin/activate
+
+# Upload all categories (benign → controls → malicious)
+python src/injector/upload_samples.py \
+  --samples-dir /home/pypi-runner/samples-extracted \
+  --simulator-url http://127.0.0.1:8080
+
+# Upload a single category
+python src/injector/upload_samples.py \
+  --samples-dir /home/pypi-runner/samples-extracted \
+  --only benign
+
+python src/injector/upload_samples.py \
+  --samples-dir /home/pypi-runner/samples-extracted \
+  --only controls
+
+python src/injector/upload_samples.py \
+  --samples-dir /home/pypi-runner/samples-extracted \
+  --only malicious
+
+# Dry run — prints archive list, calls no twine
+python src/injector/upload_samples.py \
+  --samples-dir /home/pypi-runner/samples-extracted \
+  --dry-run
+```
+
+### CLI reference
+
+| Flag | Default | Description |
+|---|---|---|
+| `--samples-dir` | `/home/pypi-runner/samples-extracted` | Path to extracted samples root |
+| `--simulator-url` | `http://127.0.0.1:8080` | Base URL of the simulator |
+| `--only` | `all` | Category filter: `benign`, `controls`, `malicious`, or `all` |
+| `--dry-run` | off | Print what would be uploaded without calling twine |
+
+### Behaviour notes
+
+- Benign and control archives within each package subdirectory are sorted by version
+  (older first) before upload, ensuring correct ordering in `list_versions()`.
+- Malicious zips are extracted to `/tmp/pypi-scada-staging/<uuid>/` (tmpfs) and the
+  staging directory is deleted immediately after each upload.
+- Already-uploaded files are skipped (`--skip-existing` passed to twine); reruns are
+  safe.
+- Upload failures are logged and counted but do not abort the run; the exit code is
+  non-zero if any failure occurred.
+
+---
+
 ## Typical Workflow
 
 ```
