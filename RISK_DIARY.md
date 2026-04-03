@@ -99,6 +99,50 @@ HTTP port (8080), it could interact with the simulated index — logged but not 
 
 ---
 
+## Decision 5 — Isolated credential proxy for LLM API keys
+
+**Decision:**
+LLM API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`) are held
+exclusively by a dedicated `credential_proxy` service running as `proxy-runner`.
+The analyzer process (`pypi-runner`) carries no API keys in its environment. All
+LLM API calls are made by posting `{provider, model, system, messages}` to the
+proxy at `http://127.0.0.1:9090/proxy/analyze`; the proxy returns the LLM
+response. The analyzer SDK imports (`anthropic`, `openai`, `google.generativeai`)
+are bypassed in proxy mode — the analyzer uses `requests` only.
+
+**Threat addressed:**
+Decision 2 moved API keys from config files into environment variables. A
+sufficiently capable malicious package can still harvest environment variables
+at import time or via `setup.py` execution within the analyzer process. It can
+then encode the keys in a request payload (e.g. as part of the JSON it expects
+from an LLM) and exfiltrate them through the single outbound channel that
+existing iptables rules permit (api.anthropic.com port 443). The attacker gets
+a paid-API credential without triggering any process-level anomaly.
+
+**Controls applied:**
+- `pypi-runner` environment: no `*_API_KEY` variables set. Any attempt to read
+  them from `os.environ` in the analyzer raises `KeyError` (direct SDK path is
+  not taken in proxy mode).
+- `proxy-runner` account: separate unprivileged user, separate login shell,
+  separate `~proxy-runner/.env` (chmod 600). Only this account's processes can
+  read the keys.
+- Egress policy enforced via the iptables `owner` match module:
+  - `pypi-runner` processes: DROP all non-loopback outbound.
+  - `proxy-runner` processes: ACCEPT outbound only to `api.anthropic.com`,
+    `api.openai.com`, `generativelanguage.googleapis.com` port 443.
+- The proxy binds to `127.0.0.1:9090` only — no external exposure.
+
+**Residual risk:**
+A malicious package that discovers the proxy endpoint at `127.0.0.1:9090` and
+crafts a valid `/proxy/analyze` request could use the proxy as an unwitting
+relay to exfiltrate content to the LLM provider (e.g. embedding secrets in a
+user message). This residual is accepted: the payload would be package source
+code already held on the execution VM, not new secrets, and the provider's
+logging would record the request under the experiment's API key identity.
+Mitigation: request size cap enforced in the proxy (payload > 64 KB rejected).
+
+---
+
 ## Decision 4 — Malicious zip extraction to tmpfs
 
 **Decision:**

@@ -23,7 +23,12 @@ Outbound network access to GitHub and PyPI is required for steps 1–5.
 
 ---
 
-## Step 1 — Create the unprivileged account
+## Step 1 — Create the two unprivileged accounts
+
+Two accounts are required. `pypi-runner` runs the analyzer pipeline; it has no
+API keys. `proxy-runner` runs the credential proxy; it holds the API keys and
+is the only account permitted to make outbound connections to LLM endpoints.
+Neither account has sudo privileges.
 
 Run as `lexi` (or any sudoer):
 
@@ -35,13 +40,22 @@ sudo useradd \
   --shell /bin/bash \
   --comment "PyPi-SCADA experiment runner" \
   pypi-runner
+
+sudo useradd \
+  --system \
+  --create-home \
+  --home-dir /home/proxy-runner \
+  --shell /bin/bash \
+  --comment "PyPi-SCADA credential proxy" \
+  proxy-runner
 ```
 
-Verify no sudo access was granted:
+Verify no sudo access was granted to either account:
 
 ```bash
 sudo -l -U pypi-runner
-# Expected output: "User pypi-runner is not allowed to run sudo on <hostname>."
+sudo -l -U proxy-runner
+# Expected: "... is not allowed to run sudo on <hostname>."
 ```
 
 ---
@@ -131,93 +145,153 @@ sudo -u pypi-runner bash -c "
 
 ---
 
-## Step 6 — Configure API keys
+## Step 6 — Configure API keys (proxy-runner only)
+
+API keys belong to `proxy-runner` exclusively. `pypi-runner` must have no keys
+in its environment.
 
 ```bash
-sudo -u pypi-runner bash -c "
-cat > /home/pypi-runner/.env << 'ENVEOF'
+sudo -u proxy-runner bash -c "
+cat > /home/proxy-runner/.env << 'ENVEOF'
 export ANTHROPIC_API_KEY=sk-ant-REPLACE_ME
 export OPENAI_API_KEY=sk-REPLACE_ME
-export GOOGLE_API_KEY=REPLACE_ME
+export GEMINI_API_KEY=REPLACE_ME
 ENVEOF
-chmod 600 /home/pypi-runner/.env
-echo 'source ~/.env' >> /home/pypi-runner/.bashrc
+chmod 600 /home/proxy-runner/.env
+echo 'source ~/.env' >> /home/proxy-runner/.bashrc
 "
 ```
 
-Edit `/home/pypi-runner/.env` and replace the placeholder values with real keys:
+Edit `/home/proxy-runner/.env` and replace the placeholder values with real keys:
 
 ```bash
-sudo -u pypi-runner nano /home/pypi-runner/.env
+sudo -u proxy-runner nano /home/proxy-runner/.env
+```
+
+Confirm `pypi-runner` has no API keys set (both commands must produce empty output):
+
+```bash
+sudo -u pypi-runner bash -c 'echo ${ANTHROPIC_API_KEY:-}'
+sudo -u pypi-runner bash -c 'echo ${OPENAI_API_KEY:-}'
 ```
 
 ---
 
-## Step 7 — Restrict network (before evaluation)
+## Step 7 — Configure egress filtering
 
-Apply before starting any evaluation run. The simulator, injector, and analyzer
-all communicate only over localhost; this rule set is sufficient:
+Two-tier egress policy using the iptables `owner` match module:
+
+- `pypi-runner` (analyzer) — no outbound connections beyond localhost.
+- `proxy-runner` (credential proxy) — outbound only to authorised LLM endpoints.
+
+Verify the `xt_owner` module is available:
 
 ```bash
-sudo iptables -P INPUT  DROP
-sudo iptables -P OUTPUT DROP
-sudo iptables -P FORWARD DROP
-sudo iptables -A INPUT  -i lo -j ACCEPT
-sudo iptables -A OUTPUT -o lo -j ACCEPT
+sudo modprobe xt_owner
+lsmod | grep xt_owner   # must return a line
 ```
 
-To restore full network access after the run:
+Apply the rules (run as `lexi`):
 
 ```bash
-sudo iptables -F
-sudo iptables -P INPUT  ACCEPT
-sudo iptables -P OUTPUT ACCEPT
+# Drop all non-loopback outbound from pypi-runner
+sudo iptables -A OUTPUT -m owner --uid-owner pypi-runner ! -o lo -j DROP
+
+# Allow proxy-runner outbound to LLM endpoints only
+sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -o lo -j ACCEPT
+sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner \
+  -d api.anthropic.com -p tcp --dport 443 -j ACCEPT
+sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner \
+  -d api.openai.com -p tcp --dport 443 -j ACCEPT
+sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner \
+  -d generativelanguage.googleapis.com -p tcp --dport 443 -j ACCEPT
+sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -j DROP
+```
+
+**Note:** iptables resolves domain names to IP at rule-insertion time.
+If the resolved IPs change (e.g. Anthropic rotates endpoints), re-apply
+the rules. Alternatively, use the actual IP ranges from each provider's
+published allowlist.
+
+Verify the pypi-runner block:
+
+```bash
+sudo -u pypi-runner curl -s --max-time 5 https://api.anthropic.com/v1/models 2>&1 || true
+# Expected: connection refused or timed out (not a successful response)
+```
+
+To remove all owner rules after the experiment:
+
+```bash
+sudo iptables -D OUTPUT -m owner --uid-owner pypi-runner ! -o lo -j DROP
+sudo iptables -F OUTPUT   # or selectively delete by rule number
 ```
 
 ---
 
-## Step 8 — Open a pypi-runner session
+## Step 8 — Copy the repo to proxy-runner and start the credential proxy
 
-All remaining steps run as `pypi-runner`. Open an interactive login shell:
+The proxy needs its own copy of the repo (or at minimum `src/credential_proxy/`
+and `src/utils/`). The simplest approach on the same VM is to allow
+`proxy-runner` read access to `pypi-runner`'s clone:
+
+```bash
+sudo chmod o+x /home/pypi-runner /home/pypi-runner/pypi-scada-repo
+```
+
+Or copy just the needed source:
+
+```bash
+sudo cp -r /home/pypi-runner/pypi-scada-repo \
+           /home/proxy-runner/pypi-scada-repo
+sudo chown -R proxy-runner:proxy-runner /home/proxy-runner/pypi-scada-repo
+
+sudo -u proxy-runner bash -c "
+  cd /home/proxy-runner/pypi-scada-repo
+  python3 -m venv venv
+  source venv/bin/activate
+  pip install --quiet -r requirements.txt
+"
+```
+
+Open **Terminal A-proxy** as `proxy-runner`:
+
+```bash
+sudo -u proxy-runner -i
+source ~/.env
+source ~/pypi-scada-repo/venv/bin/activate
+cd ~/pypi-scada-repo/src/credential_proxy
+python server.py
+```
+
+Leave Terminal A-proxy running. Confirm startup:
+
+```
+Starting Credential Proxy on 127.0.0.1:9090
+```
+
+Verify the proxy is reachable from `pypi-runner`:
+
+```bash
+sudo -u pypi-runner curl -s http://127.0.0.1:9090/health
+# Expected: {"status": "ok"}
+```
+
+---
+
+## Step 9 — Open a pypi-runner session
+
+All remaining steps run as `pypi-runner`. `pypi-runner` has no API keys.
 
 ```bash
 sudo -u pypi-runner -i
 # Prompt changes to: pypi-runner@<hostname>:~$
-```
-
-Source the environment in each terminal you open:
-
-```bash
-source ~/.env
 source ~/pypi-scada-repo/venv/bin/activate
 ```
 
 ---
 
-## Step 9 — Start the simulator (Terminal A)
-
-```bash
-cd ~/pypi-scada-repo/src/simulator
-source ~/pypi-scada-repo/venv/bin/activate
-python main.py
-```
-
-Leave Terminal A running. Confirm startup:
-
-```
-Starting PyPI Simulator on 127.0.0.1:8080
-```
-
-Check readiness from Terminal B:
-
-```bash
-curl -s http://127.0.0.1:8080/simple/
-# Expected: empty HTML index (no packages yet)
-```
-
----
-
-## Step 10 — Upload samples (Terminal B)
+## Step 11 — Upload samples (Terminal C)
 
 ```bash
 cd ~/pypi-scada-repo
@@ -262,14 +336,16 @@ curl -s http://127.0.0.1:8080/api/versions/colorama
 
 ---
 
-## Step 11 — Run the evaluation pipeline (Terminal B)
+## Step 12 — Run the evaluation pipeline (Terminal C)
 
 ```bash
-source ~/.env
 cd ~/pypi-scada-repo
-source venv/bin/activate
 python src/analyzer/evaluate.py src/analyzer/config.yaml
 ```
+
+`pypi-runner` carries no API keys; the analyzer routes all LLM calls through
+the credential proxy at `http://127.0.0.1:9090`. If the proxy is not running,
+LLM adapters will fail with a connection error — SAST results are still written.
 
 Results are written to `src/data/eval_results.db`. A metrics table is printed to
 the console on completion.
