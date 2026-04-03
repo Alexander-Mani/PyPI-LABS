@@ -1,6 +1,12 @@
 simulator:
   base_url: "http://127.0.0.1:8080"
 
+# Credential proxy — routes all LLM API calls through an isolated service that
+# holds the API keys. The analyzer process itself carries no keys in proxy mode.
+# Set url to null or omit to fall back to direct SDK calls (local dev only).
+credential_proxy:
+  url: "http://127.0.0.1:9090"
+
 detection:
   # Which detectors to run (can be combined)
   static_tools:

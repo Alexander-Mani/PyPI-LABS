@@ -132,6 +132,7 @@ class LLMDetectorAdapter:
         self._provider = provider
         self._cfg = config
         self._prompt_store = Path(prompt_store)
+        self._proxy_url: str | None = config.get("proxy_url") or None
 
     def run(self, diff: PackageDiff) -> DetectionResult:
         system_prompt = self._load_system_prompt()
@@ -188,15 +189,48 @@ class LLMDetectorAdapter:
         raise NotImplementedError(f"Provider not yet implemented: {self._provider}")
 
     def _call_anthropic(self, system: str, user: str) -> str:
+        messages = [{"role": "user", "content": user}]
+        if self._proxy_url:
+            resp = self._call_via_proxy("anthropic", "claude-opus-4-6", system, messages, 512)
+            return resp["content"][0]["text"]
         import anthropic, os
         client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
         msg = client.messages.create(
             model="claude-opus-4-6",
             max_tokens=512,
             system=system,
-            messages=[{"role": "user", "content": user}],
+            messages=messages,
         )
         return msg.content[0].text
+
+    def _call_via_proxy(
+        self,
+        provider: str,
+        model: str,
+        system: str,
+        messages: list,
+        max_tokens: int = 512,
+        temperature: float = 0.0,
+        tools: list | None = None,
+    ) -> dict:
+        import requests as _req
+        payload: dict = {
+            "provider":    provider,
+            "model":       model,
+            "system":      system,
+            "messages":    messages,
+            "max_tokens":  max_tokens,
+            "temperature": temperature,
+        }
+        if tools:
+            payload["tools"] = tools
+        r = _req.post(
+            self._proxy_url.rstrip("/") + "/proxy/analyze",
+            json=payload,
+            timeout=120,
+        )
+        r.raise_for_status()
+        return r.json()
 
     def _parse_response(self, raw: str) -> tuple[str, float | None, dict]:
         import json, re
@@ -227,6 +261,12 @@ class DetectionController:
         self._db = db
         det_cfg = config.get("detection", {})
         prompt_store = config.get("detection", {}).get("prompt_store", "prompts/")
+
+        # Propagate proxy URL from top-level credential_proxy section into
+        # det_cfg so LLMDetectorAdapter constructors can read it uniformly.
+        proxy_url = config.get("credential_proxy", {}).get("url")
+        if proxy_url:
+            det_cfg = {**det_cfg, "proxy_url": proxy_url}
 
         self._static: list[StaticDetectorAdapter] = [
             StaticDetectorAdapter(tool, det_cfg)
@@ -392,6 +432,7 @@ class EntryPointLLMAdapter:
         self._system_prompt: str = cfg["system_prompt"]
         self._user_template: str = cfg["user_template"]
         self._detector_name = Path(config_path).stem  # e.g. "claude_opus"
+        self._proxy_url: str | None = cfg.get("proxy_url") or None
 
     def run(self, pkg: PackageInfo) -> EvalDetectionResult:
         system = self._system_prompt
@@ -440,7 +481,35 @@ class EntryPointLLMAdapter:
             return self._call_gemini(system, user)
         raise ValueError(f"Unknown model prefix for: {m}")
 
+    def _call_via_proxy(self, system: str, user: str) -> tuple[str, int]:
+        import requests as _req
+        provider = (
+            "anthropic" if self._model_name.startswith("claude-") else
+            "openai"    if self._model_name.startswith(("gpt-", "o1-", "o3-")) else
+            "gemini"
+        )
+        payload = {
+            "provider":    provider,
+            "model":       self._model_name,
+            "system":      system,
+            "messages":    [{"role": "user", "content": user}],
+            "max_tokens":  512,
+            "temperature": self._temperature,
+        }
+        r = _req.post(
+            self._proxy_url.rstrip("/") + "/proxy/analyze",
+            json=payload,
+            timeout=120,
+        )
+        r.raise_for_status()
+        data = r.json()
+        text = data["content"][0]["text"] if data.get("content") else ""
+        tokens = data.get("input_tokens", 0) + data.get("output_tokens", 0)
+        return text, tokens
+
     def _call_anthropic(self, system: str, user: str) -> tuple[str, int]:
+        if self._proxy_url:
+            return self._call_via_proxy(system, user)
         import anthropic
         client = anthropic.Anthropic(api_key=_os.environ["ANTHROPIC_API_KEY"])
         resp = client.messages.create(
@@ -454,6 +523,8 @@ class EntryPointLLMAdapter:
         return resp.content[0].text, tokens
 
     def _call_openai(self, system: str, user: str) -> tuple[str, int]:
+        if self._proxy_url:
+            return self._call_via_proxy(system, user)
         try:
             import openai
         except ImportError as exc:
@@ -471,6 +542,8 @@ class EntryPointLLMAdapter:
         return resp.choices[0].message.content, tokens
 
     def _call_gemini(self, system: str, user: str) -> tuple[str, int]:
+        if self._proxy_url:
+            return self._call_via_proxy(system, user)
         try:
             import google.generativeai as genai
         except ImportError as exc:
@@ -510,6 +583,7 @@ class AgenticAdapter:
         self._initial_template: str  = cfg.get("initial_user_message", "Investigate package '{package_name}' v{version}.")
         self._max_turns: int         = int(cfg.get("max_turns", 5))
         self._temperature: float     = float(cfg.get("temperature", 0.0))
+        self._proxy_url: str | None  = cfg.get("proxy_url") or None
         # pkg reference held for duration of one run() call (see CONCERNS.md §C note)
         self._current_pkg: PackageInfo | None = None
 
@@ -556,10 +630,51 @@ class AgenticAdapter:
             details=details,
         )
 
-    def _agentic_loop(self, pkg: PackageInfo) -> tuple[str, int]:
+    def _make_api_call(self, messages: list[dict]) -> dict:
+        """
+        Single API call returning a normalised response dict:
+          {content: list[dict], stop_reason: str, input_tokens: int, output_tokens: int}
+
+        Uses the credential proxy when configured; otherwise calls the Anthropic
+        SDK directly and converts the response to the same dict shape.
+        """
+        if self._proxy_url:
+            import requests as _req
+            payload = {
+                "provider":    "anthropic",
+                "model":       self._model_name,
+                "max_tokens":  1024,
+                "temperature": self._temperature,
+                "system":      self._system_prompt,
+                "messages":    messages,
+                "tools":       self._TOOLS,
+            }
+            r = _req.post(
+                self._proxy_url.rstrip("/") + "/proxy/analyze",
+                json=payload,
+                timeout=120,
+            )
+            r.raise_for_status()
+            return r.json()
+
         import anthropic
         client = anthropic.Anthropic(api_key=_os.environ["ANTHROPIC_API_KEY"])
+        resp = client.messages.create(
+            model=self._model_name,
+            max_tokens=1024,
+            temperature=self._temperature,
+            system=self._system_prompt,
+            tools=self._TOOLS,
+            messages=messages,
+        )
+        return {
+            "content":       [b.model_dump() for b in resp.content],
+            "stop_reason":   resp.stop_reason,
+            "input_tokens":  resp.usage.input_tokens,
+            "output_tokens": resp.usage.output_tokens,
+        }
 
+    def _agentic_loop(self, pkg: PackageInfo) -> tuple[str, int]:
         initial_user = self._initial_template.format(
             package_name=pkg.name, version=pkg.version
         )
@@ -567,31 +682,27 @@ class AgenticAdapter:
         total_tokens = 0
 
         for _turn in range(self._max_turns):
-            resp = client.messages.create(
-                model=self._model_name,
-                max_tokens=1024,
-                temperature=self._temperature,
-                system=self._system_prompt,
-                tools=self._TOOLS,
-                messages=messages,
-            )
-            total_tokens += resp.usage.input_tokens + resp.usage.output_tokens
-            messages.append({"role": "assistant", "content": resp.content})
+            resp = self._make_api_call(messages)
+            total_tokens += resp["input_tokens"] + resp["output_tokens"]
+            content: list[dict] = resp["content"]
+            messages.append({"role": "assistant", "content": content})
 
-            if resp.stop_reason == "end_turn":
+            if resp["stop_reason"] == "end_turn":
                 final_text = "".join(
-                    b.text for b in resp.content if hasattr(b, "text")
+                    b["text"] for b in content if b.get("type") == "text"
                 )
                 return final_text, total_tokens
 
-            if resp.stop_reason == "tool_use":
+            if resp["stop_reason"] == "tool_use":
                 tool_results = []
-                for block in resp.content:
-                    if block.type == "tool_use":
-                        result_content = self._handle_tool(block.name, block.input)
+                for block in content:
+                    if block.get("type") == "tool_use":
+                        result_content = self._handle_tool(
+                            block["name"], block.get("input", {})
+                        )
                         tool_results.append({
                             "type":        "tool_result",
-                            "tool_use_id": block.id,
+                            "tool_use_id": block["id"],
                             "content":     str(result_content),
                         })
                 messages.append({"role": "user", "content": tool_results})
@@ -600,10 +711,12 @@ class AgenticAdapter:
 
         # Max turns exhausted — collect whatever the last assistant message said.
         last = messages[-1]
-        content = last.get("content", [])
+        raw_content = last.get("content", [])
         final_text = ""
-        if isinstance(content, list):
-            final_text = "".join(b.text for b in content if hasattr(b, "text"))
+        if isinstance(raw_content, list):
+            final_text = "".join(
+                b["text"] for b in raw_content if isinstance(b, dict) and b.get("type") == "text"
+            )
         return final_text, total_tokens
 
     def _handle_tool(self, name: str, tool_input: dict) -> object:

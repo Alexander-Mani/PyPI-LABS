@@ -1,6 +1,7 @@
 model_name: "claude-opus-4-6"
 temperature: 0.0
 max_turns: 5
+proxy_url: "http://127.0.0.1:9090"
 
 system_prompt: |
   You are a security researcher with tool access to inspect a Python package

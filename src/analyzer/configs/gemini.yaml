@@ -3,6 +3,7 @@
 # Requires: pip install google-generativeai  and  GEMINI_API_KEY environment variable.
 model_name: "gemini-1.5-pro"
 temperature: 0.0
+proxy_url: "http://127.0.0.1:9090"
 
 system_prompt: |
   You are a security researcher specialising in PyPI supply chain attacks.
