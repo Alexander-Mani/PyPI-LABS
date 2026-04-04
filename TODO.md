@@ -35,23 +35,22 @@ Tasks are executed sequentially. Mark `[x]` when done.
 
 ---
 
-## D — Credential Proxy
+## D — Credential Proxy (superseded by LiteLLM)
 
-- [x] D-1 Create `src/credential_proxy/server.py` — Flask proxy with `/proxy/analyze`
-       endpoint; normalises Anthropic/OpenAI/Gemini SDK responses to a common
-       `{content, stop_reason, input_tokens, output_tokens}` JSON shape;
-       enforces 64 KB request payload cap
-- [x] D-2 Create `src/credential_proxy/config.yaml` — bind address `127.0.0.1:9090`,
-       allowed providers list, log path
-- [x] D-3 Modify `src/analyzer/detection_controller.py` — add `_call_via_proxy()`
-       shared helper; wire proxy dispatch into `LLMDetectorAdapter`,
-       `EntryPointLLMAdapter`, and `AgenticAdapter`; refactor `AgenticAdapter`
-       loop to use normalised response dicts throughout
-- [x] D-4 Update `src/analyzer/config.yaml` and all four `configs/*.yaml` files —
-       add `proxy_url` key (default `http://127.0.0.1:9090`)
-- [x] D-5 Update `RISK_DIARY.md` — Decision 5 (isolated credential proxy)
-- [x] D-6 Update `DEPLOYMENT_MANIFEST.md` — `proxy-runner` account creation,
-       iptables `--uid-owner` egress rules, proxy startup step
+**NOTE:** The items below describe the custom Flask credential proxy that was built
+to implement key isolation. This proxy (`src/credential_proxy/server.py`, port 9090)
+has been **superseded by LiteLLM** (port 4000). The threat model from Decision 5 in
+`RISK_DIARY.md` remains valid and is now implemented via LiteLLM. The custom proxy
+code remains in the repository but is not active.
+
+- [x] D-1 Create `src/credential_proxy/server.py` — Flask proxy (superseded)
+- [x] D-2 Create `src/credential_proxy/config.yaml` — bind address `127.0.0.1:9090` (superseded)
+- [x] D-3 Modify `src/analyzer/detection_controller.py` — proxy dispatch wired in
+       (currently targets port 9090; update to 4000 / LiteLLM format when configs are updated)
+- [x] D-4 Update `src/analyzer/config.yaml` and all four `configs/*.yaml` —
+       `proxy_url` added (currently `http://127.0.0.1:9090`; update to `http://127.0.0.1:4000`)
+- [x] D-5 Update `RISK_DIARY.md` — Decision 5 updated to reflect LiteLLM
+- [x] D-6 Update `DEPLOYMENT_MANIFEST.md` — `proxy-runner` account, iptables rules, LiteLLM startup
 
 ---
 

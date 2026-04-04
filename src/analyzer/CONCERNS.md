@@ -55,25 +55,35 @@ Once present, re-run `evaluate.py` to get a complete confusion matrix.
 
 ---
 
-## 3. LLM Model Name Placeholders
+## 3. LLM Model Names and LiteLLM Routing
 
-**Affected files:** `configs/gpt.yaml`, `configs/gemini.yaml`
+**Affected files:** `configs/gpt.yaml`, `configs/gemini.yaml`, `configs/claude_opus.yaml`, `configs/claude_agentic.yaml`, `configs/together_frontier.yaml`
 
-The evaluation spec referenced "Gemini 3.1 Pro" and "GPT-5.4". Neither is a real
-API model identifier as of the time this code was written. The YAML configs
-default to `gemini-1.5-pro` and `gpt-4o` respectively, which are real model IDs
-but may not be the intended targets.
+All LLM calls route through LiteLLM on `http://127.0.0.1:4000`. Model names in the
+YAML configs use bare model IDs; LiteLLM infers the provider from the prefix.
+The full model grid is in `configs/models.json` (repo root).
 
-**Consequence:** If the intended models become available under different IDs, the
-adapters will call the wrong (or a non-existent) model, producing API errors that
-the `EvalController` will catch and record as error verdicts (`verdict=False`,
-`confidence=None`). These errors will silently inflate the FP count for those
-detectors.
+Current confirmed model IDs per config:
 
-**What to do:** Before running LLM evaluation, open `configs/gpt.yaml` and
-`configs/gemini.yaml` and update the `model_name` field to the correct API
-identifier. No Python code changes are required — the adapters dispatch entirely
-on the YAML value.
+| Config file | model_name | Tier |
+|---|---|---|
+| `claude_opus.yaml` | `claude-opus-4-6` | frontier |
+| `claude_agentic.yaml` | `claude-opus-4-6` | frontier |
+| `gpt.yaml` | `gpt-5.4` | frontier |
+| `gemini.yaml` | `gemini-3.1-pro-preview` | frontier |
+| `together_frontier.yaml` | `together_ai/Qwen/Qwen3.5-397B-A17B` | frontier |
+
+**LiteLLM routing prefixes used by the adapter dispatch (`_call_api`):**
+- `claude-` → Anthropic
+- `gpt-`, `o1-`, `o3-`, `together_ai/` → OpenAI-compatible
+- `gemini-`, `gemini/` → Google
+
+**Consequence if model ID is wrong:** LiteLLM returns 404 or routing error.
+`EvalController` catches this and records `verdict=False, confidence=None`,
+silently inflating the FP count for that detector.
+
+**What to do:** Verify model IDs are active API identifiers before a run. Budget
+and medium tier alternatives are listed in `configs/models.json`.
 
 ---
 

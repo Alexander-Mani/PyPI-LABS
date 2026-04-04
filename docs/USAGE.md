@@ -7,11 +7,11 @@ Quick reference for running the Simulator and Injector locally.
 ## Prerequisites
 
 ```bash
-# From workspace/
-pip install -e .          # installs all dependencies (Flask, twine, loguru, etc.)
+# From repo root — requires a hashed lockfile (see PYTHON_PACAKGE_USAGE_STANDARD_PYPI_SCADA.md)
+pip install --require-hashes --no-deps -r requirements.txt
 ```
 
-Dependencies are declared in `pyproject.toml`. Python 3.9+ required.
+Dependencies are declared in `requirements.in` and compiled to a hashed `requirements.txt` with `pip-tools`. Python 3.11+ required.
 
 ---
 
@@ -23,7 +23,7 @@ It speaks PEP 503 (so `pip install` works against it) and accepts `twine` upload
 ### Start
 
 ```bash
-cd workspace/simulator/
+cd src/simulator/
 python main.py
 ```
 
@@ -94,7 +94,7 @@ The Injector uploads `.tar.gz` / `.whl` packages to the running Simulator via `t
 ### Run
 
 ```bash
-cd workspace/injector/
+cd src/injector/
 
 # Upload everything (malicious + benign)
 ./controller.sh all
@@ -215,11 +215,12 @@ python src/injector/upload_samples.py \
 ## Typical Workflow
 
 ```
-1. Start simulator      →  cd workspace/simulator && python main.py
-2. Place packages       →  drop .tar.gz/.whl into data/samples/{malicious,benign}/
-3. Run injector         →  cd workspace/injector && ./controller.sh all
+1. Start simulator      →  cd src/simulator && python main.py
+2. Place packages       →  drop .tar.gz/.whl into samples/benign/ or samples/malware_backstabbers_knife/
+3. Run injector         →  cd src/injector && ./controller.sh all
 4. Confirm uploads      →  curl http://127.0.0.1:8080/simple/
-5. Run analyzer (IIb)   →  cd workspace/analyzer && python main.py   (coming soon)
+5. Run evaluation       →  python src/analyzer/evaluate.py  (entry-point scan, offline)
+   With LLM detectors   →  start LiteLLM first (see DEPLOYMENT_MANIFEST.md Step 8)
 ```
 
 ---
@@ -228,18 +229,40 @@ python src/injector/upload_samples.py \
 
 | Component | Log file |
 |---|---|
-| Simulator | `workspace/simulator/logs/simulator.log` |
-| Injector  | `workspace/injector/logs/injector.log` *(planned)* |
+| Simulator | `src/simulator/logs/simulator.log` |
+| Injector  | configured via `src/injector/config.yaml` |
+| Analyzer  | configured via `src/analyzer/config.yaml` |
+| LiteLLM   | `/home/proxy-runner/litellm.log` (VM deployment only) |
 
 Log level and file path are controlled by `logging:` in each component's `config.yaml`.
+
+---
+
+## LiteLLM Proxy (LLM evaluation only)
+
+All LLM detector calls route through LiteLLM running as `proxy-runner` on
+`http://127.0.0.1:4000`. The analyzer process holds no API keys.
+
+**Local dev:** Start LiteLLM manually with API keys in your environment:
+
+```bash
+export ANTHROPIC_API_KEY=...
+export OPENAI_API_KEY=...
+export GEMINI_API_KEY=...
+litellm --port 4000
+```
+
+**VM deployment:** See `DEPLOYMENT_MANIFEST.md` Step 8 — LiteLLM runs as
+`proxy-runner` with keys in `~proxy-runner/.env` and egress restricted to
+vendor CIDR blocks via iptables owner rules.
 
 ---
 
 ## Troubleshooting
 
 **`ModuleNotFoundError: No module named 'src'`**
-Run from inside the component directory (`workspace/simulator/`), not from `workspace/`.
-`main.py` inserts the parent path into `sys.path` automatically.
+Run scripts from the repo root (`python src/analyzer/evaluate.py`), not from inside the component directory.
+`main.py` and `evaluate.py` insert the project root into `sys.path` automatically.
 
 **`twine upload` fails with connection error**
 Simulator is not running. Start it first with `python main.py`.

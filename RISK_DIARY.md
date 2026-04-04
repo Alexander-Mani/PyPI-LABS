@@ -36,10 +36,11 @@ via automated security updates.
 ## Decision 2 — API keys via environment variables, not YAML config files
 
 **Decision:**
-`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `GOOGLE_API_KEY` are stored in
-`~pypi-runner/.env` (permissions `0600`, owned by `pypi-runner`) and exported into
-the shell session at login. They are never written into any YAML config file checked
-into the repository.
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, and `TOGETHER_API_KEY` are
+stored in `~proxy-runner/.env` (permissions `0600`, owned by `proxy-runner`) and
+exported into the LiteLLM proxy process only. The `pypi-runner` account that runs the
+analyzer holds **no API keys** in its environment. Keys are never written into any YAML
+config file checked into the repository.
 
 **Threat addressed:**
 Config files are committed to git. Keys embedded in YAML would appear in repository
@@ -50,21 +51,23 @@ and potentially access models with the experiment's identity.
 **Controls applied:**
 - `.env` is in `.gitignore`.
 - YAML config files contain only structural parameters (model names, prompt paths,
-  database paths). They contain no secret values.
-- The `ANTHROPIC_API_KEY` variable is read by the Anthropic SDK automatically from
-  the environment; no code change is required.
+  database paths, proxy URL). They contain no secret values.
+- LiteLLM reads the provider keys from `proxy-runner`'s environment and proxies
+  requests from `pypi-runner` at `http://127.0.0.1:4000`. No vendor SDK imports
+  are required in the analyzer process.
 
 **Residual risk:**
-Process environment inspection by a co-resident process with ptrace capability.
-Accepted — the VM hosts only the experiment.
+Process environment inspection of the `proxy-runner` process by a co-resident
+process with ptrace capability. Accepted — the VM hosts only the experiment.
 
 ---
 
-## Decision 3 — Network isolation during evaluation runs
+## Decision 3 — Per-process egress filtering via iptables owner module
 
 **Decision:**
-Before starting an evaluation run the VM's NIC is restricted to localhost-only traffic
-(iptables or equivalent). The restriction is lifted after the run to allow result export.
+Egress filtering is applied per-user account rather than blanket NIC isolation. This
+allows the `proxy-runner` process (LiteLLM) to reach vendor API endpoints while
+preventing the `pypi-runner` analyzer process from making any outbound connection.
 Dependency and repository pulls happen before isolation is applied.
 
 **Threat addressed:**
@@ -79,36 +82,48 @@ Malicious packages routinely beacon to command-and-control servers on import or 
 **Controls applied:**
 
 ```bash
-# Applied before each evaluation run (operator step)
-sudo iptables -P INPUT DROP
-sudo iptables -P OUTPUT DROP
-sudo iptables -P FORWARD DROP
-sudo iptables -A INPUT  -i lo -j ACCEPT
-sudo iptables -A OUTPUT -o lo -j ACCEPT
+sudo modprobe xt_owner
 
-# Lifted after the run
-sudo iptables -F
-sudo iptables -P INPUT  ACCEPT
-sudo iptables -P OUTPUT ACCEPT
+# pypi-runner: all non-loopback outbound traffic dropped
+sudo iptables -A OUTPUT -m owner --uid-owner pypi-runner ! -o lo -j DROP
+
+# proxy-runner: loopback always allowed
+sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -o lo -j ACCEPT
+
+# proxy-runner: LLM vendor endpoints only
+ANTHROPIC_CIDR="104.18.0.0/16"
+OPENAI_CIDR="162.159.0.0/16"
+GOOGLE_CIDR="142.250.0.0/15"
+sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d $ANTHROPIC_CIDR -p tcp --dport 443 -j ACCEPT
+sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d $OPENAI_CIDR -p tcp --dport 443 -j ACCEPT
+sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d $GOOGLE_CIDR -p tcp --dport 443 -j ACCEPT
+sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d api.together.xyz -p tcp --dport 443 -j ACCEPT
+sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -j DROP
 ```
 
 **Residual risk:**
 DNS-over-HTTPS payloads tunnelling over localhost-forwarded ports; unlikely in the
 lab network topology. Also, if the malware payload targets the local simulator's
 HTTP port (8080), it could interact with the simulated index — logged but not blocked.
+The vendor CIDR blocks used are broad Cloudflare ranges — they may cover non-LLM
+endpoints. Accepted given the experimental context.
 
 ---
 
-## Decision 5 — Isolated credential proxy for LLM API keys
+## Decision 5 — Isolated credential proxy for LLM API keys (implemented via LiteLLM)
 
 **Decision:**
-LLM API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`) are held
-exclusively by a dedicated `credential_proxy` service running as `proxy-runner`.
-The analyzer process (`pypi-runner`) carries no API keys in its environment. All
-LLM API calls are made by posting `{provider, model, system, messages}` to the
-proxy at `http://127.0.0.1:9090/proxy/analyze`; the proxy returns the LLM
-response. The analyzer SDK imports (`anthropic`, `openai`, `google.generativeai`)
-are bypassed in proxy mode — the analyzer uses `requests` only.
+LLM API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
+`TOGETHER_API_KEY`) are held exclusively by the `proxy-runner` account, which runs
+**LiteLLM** on `http://127.0.0.1:4000`. The analyzer process (`pypi-runner`) carries
+no API keys in its environment. All LLM calls go through `http://127.0.0.1:4000`
+using the OpenAI-compatible API; no vendor SDKs are imported in the analyzer.
+
+**Note on implementation history:** A custom Flask proxy (`src/credential_proxy/server.py`)
+was built to implement this threat model and wired into `detection_controller.py`
+(proxy dispatch at port 9090). This was subsequently replaced by LiteLLM, which
+provides a production-grade implementation of the same isolation. The custom proxy
+code remains in the repository but is not used.
 
 **Threat addressed:**
 Decision 2 moved API keys from config files into environment variables. A
@@ -116,30 +131,25 @@ sufficiently capable malicious package can still harvest environment variables
 at import time or via `setup.py` execution within the analyzer process. It can
 then encode the keys in a request payload (e.g. as part of the JSON it expects
 from an LLM) and exfiltrate them through the single outbound channel that
-existing iptables rules permit (api.anthropic.com port 443). The attacker gets
-a paid-API credential without triggering any process-level anomaly.
+existing iptables rules permit. The attacker gets a paid-API credential without
+triggering any process-level anomaly.
 
 **Controls applied:**
 - `pypi-runner` environment: no `*_API_KEY` variables set. Any attempt to read
-  them from `os.environ` in the analyzer raises `KeyError` (direct SDK path is
-  not taken in proxy mode).
+  them from `os.environ` in the analyzer raises `KeyError`.
 - `proxy-runner` account: separate unprivileged user, separate login shell,
   separate `~proxy-runner/.env` (chmod 600). Only this account's processes can
   read the keys.
-- Egress policy enforced via the iptables `owner` match module:
-  - `pypi-runner` processes: DROP all non-loopback outbound.
-  - `proxy-runner` processes: ACCEPT outbound only to `api.anthropic.com`,
-    `api.openai.com`, `generativelanguage.googleapis.com` port 443.
-- The proxy binds to `127.0.0.1:9090` only — no external exposure.
+- Egress policy enforced per Decision 3 iptables owner rules.
+- LiteLLM binds to `127.0.0.1:4000` only — no external exposure.
 
 **Residual risk:**
-A malicious package that discovers the proxy endpoint at `127.0.0.1:9090` and
-crafts a valid `/proxy/analyze` request could use the proxy as an unwitting
-relay to exfiltrate content to the LLM provider (e.g. embedding secrets in a
-user message). This residual is accepted: the payload would be package source
-code already held on the execution VM, not new secrets, and the provider's
-logging would record the request under the experiment's API key identity.
-Mitigation: request size cap enforced in the proxy (payload > 64 KB rejected).
+A malicious package that discovers `127.0.0.1:4000` and crafts a valid LiteLLM
+request could use the proxy as an unwitting relay to exfiltrate content to the
+LLM provider (e.g. embedding secrets in a user message). Accepted: the payload
+would be package source code already held on the execution VM, not new secrets,
+and the provider's logging would record the request under the experiment's API
+key identity.
 
 ---
 
