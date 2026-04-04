@@ -1,0 +1,36 @@
+{
+  "routing": {
+    "proprietary_access": "official_api_via_litellm",
+    "open_source_access": "together_ai_via_litellm"
+  },
+  "proprietary_llms": {
+    "frontier": [
+      { "provider": "OpenAI", "model": "gpt-5.4", "tier": "frontier" },
+      { "provider": "Anthropic", "model": "claude-opus-4-6", "tier": "frontier" },
+      { "provider": "Google", "model": "gemini-3.1-pro-preview", "tier": "frontier" }
+    ],
+    "medium": [
+      { "provider": "OpenAI", "model": "gpt-5.4-mini", "tier": "medium" },
+      { "provider": "Anthropic", "model": "claude-sonnet-4-6", "tier": "medium" },
+      { "provider": "Google", "model": "gemini-3-flash", "tier": "medium" }
+    ],
+    "budget": [
+      { "provider": "OpenAI", "model": "gpt-5.4-nano", "tier": "budget" },
+      { "provider": "Anthropic", "model": "claude-haiku-4-5", "tier": "budget" },
+      { "provider": "Google", "model": "gemini-3.1-flash-lite-preview", "tier": "budget" }
+    ]
+  },
+  "open_source_llms_via_together": {
+    "frontier": [
+      { "provider": "Qwen", "model": "Qwen/Qwen3.5-397B-A17B", "tier": "frontier" },
+      { "provider": "DeepSeek", "model": "deepseek-ai/DeepSeek-V3.2-Exp", "tier": "frontier" }
+    ],
+    "medium": [
+      { "provider": "Meta", "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo", "tier": "medium" },
+      { "provider": "Mistral", "model": "mistralai/Mistral-Small-3.1-24B-Instruct-2503", "tier": "medium" }
+    ],
+    "budget": [
+      { "provider": "Qwen", "model": "Qwen/Qwen3.5-9B", "tier": "budget" }
+    ]
+  }
+}
