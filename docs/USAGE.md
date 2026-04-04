@@ -7,7 +7,7 @@ Quick reference for running the Simulator and Injector locally.
 ## Prerequisites
 
 ```bash
-# From repo root — requires a hashed lockfile (see PYTHON_PACAKGE_USAGE_STANDARD_PYPI_SCADA.md)
+# From repo root — requires a hashed lockfile (see docs/ops/DEPENDENCY_SECURITY_SOP.md)
 pip install --require-hashes --no-deps -r requirements.txt
 ```
 
@@ -144,9 +144,9 @@ For the provisioned VM environment where samples arrive as a pre-zipped archive
 (`benign_and_controlls.zip`) and individual password-protected malicious zip files,
 use `upload_samples.py` instead of `controller.sh`.
 
-See `DEPLOYMENT_MANIFEST.md` for full setup steps (account creation, sample
+See `docs/ops/DEPLOYMENT_MANIFEST.md` for full setup steps (account creation, sample
 extraction, venv). The account and security constraints are documented in
-`RISK_DIARY.md`.
+`docs/ops/RISK_DIARY.md`.
 
 ### Prerequisites
 
@@ -220,7 +220,7 @@ python src/injector/upload_samples.py \
 3. Run injector         →  cd src/injector && ./controller.sh all
 4. Confirm uploads      →  curl http://127.0.0.1:8080/simple/
 5. Run evaluation       →  python src/analyzer/evaluate.py  (entry-point scan, offline)
-   With LLM detectors   →  start LiteLLM first (see DEPLOYMENT_MANIFEST.md Step 8)
+   With LLM detectors   →  start LiteLLM first (see docs/ops/DEPLOYMENT_MANIFEST.md Step 8)
 ```
 
 ---
@@ -252,7 +252,7 @@ export GEMINI_API_KEY=...
 litellm --port 4000
 ```
 
-**VM deployment:** See `DEPLOYMENT_MANIFEST.md` Step 8 — LiteLLM runs as
+**VM deployment:** See `docs/ops/DEPLOYMENT_MANIFEST.md` Step 8 — LiteLLM runs as
 `proxy-runner` with keys in `~proxy-runner/.env` and egress restricted to
 vendor CIDR blocks via iptables owner rules.
 

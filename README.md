@@ -107,7 +107,7 @@ The high-volume controls cover the 10 most-downloaded PyPI packages (`boto3`, `u
 git clone https://github.com/Alexander-Mani/PyPi-SCADA.git
 cd PyPi-SCADA
 python3.11 -m venv .venv && source .venv/bin/activate
-# requirements.txt must be a hashed lockfile (see PYTHON_PACAKGE_USAGE_STANDARD_PYPI_SCADA.md)
+# requirements.txt must be a hashed lockfile (see docs/ops/DEPENDENCY_SECURITY_SOP.md)
 pip install --require-hashes --no-deps -r requirements.txt
 
 # 2. Collect benign samples
@@ -119,7 +119,7 @@ python samples/download_controls.py
 # 3. Run the offline evaluation pipeline (no simulator needed)
 #    SAST only — no LiteLLM required
 python src/analyzer/evaluate.py
-#    With LLM pipelines — start LiteLLM proxy first (see DEPLOYMENT_MANIFEST.md Step 8)
+#    With LLM pipelines — start LiteLLM proxy first (see docs/ops/DEPLOYMENT_MANIFEST.md Step 8)
 #    LiteLLM holds all API keys; the analyzer connects to http://127.0.0.1:4000
 python src/analyzer/evaluate.py
 
@@ -147,10 +147,10 @@ cd src/injector && bash controller.sh all
 
 For deployment to the provisioned experiment VM the pipeline must run under an
 unprivileged `pypi-runner` account (no sudo). Full setup instructions are in
-[`DEPLOYMENT_MANIFEST.md`](DEPLOYMENT_MANIFEST.md). Security decisions — including
+[`docs/ops/DEPLOYMENT_MANIFEST.md`](docs/ops/DEPLOYMENT_MANIFEST.md). Security decisions — including
 the rationale for the unprivileged account, API key handling, network isolation during
 evaluation, and tmpfs extraction of malicious archives — are documented in
-[`RISK_DIARY.md`](RISK_DIARY.md).
+[`docs/ops/RISK_DIARY.md`](docs/ops/RISK_DIARY.md).
 
 Use `upload_samples.py` (not `controller.sh`) on the VM:
 
