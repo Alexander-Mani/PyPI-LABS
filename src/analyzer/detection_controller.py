@@ -475,36 +475,30 @@ class EntryPointLLMAdapter:
         m = self._model_name
         if m.startswith("claude-"):
             return self._call_anthropic(system, user)
-        if m.startswith(("gpt-", "o1-", "o3-")):
+        if m.startswith(("gpt-", "o1-", "o3-", "together_ai/")):
             return self._call_openai(system, user)
-        if m.startswith("gemini-"):
+        if m.startswith(("gemini-", "gemini/")):
             return self._call_gemini(system, user)
         raise ValueError(f"Unknown model prefix for: {m}")
 
     def _call_via_proxy(self, system: str, user: str) -> tuple[str, int]:
-        import requests as _req
-        provider = (
-            "anthropic" if self._model_name.startswith("claude-") else
-            "openai"    if self._model_name.startswith(("gpt-", "o1-", "o3-")) else
-            "gemini"
+        """Route through LiteLLM using its OpenAI-compatible endpoint."""
+        import openai as _openai
+        client = _openai.OpenAI(
+            base_url=self._proxy_url.rstrip("/") + "/v1",
+            api_key="no-key-needed",
         )
-        payload = {
-            "provider":    provider,
-            "model":       self._model_name,
-            "system":      system,
-            "messages":    [{"role": "user", "content": user}],
-            "max_tokens":  512,
-            "temperature": self._temperature,
-        }
-        r = _req.post(
-            self._proxy_url.rstrip("/") + "/proxy/analyze",
-            json=payload,
-            timeout=120,
+        resp = client.chat.completions.create(
+            model=self._model_name,
+            temperature=self._temperature,
+            max_tokens=512,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",   "content": user},
+            ],
         )
-        r.raise_for_status()
-        data = r.json()
-        text = data["content"][0]["text"] if data.get("content") else ""
-        tokens = data.get("input_tokens", 0) + data.get("output_tokens", 0)
+        text = resp.choices[0].message.content or ""
+        tokens = (resp.usage.prompt_tokens + resp.usage.completion_tokens) if resp.usage else 0
         return text, tokens
 
     def _call_anthropic(self, system: str, user: str) -> tuple[str, int]:
@@ -635,27 +629,94 @@ class AgenticAdapter:
         Single API call returning a normalised response dict:
           {content: list[dict], stop_reason: str, input_tokens: int, output_tokens: int}
 
-        Uses the credential proxy when configured; otherwise calls the Anthropic
-        SDK directly and converts the response to the same dict shape.
+        Proxy path (LiteLLM): translates Anthropic-format messages → OpenAI format,
+        calls LiteLLM's /v1/chat/completions, then normalises the OpenAI response back
+        to the Anthropic-like dict shape so _agentic_loop() stays unchanged.
+
+        Direct path (dev/no proxy): calls Anthropic SDK and converts to the same dict.
         """
         if self._proxy_url:
-            import requests as _req
-            payload = {
-                "provider":    "anthropic",
-                "model":       self._model_name,
-                "max_tokens":  1024,
-                "temperature": self._temperature,
-                "system":      self._system_prompt,
-                "messages":    messages,
-                "tools":       self._TOOLS,
-            }
-            r = _req.post(
-                self._proxy_url.rstrip("/") + "/proxy/analyze",
-                json=payload,
-                timeout=120,
+            import openai as _openai, json as _j
+            client = _openai.OpenAI(
+                base_url=self._proxy_url.rstrip("/") + "/v1",
+                api_key="no-key-needed",
             )
-            r.raise_for_status()
-            return r.json()
+            # --- translate Anthropic-format message history → OpenAI format ---
+            oai_messages: list[dict] = [
+                {"role": "system", "content": self._system_prompt}
+            ]
+            for msg in messages:
+                role = msg["role"]
+                body = msg["content"]
+                if role == "assistant" and isinstance(body, list):
+                    text_parts = [b.get("text", "") for b in body if b.get("type") == "text"]
+                    tool_calls = [
+                        {
+                            "id": b["id"],
+                            "type": "function",
+                            "function": {
+                                "name": b["name"],
+                                "arguments": _j.dumps(b.get("input", {})),
+                            },
+                        }
+                        for b in body if b.get("type") == "tool_use"
+                    ]
+                    oai_msg: dict = {
+                        "role": "assistant",
+                        "content": " ".join(text_parts) or None,
+                    }
+                    if tool_calls:
+                        oai_msg["tool_calls"] = tool_calls
+                    oai_messages.append(oai_msg)
+                elif role == "user" and isinstance(body, list) and body and body[0].get("type") == "tool_result":
+                    # Anthropic tool_result blocks → individual OpenAI tool messages
+                    for block in body:
+                        oai_messages.append({
+                            "role": "tool",
+                            "tool_call_id": block["tool_use_id"],
+                            "content": str(block.get("content", "")),
+                        })
+                else:
+                    oai_messages.append({"role": role, "content": body})
+            # --- convert _TOOLS (Anthropic schema) → OpenAI function format ---
+            oai_tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t["name"],
+                        "description": t["description"],
+                        "parameters": t["input_schema"],
+                    },
+                }
+                for t in self._TOOLS
+            ]
+            resp = client.chat.completions.create(
+                model=self._model_name,
+                temperature=self._temperature,
+                max_tokens=1024,
+                messages=oai_messages,
+                tools=oai_tools,
+            )
+            # --- normalise OpenAI response → Anthropic-like dict ---
+            oai_msg_out = resp.choices[0].message
+            finish = resp.choices[0].finish_reason
+            content_blocks: list[dict] = []
+            if oai_msg_out.content:
+                content_blocks.append({"type": "text", "text": oai_msg_out.content})
+            if oai_msg_out.tool_calls:
+                for tc in oai_msg_out.tool_calls:
+                    content_blocks.append({
+                        "type":  "tool_use",
+                        "id":    tc.id,
+                        "name":  tc.function.name,
+                        "input": _j.loads(tc.function.arguments or "{}"),
+                    })
+            return {
+                "content":       content_blocks,
+                "stop_reason":   "tool_use" if finish == "tool_calls" else "end_turn",
+                "input_tokens":  resp.usage.prompt_tokens if resp.usage else 0,
+                "output_tokens": resp.usage.completion_tokens if resp.usage else 0,
+            }
 
         import anthropic
         client = anthropic.Anthropic(api_key=_os.environ["ANTHROPIC_API_KEY"])
