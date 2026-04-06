@@ -32,3 +32,30 @@
 - [ ] Calculate and log: **Precision, Recall, and F1-Score** for each model against the Backstabber samples.
 - [ ] Capture Latency metrics: **Time to First Token (TTFT)** and total generation time (critical to prove the "Active Interception" latency budget is viable).
 - [ ] Capture Cost-per-Diff/Entry-Point based on token usage and vendor pricing tiers.
+
+
+
+# New mode pipline
+
+You must update several specific sections of your report to reflect the new four-mode architecture.
+
+### 1.2 Goals
+[cite_start]The current text states the project compares language models and agentic tools against static tools[cite: 30]. Update this to explicitly define the four distinct execution modes. State that the system evaluates Static Only, LLM Only, Hybrid, and Agentic pipelines sequentially against the identical sample set.
+
+### 3 Methodology and Evaluation
+[cite_start]The report currently lists three distinct pipelines[cite: 93]. Change this to four. The previous single-prompt language model analysis splits into two paths. Define Mode B as raw file ingestion. Define Mode C as the hybrid approach using static extraction. 
+
+### 3.1 Input Strategy
+[cite_start]The report details entry-point scanning and heuristic pre-filtering[cite: 120, 133]. Specify that these steps apply strictly to Mode A, Mode C, and Mode D. Add a new subsection detailing Mode B. Explain the raw file ingestion bypass mechanism. State that it forces the model to analyze the full context window to establish a cost baseline.
+
+### 3.3.1 Prompt Strategies
+[cite_start]The section defines zero-shot, few-shot, and role-based strategies[cite: 169, 170, 172]. Add the technical implementation details. State that a YAML configuration system stores and versions these templates. Explain that the adapter dynamically loads these templates based on the current execution state.
+
+### 3.5 Cost and Performance Metrics
+[cite_start]The text tracks wall-clock time and token costs[cite: 210, 213]. Update the database description. State that the SQLite schema uses a composite key mapping the run identifier to the experiment mode enumerator. Clarify that the static analysis pipeline explicitly logs a token cost of zero. 
+
+### 5.1.3 PyPI Detection Analyzer
+[cite_start]Update the architectural descriptions[cite: 291, 295, 297]. Replace the current controller explanation with the strict `DetectorAdapter` interface. Detail the individual adapters for the Static, LLM, and Agentic execution paths. Note the parser modification required for raw string loading. Describe the updated database schema containing the new `experiment_mode` and `prompt_strategy` columns.
+
+### Table 9: Current Project Backlog
+[cite_start]Add the required implementation phases to your backlog[cite: 421]. Include the database schema migration. Add the prompt configuration management system. Add the adapter interface refactoring. Add the raw extraction bypass development. Assign these tasks high priority within Phase III.
