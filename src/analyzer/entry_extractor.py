@@ -37,7 +37,8 @@ _STEM_RE = re.compile(r"^(.+?)-(\d[^-]*)(?:-.*)?$")
 class PackageInfo:
     name: str
     version: str
-    files: dict[str, str]           # {relative_path: utf-8 content}
+    files: dict[str, str]                        # entry points + AST-resolved imports
+    files_raw: dict[str, str] = field(default_factory=dict)  # entry points only, no import resolution
     heuristic_flags: list[str] = field(default_factory=list)
 
 
@@ -56,12 +57,13 @@ class EntryPointExtractor:
         """
         name, version = self._parse_name_version(archive_path)
         try:
-            raw = self._read_archive(archive_path)
-            files = self._filter_entry_points(raw)
-            return PackageInfo(name=name, version=version, files=files)
+            raw       = self._read_archive(archive_path)
+            files     = self._filter_entry_points(raw)
+            files_raw = self._raw_entry_points(raw)
+            return PackageInfo(name=name, version=version, files=files, files_raw=files_raw)
         except Exception as exc:
             log.error(f"EntryPointExtractor: failed on {archive_path.name}: {exc}")
-            return PackageInfo(name=name, version=version, files={})
+            return PackageInfo(name=name, version=version, files={}, files_raw={})
 
     # ------------------------------------------------------------------
     # Name / version inference
@@ -189,6 +191,20 @@ class EntryPointExtractor:
                 included |= self._resolve_imports(decoded[path], decoded)
 
         return {p: decoded[p] for p in included if p in decoded}
+
+    def _raw_entry_points(self, raw: dict[str, bytes]) -> dict[str, str]:
+        """
+        Return only the literal entry-point files (setup.py, __init__.py,
+        pyproject.toml) decoded to UTF-8, with no import resolution.
+        Used to populate PackageInfo.files_raw for the llm_raw experiment mode.
+        """
+        result: dict[str, str] = {}
+        for rel, content in raw.items():
+            if Path(rel).name in _ENTRY_POINTS:
+                text = self._decode(rel, content)
+                if text is not None:
+                    result[rel] = text
+        return result
 
     def _resolve_imports(self, source: str, all_files: dict[str, str]) -> set[str]:
         """
