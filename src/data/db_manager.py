@@ -11,26 +11,36 @@ _EVAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS eval_run (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id     TEXT NOT NULL UNIQUE,
+    tier       TEXT NOT NULL DEFAULT 'unknown',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS eval_result (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id          TEXT    NOT NULL,
-    package_name    TEXT    NOT NULL,
-    version         TEXT    NOT NULL,
-    pipeline        TEXT    NOT NULL,
-    detector        TEXT    NOT NULL,
-    verdict         INTEGER NOT NULL,
-    heuristic_flags TEXT    NOT NULL,
-    exec_time_ms    INTEGER NOT NULL,
-    api_cost_usd    REAL    NOT NULL,
-    details         TEXT,
-    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id           TEXT    NOT NULL,
+    package_name     TEXT    NOT NULL,
+    version          TEXT    NOT NULL,
+    experiment_mode  TEXT    NOT NULL,
+    prompt_strategy  TEXT    NOT NULL DEFAULT 'zero_shot',
+    detector         TEXT    NOT NULL,
+    verdict          INTEGER NOT NULL,
+    ground_truth     INTEGER,
+    heuristic_flags  TEXT    NOT NULL,
+    input_tokens     INTEGER NOT NULL DEFAULT 0,
+    output_tokens    INTEGER NOT NULL DEFAULT 0,
+    exec_time_ms     INTEGER NOT NULL,
+    api_cost_usd     REAL    NOT NULL,
+    details          TEXT,
+    created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+
+    UNIQUE(run_id, package_name, experiment_mode, prompt_strategy, detector)
 );
 
-CREATE INDEX IF NOT EXISTS idx_eval_result_run ON eval_result(run_id);
-CREATE INDEX IF NOT EXISTS idx_eval_result_pkg ON eval_result(package_name);
+CREATE INDEX IF NOT EXISTS idx_eval_result_run  ON eval_result(run_id);
+CREATE INDEX IF NOT EXISTS idx_eval_result_pkg  ON eval_result(package_name);
+CREATE INDEX IF NOT EXISTS idx_eval_result_mode ON eval_result(run_id, experiment_mode);
+
+PRAGMA user_version = 2;
 """
 
 
@@ -61,10 +71,10 @@ class DBManager(DBCore):
     # Evaluation pipeline CRUD
     # ------------------------------------------------------------------
 
-    def create_eval_run(self, run_id: str) -> None:
+    def create_eval_run(self, run_id: str, tier: str = "unknown") -> None:
         self.write_one(
-            "INSERT OR IGNORE INTO eval_run (run_id) VALUES (?)",
-            (run_id,),
+            "INSERT OR IGNORE INTO eval_run (run_id, tier) VALUES (?, ?)",
+            (run_id, tier),
         )
 
     def insert_eval_result(
@@ -72,27 +82,36 @@ class DBManager(DBCore):
         run_id: str,
         package_name: str,
         version: str,
-        pipeline: str,
+        experiment_mode: str,
+        prompt_strategy: str,
         detector: str,
         verdict: bool,
+        ground_truth: bool | None,
         heuristic_flags: list,
+        input_tokens: int,
+        output_tokens: int,
         exec_time_ms: int,
         api_cost_usd: float,
         details: dict | None = None,
     ) -> int | None:
         return self.write_one(
-            """INSERT INTO eval_result
-               (run_id, package_name, version, pipeline, detector, verdict,
-                heuristic_flags, exec_time_ms, api_cost_usd, details)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT OR REPLACE INTO eval_result
+               (run_id, package_name, version, experiment_mode, prompt_strategy,
+                detector, verdict, ground_truth, heuristic_flags,
+                input_tokens, output_tokens, exec_time_ms, api_cost_usd, details)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 run_id,
                 package_name,
                 version,
-                pipeline,
+                experiment_mode,
+                prompt_strategy,
                 detector,
                 int(verdict),
+                int(ground_truth) if ground_truth is not None else None,
                 json.dumps(heuristic_flags),
+                input_tokens,
+                output_tokens,
                 exec_time_ms,
                 api_cost_usd,
                 json.dumps(details) if details else None,
@@ -113,16 +132,23 @@ class DBManager(DBCore):
 
     def get_eval_summary(self, run_id: str) -> dict[str, dict]:
         rows = self.fetch_many(
-            """SELECT detector, pipeline,
+            """SELECT detector, experiment_mode, prompt_strategy,
                       SUM(CASE WHEN verdict=1 THEN 1 ELSE 0 END) AS malicious_count,
                       SUM(CASE WHEN verdict=0 THEN 1 ELSE 0 END) AS benign_count,
+                      SUM(CASE WHEN ground_truth=1 AND verdict=1 THEN 1 ELSE 0 END) AS tp,
+                      SUM(CASE WHEN ground_truth=0 AND verdict=1 THEN 1 ELSE 0 END) AS fp,
+                      SUM(CASE WHEN ground_truth=1 AND verdict=0 THEN 1 ELSE 0 END) AS fn,
+                      SUM(CASE WHEN ground_truth=0 AND verdict=0 THEN 1 ELSE 0 END) AS tn,
                       COUNT(*) AS total
                FROM eval_result
                WHERE run_id=?
-               GROUP BY detector, pipeline""",
+               GROUP BY detector, experiment_mode, prompt_strategy""",
             (run_id,),
         )
-        return {f"{r['detector']}:{r['pipeline']}": dict(r) for r in rows}
+        return {
+            f"{r['detector']}:{r['experiment_mode']}:{r['prompt_strategy']}": dict(r)
+            for r in rows
+        }
 
 # Examples from prev project
     # def _to_text_or_json(self, v):
