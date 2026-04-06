@@ -1,0 +1,4 @@
+model_name: "gpt-5.4-nano"
+tier: "budget"
+temperature: 0.0
+proxy_url: "http://127.0.0.1:4000"

@@ -1,0 +1,4 @@
+model_name: "together_ai/Qwen/Qwen3.5-9B"
+tier: "budget"
+temperature: 0.0
+proxy_url: "http://127.0.0.1:4000"

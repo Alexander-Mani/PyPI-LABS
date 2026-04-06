@@ -1,4 +1,5 @@
 model_name: "claude-opus-4-6"
+tier: "frontier"
 temperature: 0.0
 max_turns: 5
 proxy_url: "http://127.0.0.1:4000"
