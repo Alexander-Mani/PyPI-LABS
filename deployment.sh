@@ -1,38 +1,47 @@
 #!/bin/bash
 set -e
 
+# PyPI-SCADA Deployment Script (VM-Targeted)
+# This script automates the setup of the entry-point scanning pipeline.
+# It assumes a clean Ubuntu 22.04 LTS environment.
+
 echo "Sourcing operator environment variables..."
-source ~/.env 
+if [ -f ~/.env ]; then
+  source ~/.env 
+else
+  echo "ERROR: ~/.env not found. Ensure PULL_TOKEN and API keys are exported."
+  exit 1
+fi
 
 echo "Step 1: Creating unprivileged accounts"
 sudo useradd --system --create-home --home-dir /home/pypi-runner --shell /bin/bash --comment "PyPi-SCADA experiment runner" pypi-runner || true
 sudo useradd --system --create-home --home-dir /home/proxy-runner --shell /bin/bash --comment "PyPi-SCADA credential proxy" proxy-runner || true
 
 echo "Step 2: Cloning the repository"
+# Alexander-Mani's fine-grained token should have read access.
 sudo -u pypi-runner git clone https://Alexander-Mani:"$PULL_TOKEN"@github.com/Alexander-Mani/PyPi-SCADA.git /home/pypi-runner/pypi-scada-repo/
 sudo chown -R pypi-runner:pypi-runner /home/pypi-runner/pypi-scada-repo
 
-echo "Step 3: Extracting samples"
+echo "Step 3: Staging samples for the research pipeline"
+# The EvaluationRunner in evaluate.py expects samples under the repo root's samples/ directory.
 sudo -u pypi-runner bash -c "
-  mkdir -p /home/pypi-runner/samples-extracted
-  unzip -q /home/lexi/samples/benign_and_controlls.zip -d /home/pypi-runner/samples-extracted/
-"
-
-echo "Step 4: Staging malicious zips"
-sudo -u pypi-runner bash -c "
-  mkdir -p /home/pypi-runner/samples-extracted/malicious
+  mkdir -p /home/pypi-runner/pypi-scada-repo/samples/benign
+  mkdir -p /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife
+  
+  echo 'Extracting benign and controls...'
+  unzip -q /home/lexi/samples/benign_and_controlls.zip -d /home/pypi-runner/pypi-scada-repo/samples/benign/
+  
+  echo 'Staging malicious archives...'
   for f in /home/lexi/samples/*.zip; do
     name=\$(basename \"\$f\")
     if [ \"\$name\" != 'benign_and_controlls.zip' ]; then
-      cp \"\$f\" /home/pypi-runner/samples-extracted/malicious/
+      cp \"\$f\" /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife/
     fi
   done
 "
 
-echo "Step 5: Setting up Python virtual environment"
-# requirements.txt must be a hashed lockfile compiled with pip-tools:
-#   pip-compile --generate-hashes requirements.in -o requirements.txt
-# twine, bandit, and semgrep must be listed in requirements.in.
+echo "Step 4: Setting up Python virtual environment (pypi-runner)"
+# requirements.txt is a hashed lockfile.
 sudo -u pypi-runner bash -c "
   cd /home/pypi-runner/pypi-scada-repo
   python3 -m venv venv
@@ -40,7 +49,7 @@ sudo -u pypi-runner bash -c "
   pip install --require-hashes --no-deps --quiet -r requirements.txt
 "
 
-echo "Step 6: Configuring API keys for proxy-runner"
+echo "Step 5: Configuring API keys for proxy-runner"
 sudo -u proxy-runner bash -c "
 cat > /home/proxy-runner/.env << ENVEOF
 export ANTHROPIC_API_KEY=\"$ANTHROPIC_API_KEY\"
@@ -52,11 +61,22 @@ chmod 600 /home/proxy-runner/.env
 echo 'source ~/.env' >> /home/proxy-runner/.bashrc
 "
 
-echo "Step 7: Configuring egress filtering"
+echo "Step 6: Configuring egress filtering (iptables)"
 sudo modprobe xt_owner
 
-sudo iptables -A OUTPUT -m owner --uid-owner pypi-runner ! -o lo -j DROP || true
+# Flush existing rules to avoid duplicates if re-running
+sudo iptables -F OUTPUT || true
+
+# pypi-runner: Allow local only (to talk to simulator and LiteLLM)
+sudo iptables -A OUTPUT -m owner --uid-owner pypi-runner -o lo -j ACCEPT || true
+sudo iptables -A OUTPUT -m owner --uid-owner pypi-runner -j DROP || true
+
+# proxy-runner: Allow local, DNS, and specific vendor CIDRs
 sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -o lo -j ACCEPT || true
+
+# CRITICAL: Allow DNS resolution for LiteLLM
+sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -p udp --dport 53 -j ACCEPT || true
+sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -p tcp --dport 53 -j ACCEPT || true
 
 ANTHROPIC_CIDR="104.18.0.0/16" 
 OPENAI_CIDR="162.159.0.0/16"
@@ -68,13 +88,15 @@ sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d $GOOGLE_CIDR -p tcp
 sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d api.together.xyz -p tcp --dport 443 -j ACCEPT || true
 sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -j DROP || true
 
-echo "Step 8: Starting LiteLLM proxy"
-# proxy-runner/requirements.txt must be a hashed lockfile:
-#   pip-compile --generate-hashes proxy-requirements.in -o proxy-runner/requirements.txt
+echo "Step 7: Starting LiteLLM proxy"
+# Copy the proxy lockfile over from pypi-runner's repo clone
+sudo cp /home/pypi-runner/pypi-scada-repo/proxy-requirements.txt /home/proxy-runner/
+sudo chown proxy-runner:proxy-runner /home/proxy-runner/proxy-requirements.txt
+
 sudo -u proxy-runner bash -c "
   python3 -m venv /home/proxy-runner/venv
   source /home/proxy-runner/venv/bin/activate
-  pip install --require-hashes --no-deps --quiet -r /home/proxy-runner/pypi-scada-repo/proxy-requirements.txt
+  pip install --require-hashes --no-deps --quiet -r /home/proxy-runner/proxy-requirements.txt
 "
 
 sudo -u proxy-runner bash -c "
@@ -83,10 +105,11 @@ sudo -u proxy-runner bash -c "
   nohup litellm --port 4000 > /home/proxy-runner/litellm.log 2>&1 &
 "
 
-sleep 5
-sudo -u pypi-runner curl -s http://127.0.0.1:4000/health
+echo "Waiting for LiteLLM health check..."
+sleep 8
+sudo -u pypi-runner curl -s http://127.0.0.1:4000/health || echo "WARNING: LiteLLM health check failed."
 
-echo "Step 10: Starting the PyPI simulator"
+echo "Step 8: Starting the PyPI simulator (background)"
 sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo/src/simulator
@@ -95,21 +118,23 @@ sudo -u pypi-runner bash -c "
 
 sleep 5
 
-echo "Step 11: Uploading samples"
+echo "Step 9: Uploading samples to simulator index"
 sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo
 
-  python src/injector/upload_samples.py --samples-dir /home/pypi-runner/samples-extracted --simulator-url http://127.0.0.1:8080 --only benign
-  python src/injector/upload_samples.py --samples-dir /home/pypi-runner/samples-extracted --simulator-url http://127.0.0.1:8080 --only controls
-  python src/injector/upload_samples.py --samples-dir /home/pypi-runner/samples-extracted --simulator-url http://127.0.0.1:8080 --only malicious
+  # Use the staged samples in the repo for injection
+  python src/injector/upload_samples.py --samples-dir /home/pypi-runner/pypi-scada-repo/samples --simulator-url http://127.0.0.1:8080 --only benign
+  python src/injector/upload_samples.py --samples-dir /home/pypi-runner/pypi-scada-repo/samples --simulator-url http://127.0.0.1:8080 --only controls
+  python src/injector/upload_samples.py --samples-dir /home/pypi-runner/pypi-scada-repo/samples --simulator-url http://127.0.0.1:8080 --only malicious
 "
 
-echo "Step 12: Running the evaluation pipeline"
+echo "Step 10: Running the evaluation pipeline (Entry-Point Scanning)"
 sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo
-  python src/analyzer/evaluate.py src/analyzer/config.yaml
+  # Defaulting to budget tier for safety; reads configs/models.json automatically.
+  python src/analyzer/evaluate.py --tier budget
 "
 
-echo "Deployment and evaluation complete."
+echo "Deployment and evaluation complete. Results stored in src/data/eval_results.db"
