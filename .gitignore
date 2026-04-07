@@ -210,3 +210,5 @@ samples/
 src/simulator/data/
 *.db
 .codex
+
+logs/
