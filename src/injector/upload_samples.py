@@ -7,8 +7,9 @@ local simulator via twine. Handles three archive categories:
 
   benign/   — per-package subdirs of .tar.gz / .whl files from PyPI
   controls/ — same layout; infrastructure packages used as FP baseline
-  malicious/ — password-protected .zip containers (password: "infected");
-               each contains an inner .tar.gz or .whl to upload
+  malware_backstabbers_knife/ — password-protected .zip containers
+                                (password: "infected"); each contains an inner
+                                .tar.gz or .whl to upload
 
 Older versions within a package are uploaded before newer ones so that
 the simulator's list_versions() returns them in chronological order.
@@ -219,7 +220,8 @@ def _extract_malicious_zip(zip_path: Path) -> Path | None:
 
 def _upload_malicious_category(malicious_dir: Path, simulator_url: str, dry_run: bool) -> tuple[int, int]:
     """
-    Walk malicious_dir/ for .zip files, extract each, upload inner archive.
+    Walk malware_backstabbers_knife/ for .zip files, extract each, upload
+    inner archive.
     Staging dirs are cleaned up after each upload.
 
     Returns (success_count, failure_count).
@@ -229,7 +231,7 @@ def _upload_malicious_category(malicious_dir: Path, simulator_url: str, dry_run:
         return 0, 0
 
     zips = sorted(malicious_dir.glob("*.zip"))
-    log.info(f"Scanning malicious/: {len(zips)} zip(s)")
+    log.info(f"Scanning malware_backstabbers_knife/: {len(zips)} zip(s)")
 
     success = failure = 0
 
@@ -320,7 +322,7 @@ def main() -> None:
         total_fail += fail
 
     if mode in ("malicious", "all"):
-        ok, fail = _upload_malicious_category(samples_dir / "malicious", simulator_url, dry_run)
+        ok, fail = _upload_malicious_category(samples_dir / "malware_backstabbers_knife", simulator_url, dry_run)
         total_ok += ok
         total_fail += fail
 

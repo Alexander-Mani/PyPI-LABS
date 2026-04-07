@@ -4,8 +4,8 @@ simulator:
 
 # Paths relative to the injector directory
 dataset:
-  malicious_dir: "../data/samples/malicious"   # Backstabber's Knife Collection
-  benign_dir: "../data/samples/benign"          # Real safe package updates
+  malicious_dir: "../../samples/malware_backstabbers_knife"   # Backstabber's Knife Collection
+  benign_dir: "../../samples/benign"          # Real safe package updates
 
 # twine credentials for the simulator (no real auth needed)
 credentials:
