@@ -78,7 +78,7 @@ sudo -u pypi-runner bash -c "
   cd /home/pypi-runner/pypi-scada-repo
   python3 -m venv venv
   source venv/bin/activate
-  pip install --require-hashes --no-deps -r requirements.txt
+  pip install --require-hashes --no-deps -r requirements/requirements.txt
 "
 ```
 
@@ -139,7 +139,7 @@ sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -j DROP
 
 ### 7.1 Setup and Start LiteLLM Proxy
 ```bash
-sudo cp /home/pypi-runner/pypi-scada-repo/proxy-requirements.txt /home/proxy-runner/
+sudo cp /home/pypi-runner/pypi-scada-repo/requirements/proxy-requirements.txt /home/proxy-runner/
 sudo chown proxy-runner:proxy-runner /home/proxy-runner/proxy-requirements.txt
 
 sudo -u proxy-runner bash -c "
