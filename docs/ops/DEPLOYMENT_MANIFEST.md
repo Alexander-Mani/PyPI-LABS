@@ -18,6 +18,17 @@ The human operator executes these sequential steps to deploy the PyPI-SCADA pipe
 
 ***
 
+## Step 0: Install System Dependencies
+
+Ensure the required Debian/Ubuntu system packages are installed. A list of required packages is maintained in `requirements/apt.txt`.
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git unzip curl python3 python3-venv python3-pip iptables sqlite3
+```
+
+***
+
 ## Step 1: Create Unprivileged Accounts
 
 Isolate the runner from the credentials.

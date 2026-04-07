@@ -13,6 +13,11 @@ else
   exit 1
 fi
 
+echo "Step 0: Installing system dependencies"
+sudo apt-get update
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  git unzip curl python3 python3-venv python3-pip iptables sqlite3
+
 echo "Step 1: Creating unprivileged accounts"
 id -u pypi-runner &>/dev/null || sudo useradd --system --create-home --home-dir /home/pypi-runner --shell /bin/bash --comment "PyPi-SCADA experiment runner" pypi-runner
 id -u proxy-runner &>/dev/null || sudo useradd --system --create-home --home-dir /home/proxy-runner --shell /bin/bash --comment "PyPi-SCADA credential proxy" proxy-runner
