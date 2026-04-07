@@ -2,12 +2,14 @@
 evaluate.py — Run the full entry-point scanning pipeline against all sample
 archives and report per-detector precision / recall / F1.
 
-Ground truth labels are loaded from meta.json files and kept exclusively inside
-EvaluationRunner. They are never passed to extractors or detection adapters.
+Ground truth labels are derived from folder membership: archives in
+samples/benign/ are labelled False (benign), archives in
+samples/malware_backstabbers_knife/ are labelled True (malicious).
+Labels are stored at insert time and never passed to extractors or adapters.
 
 Usage:
     python src/analyzer/evaluate.py [--config PATH] [--tier budget|medium|frontier]
-                                    [--skip-validation]
+                                    [--skip-validation] [--sast-only]
 
 See CONCERNS.md for known limitations before interpreting results.
 """
@@ -33,7 +35,7 @@ for _p in (_REPO_ROOT, _ANALYZER_DIR):
 
 from src.utils.logger import get_logger, setup_logger
 from src.data.db_manager import DBManager
-from entry_extractor import EntryPointExtractor
+from entry_extractor import EntryPointExtractor, _STEM_RE
 from heuristic_filter import HeuristicFilter
 from detection_controller import EvalController
 
@@ -41,23 +43,16 @@ log = get_logger()
 
 
 # ---------------------------------------------------------------------------
-# Financial air-gap constants
+# Financial air-gap constants — loaded from configs/models.json
 # ---------------------------------------------------------------------------
 
-# USD per 1M tokens: {model_name: (input_price, output_price)}
+with open(_REPO_ROOT / "configs" / "models.json", encoding="utf-8") as _f:
+    _models_cfg = json.load(_f)
+
+# {litellm_model_name: (input_price_per_1m_usd, output_price_per_1m_usd)}
 _TOKEN_PRICES: dict[str, tuple[float, float]] = {
-    "claude-haiku-4-5":                                       (0.80,   4.00),
-    "claude-sonnet-4-6":                                      (3.00,  15.00),
-    "claude-opus-4-6":                                       (15.00,  75.00),
-    "gpt-5.4-nano":                                           (0.15,   0.60),
-    "gpt-5.4-mini":                                           (0.15,   0.60),
-    "gpt-5.4":                                                (2.50,  10.00),
-    "gemini-3.1-flash-lite-preview":                          (0.10,   0.40),
-    "gemini-3-flash":                                         (0.075,  0.30),
-    "gemini-3.1-pro-preview":                                 (1.25,   5.00),
-    "together_ai/Qwen/Qwen3.5-9B":                            (0.20,   0.20),
-    "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo":   (0.88,   0.88),
-    "together_ai/Qwen/Qwen3.5-397B-A17B":                    (3.00,   3.00),
+    k: (float(v[0]), float(v[1]))
+    for k, v in _models_cfg.get("token_prices", {}).items()
 }
 
 _BUDGET_HARD_CAP_USD = 10.00
@@ -81,16 +76,21 @@ class EvaluationRunner:
             tier=tier,
         )
         self._samples_root = _REPO_ROOT / "samples"
+        self._benign_cache:  list[tuple[Path, str, str, bool]] | None = None
+        self._malware_cache: list[tuple[Path, str, str, bool]] | None = None
 
     # ------------------------------------------------------------------
-    # Sample discovery
+    # Sample discovery (results cached after first call)
     # ------------------------------------------------------------------
 
     def _discover_benign(self) -> list[tuple[Path, str, str, bool]]:
         """
         Return (archive_path, name, version, is_malicious=False) for the latest
         version of each benign package. Skips the controls/ subdirectory.
+        Result is cached after the first call to avoid double filesystem scan.
         """
+        if self._benign_cache is not None:
+            return self._benign_cache
         results: list[tuple[Path, str, str, bool]] = []
         for manifest_path in sorted(self._samples_root.glob("benign/*/manifest.json")):
             # Skip high-volume controls — they are for latency benchmarking.
@@ -113,30 +113,43 @@ class EvaluationRunner:
                 ))
             except Exception as exc:
                 log.warning(f"Could not read {manifest_path}: {exc}")
+        self._benign_cache = results
         return results
 
     def _discover_malware(self) -> list[tuple[Path, str, str, bool]]:
         """
-        Return (archive_path, name, version, is_malicious=True) for every malware zip.
-        Logs a warning and returns [] if the directory does not exist.
-        See CONCERNS.md §2.
+        Return (archive_path, name, version, is_malicious=True) for every malware
+        archive (.zip, .tar.gz, .whl). Returns [] if the directory does not exist;
+        the hard gate in run() handles it. See CONCERNS.md §2.
+        Result is cached after the first call to avoid double filesystem scan.
         """
+        if self._malware_cache is not None:
+            return self._malware_cache
         malware_dir = self._samples_root / "malware_backstabbers_knife"
         if not malware_dir.exists():
-            log.warning(
-                "malware_backstabbers_knife/ not found — running as false-positive "
-                "benchmark only. See CONCERNS.md §2."
-            )
+            self._malware_cache = []
             return []
+        archives = sorted(
+            list(malware_dir.rglob("*.zip")) +
+            list(malware_dir.rglob("*.tar.gz")) +
+            list(malware_dir.rglob("*.whl"))
+        )
         results: list[tuple[Path, str, str, bool]] = []
-        for zip_path in sorted(malware_dir.rglob("*.zip")):
-            stem = zip_path.stem
-            # Best-effort name/version split on first hyphen
-            if "-" in stem:
-                name, _, version = stem.partition("-")
+        for archive_path in archives:
+            stem = archive_path.name
+            for suffix in (".tar.gz", ".tar.bz2", ".tar.xz"):
+                if stem.endswith(suffix):
+                    stem = stem[: -len(suffix)]
+                    break
+            else:
+                stem = Path(stem).stem  # strips .whl or .zip
+            m = _STEM_RE.match(stem)
+            if m:
+                name, version = m.group(1), m.group(2)
             else:
                 name, version = stem, "unknown"
-            results.append((zip_path, name, version, True))
+            results.append((archive_path, name, version, True))
+        self._malware_cache = results
         return results
 
     # ------------------------------------------------------------------
@@ -153,6 +166,14 @@ class EvaluationRunner:
 
         benign_archives  = self._discover_benign()
         malware_archives = self._discover_malware()
+
+        if not malware_archives and not sast_only:
+            raise SystemExit(
+                "HALT: samples/malware_backstabbers_knife/ is missing or contains no "
+                ".zip/.tar.gz/.whl archives. Cannot compute Recall or F1 without "
+                "malware samples. Stage the dataset first. Use --sast-only to run a "
+                "false-positive benchmark without malware."
+            )
 
         all_archives = benign_archives + malware_archives
         log.info(
@@ -256,10 +277,16 @@ class EvaluationRunner:
 
         # Ground truth is stored per-row at insert time (folder-based labelling).
         # Rows with NULL ground_truth (legacy runs) are skipped and logged.
+        # Rows with experiment_mode="error" (API/proxy failures) are excluded from
+        # metrics — they are stored in the DB for debugging but are not real verdicts.
         stats: dict[str, dict[str, int]] = {}
         unknown_pkgs: set[str] = set()
+        error_rows: set[str] = set()
 
         for r in results:
+            if r.get("experiment_mode") == "error":
+                error_rows.add(f"{r['detector']}:{r['prompt_strategy']}")
+                continue
             stored_gt = r.get("ground_truth")
             if stored_gt is None:
                 unknown_pkgs.add(r["package_name"])
@@ -280,6 +307,11 @@ class EvaluationRunner:
             else:
                 stats[key]["FN"] += 1
 
+        if error_rows:
+            log.warning(
+                f"Excluded {len(error_rows)} error row(s) from metrics "
+                f"(API/proxy failures): {sorted(error_rows)}"
+            )
         if unknown_pkgs:
             log.warning(f"Ground truth missing for: {sorted(unknown_pkgs)}")
 

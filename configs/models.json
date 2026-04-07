@@ -1,4 +1,18 @@
 {
+  "token_prices": {
+    "claude-haiku-4-5":                                      [0.80,   4.00],
+    "claude-sonnet-4-6":                                     [3.00,  15.00],
+    "claude-opus-4-6":                                      [15.00,  75.00],
+    "gpt-5.4-nano":                                          [0.15,   0.60],
+    "gpt-5.4-mini":                                          [0.15,   0.60],
+    "gpt-5.4":                                               [2.50,  10.00],
+    "gemini-3.1-flash-lite-preview":                         [0.10,   0.40],
+    "gemini-3-flash":                                        [0.075,  0.30],
+    "gemini-3.1-pro-preview":                                [1.25,   5.00],
+    "together_ai/Qwen/Qwen3.5-9B":                           [0.20,   0.20],
+    "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo":  [0.88,   0.88],
+    "together_ai/Qwen/Qwen3.5-397B-A17B":                   [3.00,   3.00]
+  },
   "routing": {
     "proprietary_access": "official_api_via_litellm",
     "open_source_access": "together_ai_via_litellm"
