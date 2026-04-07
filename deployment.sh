@@ -70,10 +70,12 @@ fi
 
 sudo -u pypi-runner bash -c "
   mkdir -p /home/pypi-runner/pypi-scada-repo/samples/benign
+  mkdir -p /home/pypi-runner/pypi-scada-repo/samples/controls
   mkdir -p /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife
   
   echo 'Extracting benign and controls...'
-  unzip ${UNZIP_FLAGS} /home/lexi/samples/benign_and_controlls.zip -d /home/pypi-runner/pypi-scada-repo/samples/benign/
+  # Extract at samples/ root so both benign/ and controls/ land in expected paths.
+  unzip ${UNZIP_FLAGS} /home/lexi/samples/benign_and_controlls.zip -d /home/pypi-runner/pypi-scada-repo/samples/
   
   echo 'Staging malicious archives...'
   for f in /home/lexi/samples/*.zip; do
@@ -91,6 +93,8 @@ sudo -u pypi-runner bash -c "
   python3 -m venv venv
   source venv/bin/activate
   pip install --require-hashes --no-deps --quiet -r requirements/requirements.txt
+  # injector/upload_samples.py shells out to `python -m twine` from this venv.
+  pip install --require-hashes --no-deps --quiet -r requirements/injector-requirements.txt
 "
 
 # Copy the proxy lockfile over from pypi-runner's repo clone
@@ -161,15 +165,22 @@ sudo -u proxy-runner bash -c "
   existing_litellm_pids=\$(pgrep -x litellm || true)
   if [ -n \"\$existing_litellm_pids\" ]; then
     echo \"Stopping existing LiteLLM PIDs: \$existing_litellm_pids\"
-    kill \$existing_litellm_pids || true
+    kill \$existing_litellm_pids 2>/dev/null || true
     sleep 1
   fi
   nohup litellm --port 4000 > /home/proxy-runner/litellm.log 2>&1 &
 "
 
 echo "Waiting for LiteLLM health check..."
-sleep 8
-if ! sudo -u pypi-runner curl -fsS http://127.0.0.1:4000/health >/dev/null; then
+ready=0
+for _i in {1..20}; do
+  if sudo -u pypi-runner curl -fsS http://127.0.0.1:4000/health >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ready" -ne 1 ]; then
   echo "WARNING: LiteLLM health check failed."
   echo "LiteLLM process check (proxy-runner):"
   sudo -u proxy-runner pgrep -a -x litellm || true
@@ -185,7 +196,7 @@ sudo -u pypi-runner bash -c "
   existing_sim_pids=\$(pgrep -u pypi-runner -f 'python main.py' | grep -vw \"\$\$\" || true)
   if [ -n \"\$existing_sim_pids\" ]; then
     echo \"Stopping existing simulator PIDs: \$existing_sim_pids\"
-    kill \$existing_sim_pids || true
+    kill \$existing_sim_pids 2>/dev/null || true
     sleep 1
   fi
   nohup python main.py > /home/pypi-runner/simulator.log 2>&1 &
