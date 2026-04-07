@@ -18,8 +18,17 @@ sudo useradd --system --create-home --home-dir /home/pypi-runner --shell /bin/ba
 sudo useradd --system --create-home --home-dir /home/proxy-runner --shell /bin/bash --comment "PyPi-SCADA credential proxy" proxy-runner || true
 
 echo "Step 2: Cloning the repository"
-# Alexander-Mani's fine-grained token should have read access.
-sudo -u pypi-runner git clone https://Alexander-Mani:"$PULL_TOKEN"@github.com/Alexander-Mani/PyPi-SCADA.git /home/pypi-runner/pypi-scada-repo/
+# Use an ephemeral .netrc so PULL_TOKEN is never embedded in the git remote URL
+# (.git/config) or visible in the process table during the clone.
+echo "machine github.com login Alexander-Mani password $PULL_TOKEN" \
+  | sudo -u pypi-runner tee /home/pypi-runner/.netrc > /dev/null
+sudo chmod 600 /home/pypi-runner/.netrc
+
+sudo -u pypi-runner git clone \
+  https://github.com/Alexander-Mani/PyPi-SCADA.git \
+  /home/pypi-runner/pypi-scada-repo/
+
+sudo -u pypi-runner rm /home/pypi-runner/.netrc
 sudo chown -R pypi-runner:pypi-runner /home/pypi-runner/pypi-scada-repo
 
 echo "Step 3: Staging samples for the research pipeline"
@@ -50,6 +59,12 @@ sudo -u pypi-runner bash -c "
 "
 
 echo "Step 5: Configuring API keys for proxy-runner"
+echo "Validating API key environment variables..."
+: "${ANTHROPIC_API_KEY:?ERROR: ANTHROPIC_API_KEY is not set in ~/.env}"
+: "${OPENAI_API_KEY:?ERROR: OPENAI_API_KEY is not set in ~/.env}"
+: "${GEMINI_API_KEY:?ERROR: GEMINI_API_KEY is not set in ~/.env}"
+: "${TOGETHER_API_KEY:?ERROR: TOGETHER_API_KEY is not set in ~/.env}"
+
 sudo -u proxy-runner bash -c "
 cat > /home/proxy-runner/.env << ENVEOF
 export ANTHROPIC_API_KEY=\"$ANTHROPIC_API_KEY\"
@@ -74,9 +89,14 @@ sudo iptables -A OUTPUT -m owner --uid-owner pypi-runner -j DROP || true
 # proxy-runner: Allow local, DNS, and specific vendor CIDRs
 sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -o lo -j ACCEPT || true
 
-# CRITICAL: Allow DNS resolution for LiteLLM
-sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -p udp --dport 53 -j ACCEPT || true
-sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -p tcp --dport 53 -j ACCEPT || true
+# DNS restricted to Google Public DNS (8.8.8.8, 8.8.4.4) and Cloudflare (1.1.1.1).
+# Global port-53 ACCEPT would allow DNS tunneling from malware under test.
+for _dns_ip in 8.8.8.8 8.8.4.4 1.1.1.1; do
+  sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner \
+    -p udp --dport 53 -d "$_dns_ip" -j ACCEPT || true
+  sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner \
+    -p tcp --dport 53 -d "$_dns_ip" -j ACCEPT || true
+done
 
 ANTHROPIC_CIDR="104.18.0.0/16" 
 OPENAI_CIDR="162.159.0.0/16"

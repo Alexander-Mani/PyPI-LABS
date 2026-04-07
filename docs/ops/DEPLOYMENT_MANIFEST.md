@@ -31,10 +31,19 @@ sudo useradd --system --create-home --home-dir /home/proxy-runner --shell /bin/b
 
 ## Step 2: Clone the Repository
 
-Clone as `pypi-runner` using the fine-grained access token.
+Clone as `pypi-runner` using an ephemeral `.netrc` so the token is never stored in
+`.git/config` or visible in the process table.
 
 ```bash
-sudo -u pypi-runner git clone https://Alexander-Mani:"$PULL_TOKEN"@github.com/Alexander-Mani/PyPi-SCADA.git /home/pypi-runner/pypi-scada-repo/
+echo "machine github.com login Alexander-Mani password $PULL_TOKEN" \
+  | sudo -u pypi-runner tee /home/pypi-runner/.netrc > /dev/null
+sudo chmod 600 /home/pypi-runner/.netrc
+
+sudo -u pypi-runner git clone \
+  https://github.com/Alexander-Mani/PyPi-SCADA.git \
+  /home/pypi-runner/pypi-scada-repo/
+
+sudo -u pypi-runner rm /home/pypi-runner/.netrc
 ```
 
 ***
@@ -105,12 +114,17 @@ sudo iptables -F OUTPUT || true
 sudo iptables -A OUTPUT -m owner --uid-owner pypi-runner -o lo -j ACCEPT
 sudo iptables -A OUTPUT -m owner --uid-owner pypi-runner -j DROP
 
-# proxy-runner: Allow local, DNS, and specific vendor CIDRs
+# proxy-runner: Allow local, DNS (locked to safe resolvers), and vendor CIDRs
 sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -o lo -j ACCEPT
 
-# CRITICAL: Allow DNS resolution
-sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -p udp --dport 53 -j ACCEPT
-sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -p tcp --dport 53 -j ACCEPT
+# DNS restricted to Google (8.8.8.8, 8.8.4.4) and Cloudflare (1.1.1.1)
+# — prevents DNS tunneling from malware under test
+for _dns_ip in 8.8.8.8 8.8.4.4 1.1.1.1; do
+  sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner \
+    -p udp --dport 53 -d "$_dns_ip" -j ACCEPT
+  sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner \
+    -p tcp --dport 53 -d "$_dns_ip" -j ACCEPT
+done
 
 sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d 104.18.0.0/16 -p tcp --dport 443 -j ACCEPT  # Anthropic/Cloudflare
 sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d 162.159.0.0/16 -p tcp --dport 443 -j ACCEPT # OpenAI/Cloudflare
