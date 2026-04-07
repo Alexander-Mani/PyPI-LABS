@@ -16,7 +16,7 @@ The system has three components under `src/` and a curated sample dataset under 
 src/
   simulator/       Flask-based PEP 503 server (pip + twine compatible)
   injector/        Uploads benign and malicious packages to the simulator
-  analyzer/        Diff engine + SAST/LLM detection pipeline
+  analyzer/        Entry-point scanning + SAST/LLM detection pipeline
   data/            Shared SQLite utilities (db_core, db_manager)
   utils/           Shared logger (loguru) and TUI helpers (rich)
 
@@ -51,15 +51,16 @@ Feeds packages from the sample dataset into the simulator in the correct chronol
 
 ### Analyzer (`src/analyzer/`)
 
-The primary detection pipeline is the **entry-point scanning evaluation pipeline**, which runs offline against the sample archives. A legacy diff-based pipeline (`main.py`, `diff.py`, `sql.py`) exists in the codebase but is not the active evaluation path.
+The primary detection pipeline is the **entry-point scanning evaluation pipeline**, which runs offline against the sample archives. This architecture captures execution at install-time (`setup.py`, `pyproject.toml`) and import-time (`__init__.py`).
 
 **Entry-point scanning evaluation pipeline** (primary):
 - `evaluate.py` -- `EvaluationRunner` (discovers archives → extract → filter → detect → print TP/TN/FP/FN/F1 table)
-- `entry_extractor.py` -- `EntryPointExtractor`, `PackageInfo` (unpacks `.tar.gz`/`.whl`/`.zip`, extracts `setup.py`, `__init__.py`, `pyproject.toml` and their 1-level imports)
+- `entry_extractor.py` -- `EntryPointExtractor`, `PackageInfo` (unpacks `.tar.gz`/`.whl`/`.zip`, extracts `setup.py`, `__init__.py`, `pyproject.toml` and their imports up to **3 levels deep** via BFS)
 - `heuristic_filter.py` -- `HeuristicFilter` (flags `base64_or_hex`, `network_in_install_hook`, `shell_execution`, `bundled_binary` before LLM evaluation)
-- `detection_controller.py` -- `EvalController`, `EntryPointStaticAdapter`, `EntryPointLLMAdapter`, `AgenticAdapter`; all LLM calls route through LiteLLM on `http://127.0.0.1:4000`
-- `configs/` -- per-model YAML configs (`model_name` in LiteLLM alias format, `temperature`, `system_prompt`, `user_template`); `claude_opus.yaml`, `gpt.yaml`, `gemini.yaml`, `claude_agentic.yaml`
-- `TODO.md` -- sequential task checklist for the evaluation module
+- `detection_controller.py` -- `EvalController` (orchestration layer)
+- `adapters.py` -- `StaticAdapter` (SAST), `LLMAdapter` (Single-shot), `LLMRawAdapter` (raw), `AgenticAdapter` (Multi-turn); all LLM calls route through LiteLLM on `http://127.0.0.1:4000`
+- `configs/` -- per-model YAML configs and the `models.json` pricing/tier registry.
+- `TODO.md` -- Phase III & IV task tracking
 - `CONCERNS.md` -- documented design decisions and data interpretation caveats
 
 ---
@@ -107,8 +108,8 @@ The high-volume controls cover the 10 most-downloaded PyPI packages (`boto3`, `u
 git clone https://github.com/Alexander-Mani/PyPi-SCADA.git
 cd PyPi-SCADA
 python3.11 -m venv .venv && source .venv/bin/activate
-# requirements.txt must be a hashed lockfile (see docs/ops/DEPENDENCY_SECURITY_SOP.md)
-pip install --require-hashes --no-deps -r requirements.txt
+# requirements/requirements.txt is a hashed lockfile (see docs/ops/DEPENDENCY_SECURITY_SOP.md)
+pip install --require-hashes --no-deps -r requirements/requirements.txt
 
 # 2. Collect benign samples
 python samples/download_benign.py
@@ -118,16 +119,20 @@ python samples/download_controls.py
 
 # 3. Run the offline evaluation pipeline (no simulator needed)
 #    SAST only — no LiteLLM required
-python src/analyzer/evaluate.py
-#    With LLM pipelines — start LiteLLM proxy first (see docs/ops/DEPLOYMENT_MANIFEST.md Step 8)
-#    LiteLLM holds all API keys; the analyzer connects to http://127.0.0.1:4000
-python src/analyzer/evaluate.py
+python src/analyzer/evaluate.py --sast-only
+
+#    Full pipeline — start LiteLLM proxy first (see docs/ops/DEPLOYMENT_MANIFEST.md Step 7)
+#    Default tier is 'budget'; results stored in src/data/eval_results.db
+python src/analyzer/evaluate.py --tier budget
 
 # 4. Start the simulator (local dev only — for injection testing)
 cd src/simulator && python main.py
 
 # 5. Inject packages via controller.sh (local dev only)
 cd src/injector && bash controller.sh all
+
+# 6. Run the test suite
+pytest tests/
 ```
 
 ---

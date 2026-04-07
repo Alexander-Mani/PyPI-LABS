@@ -12,17 +12,17 @@
 
 ## 2. Engineering: Model Loading and Phased Execution
 
-- [ ] Implement model loading from `configs/models.json` in the Entry-Point Engine.
-- [ ] Update `src/analyzer/evaluate.py` to parse `configs/models.json` and accept a `--tier` argument (e.g., `python evaluate.py --tier budget`) to enforce the phased execution strategy.
+- [x] Implement model loading from `configs/models.json` in the Entry-Point Engine.
+- [x] Update `src/analyzer/evaluate.py` to parse `configs/models.json` and accept a `--tier` argument (e.g., `python evaluate.py --tier budget`) to enforce the phased execution strategy.
 
 ---
 
 ## 3. Engineering: Pipeline Hardening (Eat Our Own Dog Food)
 *Demonstrate supply chain security best practices on our own infrastructure.*
 
-- [ ] Transition from floating dependencies (`pip install twine`) to a cryptographic lockfile.
-- [ ] Use `pip-tools` (or `uv`) to compile `requirements.in` into a hashed `requirements.txt`.
-- [ ] Update `deployment.sh` to install via `pip install --require-hashes --no-deps -r requirements.txt`.
+- [x] Transition from floating dependencies (`pip install twine`) to a cryptographic lockfile.
+- [x] Use `pip-tools` (or `uv`) to compile `requirements/requirements.in` into a hashed `requirements/requirements.txt`.
+- [x] Update `deployment.sh` to install via `pip install --require-hashes --no-deps -r requirements/requirements.txt`.
 - [ ] Add a brief "Standard Operating Procedure" section in the thesis explaining why this is critical to prevent the researchers from being compromised.
 
 ## 4. Engineering: Evaluation Metrics Logging
@@ -36,6 +36,8 @@
 
 
 # New mode pipline
+
+**Note: The 4-mode architecture described below is fully implemented and complete.**
 
 You must update several specific sections of your report to reflect the new four-mode architecture.
 

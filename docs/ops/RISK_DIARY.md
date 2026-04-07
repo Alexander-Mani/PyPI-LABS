@@ -122,8 +122,8 @@ using the OpenAI-compatible API; no vendor SDKs are imported in the analyzer.
 **Note on implementation history:** A custom Flask proxy (`src/credential_proxy/server.py`)
 was built to implement this threat model and wired into `detection_controller.py`
 (proxy dispatch at port 9090). This was subsequently replaced by LiteLLM, which
-provides a production-grade implementation of the same isolation. The custom proxy
-code remains in the repository but is not used.
+provides a production-grade implementation of the same isolation. The legacy custom
+proxy code has been deleted from the repository.
 
 **Threat addressed:**
 Decision 2 moved API keys from config files into environment variables. A

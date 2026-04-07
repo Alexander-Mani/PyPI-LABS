@@ -8,10 +8,10 @@ Quick reference for running the Simulator and Injector locally.
 
 ```bash
 # From repo root — requires a hashed lockfile (see docs/ops/DEPENDENCY_SECURITY_SOP.md)
-pip install --require-hashes --no-deps -r requirements.txt
+pip install --require-hashes --no-deps -r requirements/requirements.txt
 ```
 
-Dependencies are declared in `requirements.in` and compiled to a hashed `requirements.txt` with `pip-tools`. Python 3.11+ required.
+Dependencies are declared in `requirements/requirements.in` and compiled to a hashed `requirements/requirements.txt` with `pip-tools`. Python 3.11+ required.
 
 ---
 
@@ -88,8 +88,8 @@ The Injector uploads `.tar.gz` / `.whl` packages to the running Simulator via `t
 
 - Simulator must be running first.
 - Package files (`.tar.gz` or `.whl`) placed in the dataset directories:
-  - `data/samples/malicious/`
-  - `data/samples/benign/`
+  - `samples/malware_backstabbers_knife/`
+  - `samples/benign/`
 
 ### Run
 
@@ -128,8 +128,8 @@ simulator:
   repository_url: "http://127.0.0.1:8080/simple/"
 
 dataset:
-  malicious_dir: "../data/samples/malicious"
-  benign_dir: "../data/samples/benign"
+  malicious_dir: "../../samples/malware_backstabbers_knife"
+  benign_dir: "../../samples/benign"
 
 credentials:
   username: "__token__"
@@ -157,7 +157,7 @@ extraction, venv). The account and security constraints are documented in
 samples-extracted/
 ├── benign/       # per-package subdirs of .tar.gz / .whl
 ├── controls/     # same layout; infrastructure packages
-└── malicious/    # password-protected .zip files (password: "infected")
+└── malware_backstabbers_knife/    # password-protected .zip files (password: "infected")
 ```
 
 ### Run
@@ -220,7 +220,7 @@ python src/injector/upload_samples.py \
 3. Run injector         →  cd src/injector && ./controller.sh all
 4. Confirm uploads      →  curl http://127.0.0.1:8080/simple/
 5. Run evaluation       →  python src/analyzer/evaluate.py  (entry-point scan, offline)
-   With LLM detectors   →  start LiteLLM first (see docs/ops/DEPLOYMENT_MANIFEST.md Step 8)
+   With LLM detectors   →  start LiteLLM first (see docs/ops/DEPLOYMENT_MANIFEST.md Step 7)
 ```
 
 ---
@@ -252,7 +252,7 @@ export GEMINI_API_KEY=...
 litellm --port 4000
 ```
 
-**VM deployment:** See `docs/ops/DEPLOYMENT_MANIFEST.md` Step 8 — LiteLLM runs as
+**VM deployment:** See `docs/ops/DEPLOYMENT_MANIFEST.md` Step 7 — LiteLLM runs as
 `proxy-runner` with keys in `~proxy-runner/.env` and egress restricted to
 vendor CIDR blocks via iptables owner rules.
 
