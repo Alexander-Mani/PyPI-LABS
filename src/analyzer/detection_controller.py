@@ -360,7 +360,8 @@ class EvalController:
         self,
         run_id: str,
         pkg: PackageInfo,
-        ground_truth: dict[str, bool] | None = None,
+        ground_truth: bool | None = None,
+        sast_only: bool = False,
     ) -> list[EvalDetectionResult]:
         from prompt_manager import PromptManager
         pm = PromptManager.instance()
@@ -371,21 +372,23 @@ class EvalController:
         tasks: list[tuple] = []
         for a in self._static:
             tasks.append((a, "zero_shot", None, None))
-        for a in self._llm:
-            for s in pm.llm_strategy_names():
-                sp, ut = pm.get_llm_strategy(s)
-                tasks.append((a, s, sp, ut))
-        for a in self._llm_raw:
-            for s in pm.llm_strategy_names():
-                sp, ut = pm.get_llm_strategy(s)
-                tasks.append((a, s, sp, ut))
-        for a in self._agentic:
-            for s in pm.agentic_strategy_names():
-                sp, im = pm.get_agentic_strategy(s)
-                tasks.append((a, s, sp, im))
+
+        if not sast_only:
+            for a in self._llm:
+                for s in pm.llm_strategy_names():
+                    sp, ut = pm.get_llm_strategy(s)
+                    tasks.append((a, s, sp, ut))
+            for a in self._llm_raw:
+                for s in pm.llm_strategy_names():
+                    sp, ut = pm.get_llm_strategy(s)
+                    tasks.append((a, s, sp, ut))
+            for a in self._agentic:
+                for s in pm.agentic_strategy_names():
+                    sp, im = pm.get_agentic_strategy(s)
+                    tasks.append((a, s, sp, im))
 
         results: list[EvalDetectionResult] = []
-        gt_label = ground_truth.get(pkg.name) if ground_truth else None
+        gt_label = ground_truth  # bool | None — derived from folder membership
 
         with ThreadPoolExecutor(max_workers=4) as pool:
             futures: dict = {

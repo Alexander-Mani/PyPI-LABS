@@ -86,12 +86,12 @@ class EvaluationRunner:
     # Sample discovery
     # ------------------------------------------------------------------
 
-    def _discover_benign(self) -> list[tuple[Path, str, str]]:
+    def _discover_benign(self) -> list[tuple[Path, str, str, bool]]:
         """
-        Return (archive_path, name, version) for the latest version of each
-        benign package. Skips the controls/ subdirectory.
+        Return (archive_path, name, version, is_malicious=False) for the latest
+        version of each benign package. Skips the controls/ subdirectory.
         """
-        results: list[tuple[Path, str, str]] = []
+        results: list[tuple[Path, str, str, bool]] = []
         for manifest_path in sorted(self._samples_root.glob("benign/*/manifest.json")):
             # Skip high-volume controls — they are for latency benchmarking.
             if "controls" in manifest_path.parts:
@@ -105,15 +105,19 @@ class EvaluationRunner:
                 if not archive.exists():
                     log.warning(f"Benign archive missing on disk: {archive}")
                     continue
-                results.append((archive, latest.get("version", "unknown"),
-                                 manifest_path.parent.name))
+                results.append((
+                    archive,
+                    manifest_path.parent.name,
+                    latest.get("version", "unknown"),
+                    False,
+                ))
             except Exception as exc:
                 log.warning(f"Could not read {manifest_path}: {exc}")
         return results
 
-    def _discover_malware(self) -> list[tuple[Path, str, str]]:
+    def _discover_malware(self) -> list[tuple[Path, str, str, bool]]:
         """
-        Return (archive_path, name, version) for every malware zip.
+        Return (archive_path, name, version, is_malicious=True) for every malware zip.
         Logs a warning and returns [] if the directory does not exist.
         See CONCERNS.md §2.
         """
@@ -124,7 +128,7 @@ class EvaluationRunner:
                 "benchmark only. See CONCERNS.md §2."
             )
             return []
-        results: list[tuple[Path, str, str]] = []
+        results: list[tuple[Path, str, str, bool]] = []
         for zip_path in sorted(malware_dir.rglob("*.zip")):
             stem = zip_path.stem
             # Best-effort name/version split on first hyphen
@@ -132,57 +136,23 @@ class EvaluationRunner:
                 name, _, version = stem.partition("-")
             else:
                 name, version = stem, "unknown"
-            results.append((zip_path, name, version))
+            results.append((zip_path, name, version, True))
         return results
-
-    # ------------------------------------------------------------------
-    # Ground truth  (isolated here — never forwarded to detectors)
-    # ------------------------------------------------------------------
-
-    def _build_ground_truth(
-        self,
-        malware_archives: list[tuple[Path, str, str]],
-    ) -> dict[str, bool]:
-        """
-        Returns {package_name: is_malicious}.
-        See CONCERNS.md §1 for the account-takeover labelling caveat.
-        """
-        truth: dict[str, bool] = {}
-
-        # Benign directories
-        for meta_path in self._samples_root.glob("benign/*/meta.json"):
-            if "controls" in meta_path.parts:
-                continue
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                target   = meta.get("target_package", "")
-                malicious = meta.get("malicious_package", "")
-                # Account-takeover: same name was later poisoned.
-                truth[target] = (malicious == target and bool(malicious))
-            except Exception as exc:
-                log.warning(f"Could not read {meta_path}: {exc}")
-
-        # Malware archives are always malicious.
-        for _path, name, _version in malware_archives:
-            truth[name] = True
-
-        return truth
 
     # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
 
-    def run(self, skip_validation: bool = False) -> None:
+    def run(self, skip_validation: bool = False, sast_only: bool = False) -> None:
         run_id = str(uuid.uuid4())
-        log.info(f"EvaluationRunner start — run_id={run_id}  tier={self._tier}")
-        self._db.create_eval_run(run_id, tier=self._tier)
+        log.info(f"EvaluationRunner start — run_id={run_id}  tier={self._tier}  sast_only={sast_only}")
+        self._db.create_eval_run(run_id, tier=self._tier if not sast_only else "sast-only")
 
-        if not skip_validation:
+        if not skip_validation and not sast_only:
             self._validate_financial_airgap()
 
         benign_archives  = self._discover_benign()
         malware_archives = self._discover_malware()
-        ground_truth     = self._build_ground_truth(malware_archives)
 
         all_archives = benign_archives + malware_archives
         log.info(
@@ -191,7 +161,7 @@ class EvaluationRunner:
             f"{len(all_archives)} total"
         )
 
-        for archive_path, version, name in all_archives:
+        for archive_path, name, version, is_malicious in all_archives:
             log.info(f"  Processing {name} {version} ({archive_path.name})")
             try:
                 pkg = self._extractor.extract(archive_path)
@@ -200,11 +170,14 @@ class EvaluationRunner:
                 pkg.name    = name
                 pkg.version = version
                 pkg = self._filter.scan(pkg)
-                self._controller.run(run_id=run_id, pkg=pkg, ground_truth=ground_truth)
+                self._controller.run(
+                    run_id=run_id, pkg=pkg,
+                    ground_truth=is_malicious, sast_only=sast_only,
+                )
             except Exception as exc:
                 log.error(f"  Failed {archive_path.name}: {exc}")
 
-        self._print_metrics(run_id, ground_truth)
+        self._print_metrics(run_id)
 
     # ------------------------------------------------------------------
     # Financial air-gap validation
@@ -222,7 +195,7 @@ class EvaluationRunner:
             log.warning("Financial validation: no benign archives found, skipping.")
             return
 
-        archive_path, version, name = benign[0]
+        archive_path, name, version, _ = benign[0]
         log.info(f"Financial validation: {name} {version} on tier={self._tier}")
 
         val_id = f"airgap-{uuid.uuid4()}"
@@ -275,29 +248,23 @@ class EvaluationRunner:
     # Metrics
     # ------------------------------------------------------------------
 
-    def _print_metrics(self, run_id: str, ground_truth: dict[str, bool]) -> None:
+    def _print_metrics(self, run_id: str) -> None:
         results = self._db.get_eval_results_for_run(run_id)
         if not results:
             log.warning("No results stored — nothing to report.")
             return
 
-        # Accumulate TP/TN/FP/FN per "detector:experiment_mode:prompt_strategy".
-        # Prefer stored ground_truth column; fall back to the in-memory dict for
-        # rows where ground_truth is NULL (e.g. first run before column existed).
+        # Ground truth is stored per-row at insert time (folder-based labelling).
+        # Rows with NULL ground_truth (legacy runs) are skipped and logged.
         stats: dict[str, dict[str, int]] = {}
         unknown_pkgs: set[str] = set()
 
         for r in results:
-            pkg_name = r["package_name"]
             stored_gt = r.get("ground_truth")
-            if stored_gt is not None:
-                true_label: bool | None = bool(stored_gt)
-            else:
-                true_label = ground_truth.get(pkg_name)
-
-            if true_label is None:
-                unknown_pkgs.add(pkg_name)
+            if stored_gt is None:
+                unknown_pkgs.add(r["package_name"])
                 continue
+            true_label = bool(stored_gt)
 
             key = f"{r['detector']}:{r['experiment_mode']}:{r['prompt_strategy']}"
             if key not in stats:
@@ -364,8 +331,15 @@ if __name__ == "__main__":
         "--skip-validation", action="store_true",
         help="Skip the financial air-gap validation run",
     )
+    parser.add_argument(
+        "--sast-only", action="store_true",
+        help="Run only static tools (Bandit/Semgrep), skip all LLM/agentic adapters",
+    )
     args = parser.parse_args()
     with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     setup_logger(cfg)
-    EvaluationRunner(cfg, tier=args.tier).run(skip_validation=args.skip_validation)
+    EvaluationRunner(cfg, tier=args.tier).run(
+        skip_validation=args.skip_validation,
+        sast_only=args.sast_only,
+    )
