@@ -61,12 +61,19 @@ fi
 
 echo "Step 3: Staging samples for the research pipeline"
 # The EvaluationRunner in evaluate.py expects samples under the repo root's samples/ directory.
+# Default behavior is interactive unzip prompts (preserves operator choice).
+# Set FORCE_UNZIP_OVERWRITE=1 to force overwrite without prompts.
+UNZIP_FLAGS="-q"
+if [[ "${FORCE_UNZIP_OVERWRITE:-0}" == "1" ]]; then
+  UNZIP_FLAGS="-oq"
+fi
+
 sudo -u pypi-runner bash -c "
   mkdir -p /home/pypi-runner/pypi-scada-repo/samples/benign
   mkdir -p /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife
   
   echo 'Extracting benign and controls...'
-  unzip -oq /home/lexi/samples/benign_and_controlls.zip -d /home/pypi-runner/pypi-scada-repo/samples/benign/
+  unzip ${UNZIP_FLAGS} /home/lexi/samples/benign_and_controlls.zip -d /home/pypi-runner/pypi-scada-repo/samples/benign/
   
   echo 'Staging malicious archives...'
   for f in /home/lexi/samples/*.zip; do
@@ -162,13 +169,25 @@ sudo -u proxy-runner bash -c "
 
 echo "Waiting for LiteLLM health check..."
 sleep 8
-sudo -u pypi-runner curl -s http://127.0.0.1:4000/health || echo "WARNING: LiteLLM health check failed."
+if ! sudo -u pypi-runner curl -fsS http://127.0.0.1:4000/health >/dev/null; then
+  echo "WARNING: LiteLLM health check failed."
+  echo "LiteLLM process check (proxy-runner):"
+  sudo -u proxy-runner pgrep -a -x litellm || true
+  echo "Last 40 lines of /home/proxy-runner/litellm.log:"
+  sudo -u proxy-runner tail -n 40 /home/proxy-runner/litellm.log || true
+fi
 
 echo "Step 8: Starting the PyPI simulator (background)"
 sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo/src/simulator
-  pkill -u pypi-runner -f 'python main.py' || true
+  # Avoid pkill -f self-match against this bash -c command line.
+  existing_sim_pids=\$(pgrep -u pypi-runner -f 'python main.py' | grep -vw \"\$\$\" || true)
+  if [ -n \"\$existing_sim_pids\" ]; then
+    echo \"Stopping existing simulator PIDs: \$existing_sim_pids\"
+    kill \$existing_sim_pids || true
+    sleep 1
+  fi
   nohup python main.py > /home/pypi-runner/simulator.log 2>&1 &
 "
 
