@@ -1,10 +1,2 @@
-litellm
+litellm[proxy]
 openai
-# ASGI proxy server stack — required by `litellm --port 4000`
-# Added explicitly rather than litellm[proxy] to avoid pulling in
-# ~25 extra packages (boto3, azure SDKs, MCP, enterprise, polars, etc.)
-websockets
-uvicorn
-fastapi
-orjson
-python-multipart
