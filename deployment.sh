@@ -1,5 +1,14 @@
 #!/bin/bash
-set -e
+set -euo pipefail
+
+# Optional debug tracing:
+#   DEBUG=1 bash deployment.sh
+if [[ "${DEBUG:-0}" == "1" ]]; then
+  PS4='+ [${BASH_SOURCE##*/}:${LINENO}] '
+  set -x
+fi
+
+trap 'rc=$?; echo "ERROR: command failed (exit ${rc}) at line ${LINENO}: ${BASH_COMMAND}" >&2; exit ${rc}' ERR
 
 # PyPI-SCADA Deployment Script (VM-Targeted)
 # This script automates the setup of the entry-point scanning pipeline.
@@ -57,7 +66,7 @@ sudo -u pypi-runner bash -c "
   mkdir -p /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife
   
   echo 'Extracting benign and controls...'
-  unzip -q /home/lexi/samples/benign_and_controlls.zip -d /home/pypi-runner/pypi-scada-repo/samples/benign/
+  unzip -oq /home/lexi/samples/benign_and_controlls.zip -d /home/pypi-runner/pypi-scada-repo/samples/benign/
   
   echo 'Staging malicious archives...'
   for f in /home/lexi/samples/*.zip; do
@@ -141,7 +150,13 @@ echo "Step 7: Starting LiteLLM proxy"
 sudo -u proxy-runner bash -c "
   source /home/proxy-runner/.env
   source /home/proxy-runner/venv/bin/activate
-  pkill -u proxy-runner -f 'litellm --port 4000' || true
+  # Avoid pkill -f self-match against this bash -c command line.
+  existing_litellm_pids=\$(pgrep -x litellm || true)
+  if [ -n \"\$existing_litellm_pids\" ]; then
+    echo \"Stopping existing LiteLLM PIDs: \$existing_litellm_pids\"
+    kill \$existing_litellm_pids || true
+    sleep 1
+  fi
   nohup litellm --port 4000 > /home/proxy-runner/litellm.log 2>&1 &
 "
 
