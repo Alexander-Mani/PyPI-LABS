@@ -171,9 +171,9 @@ sudo -u proxy-runner bash -c "
   nohup litellm --port 4000 > /home/proxy-runner/litellm.log 2>&1 &
 "
 
-echo "Waiting for LiteLLM health check (up to 60 s)..."
+echo "Waiting for LiteLLM health check (up to 30 s)..."
 ready=0
-for _i in {1..60}; do
+for _i in {1..30}; do
   if sudo -u pypi-runner curl -fsS http://127.0.0.1:4000/health/readiness >/dev/null 2>&1; then
     ready=1
     break
@@ -181,7 +181,7 @@ for _i in {1..60}; do
   sleep 1
 done
 if [ "$ready" -ne 1 ]; then
-  echo "ERROR: LiteLLM did not become healthy within 60 seconds. Aborting."
+  echo "ERROR: LiteLLM did not become healthy within 30 seconds. Aborting."
   echo "LiteLLM process check (proxy-runner):"
   sudo -u proxy-runner pgrep -a -x litellm || true
   echo "Last 40 lines of /home/proxy-runner/litellm.log:"
