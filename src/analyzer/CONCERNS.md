@@ -125,3 +125,158 @@ will receive the `base64_or_hex` heuristic flag. This is intentional — the
 heuristic layer is designed to be high-recall and low-precision, leaving the
 actual verdict to the SAST and LLM pipelines. Do not use heuristic flag counts
 as a proxy for malice.
+
+---
+
+## 6. Capstone Delivery Risk Register (Ordered)
+
+This section reframes the technical concerns above as capstone-grade delivery
+risks: what can hurt the final project evaluation, how to detect it early, and
+how to mitigate it with concrete, verifiable actions.
+
+### R-01 (Critical): Incomplete Malware Coverage During Final Evaluation
+
+**Risk statement:** Final runs are executed without the malware archive set
+present on disk, producing only benign/FP metrics.
+
+**Why it matters for grading:** Examiners may conclude the project failed to
+demonstrate detection efficacy on malicious inputs, undermining the core thesis.
+
+**Early warning signals:**
+- Startup warning about missing `samples/malware_backstabbers_knife/`.
+- Metrics table shows only TN/FP, with TP/FN always zero or undefined.
+
+**Detailed mitigations:**
+1. Add a pre-run gate in the execution checklist: fail the run if malicious
+   archive count is below the expected dataset minimum.
+2. Keep a signed sample inventory file (package, hash, source, retrieval date)
+   in the thesis appendix and repository docs.
+3. Run one mandatory "smoke confusion matrix" before final benchmarking and
+   archive the output table as evidence.
+
+**Acceptance criteria before final presentation:**
+- Malware directory exists and contains the expected zip set.
+- At least one run produces non-zero TP or FN counts.
+- Run log and table are attached to final report artifacts.
+
+### R-02 (High): Ground-Truth Labelling Ambiguity for Account-Takeover Cases
+
+**Risk statement:** Clean pre-compromise versions of `num2words` and
+`ultralytics` are labeled malicious in ground truth logic, generating expected
+FNs that can be misread as detector failure.
+
+**Why it matters for grading:** If not explicitly explained, metric readers can
+interpret systematic FNs as poor engineering quality.
+
+**Early warning signals:**
+- FN counts are consistently present for these packages even when code is benign.
+- Reviewer questions about "why detectors miss obvious malicious cases."
+
+**Detailed mitigations:**
+1. Split account-takeover evaluation into two explicit cohorts:
+   `pre_compromise_benign` and `compromised_release_malicious`.
+2. Add compromised versions as separate malware entries and report them in a
+   dedicated table.
+3. Include an interpretation note directly under confusion matrices in the
+   report and presentation slides.
+
+**Acceptance criteria before final presentation:**
+- Report contains a subsection defining account-takeover label semantics.
+- Confusion matrix includes or references compromised-release evaluation rows.
+
+### R-03 (High): Reproducibility Drift from Model Routing/Configuration
+
+**Risk statement:** Wrong model identifiers, changed provider aliases, or proxy
+routing issues silently degrade results and inflate error-like verdicts.
+
+**Why it matters for grading:** Weakens scientific reproducibility and can make
+cross-model comparisons invalid.
+
+**Early warning signals:**
+- Sudden spikes in low-confidence benign/error-like outputs for one detector.
+- Proxy/adapter logs show 404, routing, or provider mismatch responses.
+
+**Detailed mitigations:**
+1. Freeze a run manifest: git commit, config checksums, model IDs, proxy
+   endpoint, and execution timestamp.
+2. Add a preflight "model reachability" script that calls each configured model
+   with a tiny known prompt and fails on routing errors.
+3. Record LiteLLM request/response metadata and attach it as evidence for the
+   final benchmark run.
+
+**Acceptance criteria before final presentation:**
+- Preflight model validation passes for all enabled detectors.
+- Final report includes exact model IDs and config snapshot references.
+
+### R-04 (Medium): Evaluation Bias from "Latest-Only" Benign Sampling
+
+**Risk statement:** Using only the newest benign version per package may distort
+false-positive behavior versus full historical distribution.
+
+**Why it matters for grading:** Limits validity claims and can overstate or
+understate detector quality.
+
+**Early warning signals:**
+- High variance between packages with similar risk profiles.
+- Reviewer asks whether results hold across version history.
+
+**Detailed mitigations:**
+1. Keep the default fast mode for iteration, but run a secondary historical mode
+   (`all versions`) for a subset of representative packages.
+2. Report both results: "rapid benchmark" and "history-sensitive benchmark."
+3. Treat differences as an explicit finding, not as noise.
+
+**Acceptance criteria before final presentation:**
+- At least one historical-version sensitivity run is documented.
+- Final report discusses external-validity limits of latest-only sampling.
+
+### R-05 (Medium): Legacy vs Active Pipeline Confusion
+
+**Risk statement:** Repository contains both legacy diff pipeline and active
+entry-point pipeline; evaluators may not know which outputs are authoritative.
+
+**Why it matters for grading:** Can create perceived inconsistency in design,
+implementation maturity, and reported outcomes.
+
+**Early warning signals:**
+- Questions about why `main.py` (diff) and `evaluate.py` (entry-point) coexist.
+- Conflicting logs/databases from separate execution paths.
+
+**Detailed mitigations:**
+1. Add one canonical "authoritative pipeline" note in `README.md` and thesis:
+   entry-point evaluation is primary, diff pipeline is legacy/reference.
+2. Name output databases and report tables with pipeline prefixes.
+3. Include a one-page architecture delta ("design pivot rationale") in report.
+
+**Acceptance criteria before final presentation:**
+- All final metric tables are explicitly tagged with pipeline name.
+- Presentation includes one slide clarifying legacy vs active status.
+
+### R-06 (Medium): Evidence Gaps in Verification and Testing
+
+**Risk statement:** Core claims are not backed by clear verification artifacts
+(smoke tests, run logs, environment manifest, reproducible commands).
+
+**Why it matters for grading:** Reduces confidence that results are reproducible
+and engineering process is disciplined.
+
+**Early warning signals:**
+- "Works on my machine" style claims without attached logs.
+- Missing end-to-end command transcript for final run.
+
+**Detailed mitigations:**
+1. Maintain a release-candidate checklist for final evaluation week:
+   environment setup, dataset verification, preflight checks, full run, archive.
+2. Store immutable artifacts (stdout/stderr logs, DB export, config snapshot,
+   git commit hash) under a dated `artifacts/` directory.
+3. Add a concise verification appendix in thesis with exact commands.
+
+**Acceptance criteria before final presentation:**
+- One complete reproducible run package is available end-to-end.
+- Supervisor/examiner can replay the workflow from documented steps.
+
+---
+
+### Author Note
+
+Risk register section (Section 6) written by Codex (GPT-5) on April 7, 2026.
