@@ -85,21 +85,27 @@ def _twine_upload(archive: Path, simulator_url: str, dry_run: bool) -> bool:
     """
     Upload a single archive to the simulator via twine.
     Returns True on success, False on failure.
-    Skips already-uploaded files (--skip-existing).
+    Skips already-uploaded files when the target repository supports
+    ``--skip-existing`` (e.g. PyPI/TestPyPI). Local simulator endpoints do not.
     """
     if dry_run:
         log.info(f"[dry-run] would upload {archive.name}")
         return True
 
+    repo_url = simulator_url.rstrip("/") + "/legacy/"
     cmd = [
         sys.executable, "-m", "twine", "upload",
-        "--repository-url", simulator_url.rstrip("/") + "/legacy/",
+        "--repository-url", repo_url,
         "-u", "__token__",
         "-p", "sim-token",
-        "--skip-existing",
         "--non-interactive",
         str(archive),
     ]
+
+    # Twine rejects --skip-existing for custom repositories (including the local
+    # simulator endpoint). Enable it only for Warehouse-hosted endpoints.
+    if repo_url.startswith(("https://upload.pypi.org/legacy/", "https://test.pypi.org/legacy/")):
+        cmd.insert(-2, "--skip-existing")
 
     result = subprocess.run(cmd, capture_output=True, text=True)
 
