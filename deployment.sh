@@ -9,7 +9,7 @@ echo "Sourcing operator environment variables..."
 if [ -f .env ]; then
   source .env 
 else
-  echo "ERROR: ~/.env not found. Ensure PULL_TOKEN and API keys are exported."
+  echo "ERROR: .env not found. Ensure PULL_TOKEN and API keys are exported."
   exit 1
 fi
 
@@ -21,6 +21,9 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
 echo "Step 1: Creating unprivileged accounts"
 id -u pypi-runner &>/dev/null || sudo useradd --system --create-home --home-dir /home/pypi-runner --shell /bin/bash --comment "PyPi-SCADA experiment runner" pypi-runner
 id -u proxy-runner &>/dev/null || sudo useradd --system --create-home --home-dir /home/proxy-runner --shell /bin/bash --comment "PyPi-SCADA credential proxy" proxy-runner
+
+# Flush existing firewall rules from previous runs so pypi-runner has network access for git and pip
+sudo iptables -F OUTPUT || true
 
 echo "Step 2: Cloning the repository"
 if [ ! -d "/home/pypi-runner/pypi-scada-repo" ]; then
