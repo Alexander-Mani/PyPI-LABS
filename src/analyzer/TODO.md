@@ -48,7 +48,7 @@ Update status markers as work completes: [ ] not started · [~] in progress · [
 - [x] F-6  _print_metrics() — rich.table TP/TN/FP/FN/F1 per detector
 
 ## G — Integration
-- [ ] G-1  Smoke test: single benign tar.gz through extract → filter → SAST only (no API)
+- [x] G-1  Smoke test: single benign tar.gz through extract → filter → SAST only (no API)
            Prereq: install dependencies via hashed lockfile (`pip install --require-hashes --no-deps -r requirements.txt`)
-- [ ] G-2  Verify evaluate.py runs from repo root: python src/analyzer/evaluate.py
+- [x] G-2  Verify evaluate.py runs from repo root: python src/analyzer/evaluate.py
            Prereq: LiteLLM running on http://127.0.0.1:4000 as proxy-runner for any LLM detector test
