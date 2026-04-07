@@ -120,6 +120,14 @@ def _twine_upload(archive: Path, simulator_url: str, dry_run: bool) -> bool:
         log.info(f"Skipped (already exists): {archive.name}")
         return True
 
+    # twine 4+ enforces strict PyPI metadata spec. Very old archives (pre-2012)
+    # have metadata version 1.0 but use Classifier: fields from version 1.1.
+    # These cannot be fixed without re-packaging; skip them rather than aborting.
+    if "invaliddistribution" in combined.lower() or \
+            "invalid distribution metadata" in combined.lower():
+        log.warning(f"Skipped (invalid legacy metadata, unrecoverable): {archive.name}")
+        return True
+
     log.error(f"Upload failed: {archive.name}")
     for line in combined.splitlines():
         if line.strip():
