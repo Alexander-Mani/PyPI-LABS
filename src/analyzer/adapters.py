@@ -6,8 +6,7 @@ DetectorAdapter (ABC)
   LLMAdapter        — Single-shot LLM call via YAML-configured model
   AgenticAdapter    — Multi-turn Anthropic tool_use loop
 
-EvalController imports from this module. detection_controller.py retains only the
-legacy diff-pipeline classes and the EvalController orchestrator.
+EvalController imports from this module.
 """
 
 from __future__ import annotations

@@ -5,10 +5,10 @@ Update status markers as work completes: [ ] not started · [~] in progress · [
 ## A — entry_extractor.py
 - [x] A-1  PackageInfo dataclass (name, version, files, heuristic_flags)
 - [x] A-2  EntryPointExtractor.extract() dispatch (.tar.gz / .whl / .zip)
-- [x] A-3  _extract_tar: .py files only, strip top-level prefix, errors="replace"
-- [x] A-4  _extract_wheel: .py files, skip .dist-info
+- [x] A-3  _extract_tar: .py files + pyproject.toml, strip top-level prefix, errors="replace"
+- [x] A-4  _extract_wheel: .py files + pyproject.toml, skip .dist-info
 - [x] A-5  _extract_zip: setpassword(b"infected"), per-file RuntimeError guard
-- [x] A-6  _resolve_imports: ast.parse, 1-level within-package import resolution
+- [x] A-6  _resolve_imports: ast.parse, 3-level BFS within-package import resolution
 - [x] A-7  Total-failure guard: return empty PackageInfo, log, never raise
 
 ## B — heuristic_filter.py

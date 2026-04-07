@@ -33,23 +33,23 @@ confusion matrix.
 
 ## 2. Malware Archives Not Present on Disk
 
-**Affected component:** `_discover_malware()` in `evaluate.py`
+**Affected component:** `_discover_malware()` and `run()` in `evaluate.py`
 
 The directory `samples/malware_backstabbers_knife/` is excluded from version
 control (`.gitignore`) and does not currently exist on disk. When the evaluation
-runner starts, it logs a warning and returns an empty malware list, so the entire
-run executes as a **false-positive-only benchmark** — no malicious samples are
-processed, all ground truth labels are `False` (benign), and no True Positives or
-False Negatives are possible.
+runner starts, it checks for malicious archives (`.zip`, `.tar.gz`, `.whl`). If
+none are found, the runner raises a hard `SystemExit("HALT: ...")` to prevent
+executing a scientifically invalid benchmark.
 
-**Consequence:** Precision, Recall, and F1 are undefined (division by zero
-guarded against) until at least one malware archive is present. The TP/FP/TN/FN
-table will show only TN and FP columns populated.
+**Consequence:** The pipeline refuses to run without malware present unless the
+operator explicitly passes the `--sast-only` flag, which bypasses the HALT for
+intentional false-positive-only testing.
 
-**What to do:** Download or restore the password-protected `.zip` archives to
-`samples/malware_backstabbers_knife/{category}/{package}.zip` using the password
-`"infected"`. The directory structure expected is described in `SAMPLES.md`.
-Once present, re-run `evaluate.py` to get a complete confusion matrix.
+**What to do:** Download or restore the malicious archives (in `.zip`, `.tar.gz`,
+or `.whl` format) to `samples/malware_backstabbers_knife/`. For password-protected
+`.zip` files (e.g., from the Backstabber's Collection), the extractor expects
+the password `"infected"`. Once present, re-run `evaluate.py` to get a complete
+confusion matrix.
 
 ---
 
@@ -228,27 +228,11 @@ understate detector quality.
 - At least one historical-version sensitivity run is documented.
 - Final report discusses external-validity limits of latest-only sampling.
 
-### R-05 (Medium): Legacy vs Active Pipeline Confusion
+### R-05 (Resolved): Legacy vs Active Pipeline Confusion
 
-**Risk statement:** Repository contains both legacy diff pipeline and active
-entry-point pipeline; evaluators may not know which outputs are authoritative.
+**Status: Resolved in Phase 3 cleanup.**
 
-**Why it matters for grading:** Can create perceived inconsistency in design,
-implementation maturity, and reported outcomes.
-
-**Early warning signals:**
-- Questions about why `main.py` (diff) and `evaluate.py` (entry-point) coexist.
-- Conflicting logs/databases from separate execution paths.
-
-**Detailed mitigations:**
-1. Add one canonical "authoritative pipeline" note in `README.md` and thesis:
-   entry-point evaluation is primary, diff pipeline is legacy/reference.
-2. Name output databases and report tables with pipeline prefixes.
-3. Include a one-page architecture delta ("design pivot rationale") in report.
-
-**Acceptance criteria before final presentation:**
-- All final metric tables are explicitly tagged with pipeline name.
-- Presentation includes one slide clarifying legacy vs active status.
+The legacy diff pipeline (`diff.py`, `sql.py`, `main.py`) was entirely purged from the repository. The active entry-point scanning architecture in `evaluate.py` is now the only detection path, eliminating any operational or architectural ambiguity for examiners.
 
 ### R-06 (Medium): Evidence Gaps in Verification and Testing
 
@@ -273,8 +257,3 @@ and engineering process is disciplined.
 - One complete reproducible run package is available end-to-end.
 - Supervisor/examiner can replay the workflow from documented steps.
 
----
-
-### Author Note
-
-Risk register section (Section 6) written by Codex (GPT-5) on April 7, 2026.
