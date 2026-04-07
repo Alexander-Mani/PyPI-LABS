@@ -65,13 +65,23 @@ sudo -u pypi-runner bash -c "
   done
 "
 
-echo "Step 4: Setting up Python virtual environment (pypi-runner)"
+echo "Step 4: Setting up Python virtual environments"
 # requirements/requirements.txt is a hashed lockfile.
 sudo -u pypi-runner bash -c "
   cd /home/pypi-runner/pypi-scada-repo
   python3 -m venv venv
   source venv/bin/activate
   pip install --require-hashes --no-deps --quiet -r requirements/requirements.txt
+"
+
+# Copy the proxy lockfile over from pypi-runner's repo clone
+sudo cp /home/pypi-runner/pypi-scada-repo/requirements/proxy-requirements.txt /home/proxy-runner/
+sudo chown proxy-runner:proxy-runner /home/proxy-runner/proxy-requirements.txt
+
+sudo -u proxy-runner bash -c "
+  python3 -m venv /home/proxy-runner/venv
+  source /home/proxy-runner/venv/bin/activate
+  pip install --require-hashes --no-deps --quiet -r /home/proxy-runner/proxy-requirements.txt
 "
 
 echo "Step 5: Configuring API keys for proxy-runner"
@@ -125,16 +135,6 @@ sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d api.together.xyz -p
 sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -j DROP || true
 
 echo "Step 7: Starting LiteLLM proxy"
-# Copy the proxy lockfile over from pypi-runner's repo clone
-sudo cp /home/pypi-runner/pypi-scada-repo/requirements/proxy-requirements.txt /home/proxy-runner/
-sudo chown proxy-runner:proxy-runner /home/proxy-runner/proxy-requirements.txt
-
-sudo -u proxy-runner bash -c "
-  python3 -m venv /home/proxy-runner/venv
-  source /home/proxy-runner/venv/bin/activate
-  pip install --require-hashes --no-deps --quiet -r /home/proxy-runner/proxy-requirements.txt
-"
-
 sudo -u proxy-runner bash -c "
   source /home/proxy-runner/.env
   source /home/proxy-runner/venv/bin/activate

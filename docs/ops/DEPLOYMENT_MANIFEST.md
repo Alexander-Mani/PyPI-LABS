@@ -80,9 +80,9 @@ sudo -u pypi-runner bash -c "
 
 ***
 
-## Step 4: Setup Virtual Environment (Analyzer)
+## Step 4: Setup Virtual Environments (Analyzer & Proxy)
 
-Install dependencies using the hashed lockfile.
+Install dependencies using the hashed lockfile while the network is open.
 
 ```bash
 sudo -u pypi-runner bash -c "
@@ -90,6 +90,15 @@ sudo -u pypi-runner bash -c "
   python3 -m venv venv
   source venv/bin/activate
   pip install --require-hashes --no-deps -r requirements/requirements.txt
+"
+
+sudo cp /home/pypi-runner/pypi-scada-repo/requirements/proxy-requirements.txt /home/proxy-runner/
+sudo chown proxy-runner:proxy-runner /home/proxy-runner/proxy-requirements.txt
+
+sudo -u proxy-runner bash -c "
+  python3 -m venv /home/proxy-runner/venv
+  source /home/proxy-runner/venv/bin/activate
+  pip install --require-hashes --no-deps -r /home/proxy-runner/proxy-requirements.txt
 "
 ```
 
@@ -150,15 +159,6 @@ sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -j DROP
 
 ### 7.1 Setup and Start LiteLLM Proxy
 ```bash
-sudo cp /home/pypi-runner/pypi-scada-repo/requirements/proxy-requirements.txt /home/proxy-runner/
-sudo chown proxy-runner:proxy-runner /home/proxy-runner/proxy-requirements.txt
-
-sudo -u proxy-runner bash -c "
-  python3 -m venv /home/proxy-runner/venv
-  source /home/proxy-runner/venv/bin/activate
-  pip install --require-hashes --no-deps -r /home/proxy-runner/proxy-requirements.txt
-"
-
 sudo -u proxy-runner bash -c "
   source /home/proxy-runner/.env
   source /home/proxy-runner/venv/bin/activate
