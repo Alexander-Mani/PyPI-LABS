@@ -188,10 +188,11 @@ class LLMAdapter(DetectorAdapter):
     ) -> EvalDetectionResult:
         system = system_prompt    if system_prompt    is not None else self._system_prompt
         tmpl   = template_override if template_override is not None else self._user_template
+        listing, truncated = self._build_file_listing(pkg)
         user   = tmpl.format(
             package_name=pkg.name,
             version=pkg.version,
-            file_listing=self._build_file_listing(pkg),
+            file_listing=listing,
             heuristic_flags=", ".join(pkg.heuristic_flags) if pkg.heuristic_flags else "none",
         )
         t0 = _time.monotonic()
@@ -199,10 +200,22 @@ class LLMAdapter(DetectorAdapter):
             raw_text, in_tok, out_tok, cost = self._call_api(system, user)
             verdict, confidence, details = self._parse_response(raw_text)
         except Exception as exc:
-            verdict, confidence, details = False, None, {"error": str(exc)}
-            in_tok, out_tok, cost = 0, 0, 0.0
+            return EvalDetectionResult(
+                detector=self._detector_name,
+                experiment_mode="error",
+                verdict=False,
+                confidence=None,
+                heuristic_flags=list(pkg.heuristic_flags),
+                exec_time_ms=int((_time.monotonic() - t0) * 1000),
+                api_cost_usd=0.0,
+                input_tokens=0,
+                output_tokens=0,
+                details={"error": str(exc), "model": self._model_name},
+            )
 
         details["model"] = self._model_name
+        if truncated:
+            details["truncated"] = True
         return EvalDetectionResult(
             detector=self._detector_name,
             experiment_mode="hybrid",
@@ -216,17 +229,18 @@ class LLMAdapter(DetectorAdapter):
             details=details,
         )
 
-    def _build_file_listing(self, pkg: PackageInfo) -> str:
+    def _build_file_listing(self, pkg: PackageInfo) -> tuple[str, bool]:
+        """Returns (listing, truncated). truncated=True when the 8000-char cap was hit."""
         parts: list[str] = []
         total = 0
         for path, content in pkg.files.items():
             chunk = f"### {path} ###\n{content}\n\n"
             if total + len(chunk) > 8000:
                 parts.append("[truncated]")
-                break
+                return "".join(parts), True
             parts.append(chunk)
             total += len(chunk)
-        return "".join(parts)
+        return "".join(parts), False
 
     def _call_api(self, system: str, user: str) -> tuple[str, int, int, float]:
         m = self._model_name
@@ -264,51 +278,29 @@ class LLMAdapter(DetectorAdapter):
     def _call_anthropic(self, system: str, user: str) -> tuple[str, int, int, float]:
         if self._proxy_url:
             return self._call_via_proxy(system, user)
-        import anthropic
-        client = anthropic.Anthropic(api_key=_os.environ["ANTHROPIC_API_KEY"])
-        resp = client.messages.create(
-            model=self._model_name,
-            max_tokens=512,
-            temperature=self._temperature,
-            system=system,
-            messages=[{"role": "user", "content": user}],
+        raise RuntimeError(
+            f"proxy_url not set in '{self._detector_name}' config — direct API calls "
+            "bypass key isolation (RISK_DIARY.md Decision 5). Add proxy_url to the "
+            "model YAML."
         )
-        return resp.content[0].text, resp.usage.input_tokens, resp.usage.output_tokens, 0.0
 
     def _call_openai(self, system: str, user: str) -> tuple[str, int, int, float]:
         if self._proxy_url:
             return self._call_via_proxy(system, user)
-        try:
-            import openai
-        except ImportError as exc:
-            raise ImportError("openai package not installed") from exc
-        client = openai.OpenAI(api_key=_os.environ["OPENAI_API_KEY"])
-        resp = client.chat.completions.create(
-            model=self._model_name,
-            temperature=self._temperature,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user",   "content": user},
-            ],
+        raise RuntimeError(
+            f"proxy_url not set in '{self._detector_name}' config — direct API calls "
+            "bypass key isolation (RISK_DIARY.md Decision 5). Add proxy_url to the "
+            "model YAML."
         )
-        in_tok  = resp.usage.prompt_tokens     if resp.usage else 0
-        out_tok = resp.usage.completion_tokens if resp.usage else 0
-        return resp.choices[0].message.content, in_tok, out_tok, 0.0
 
     def _call_gemini(self, system: str, user: str) -> tuple[str, int, int, float]:
         if self._proxy_url:
             return self._call_via_proxy(system, user)
-        try:
-            import google.generativeai as genai
-        except ImportError as exc:
-            raise ImportError("google-generativeai package not installed") from exc
-        genai.configure(api_key=_os.environ["GEMINI_API_KEY"])
-        model = genai.GenerativeModel(self._model_name, system_instruction=system)
-        resp = model.generate_content(user)
-        meta = getattr(resp, "usage_metadata", None)
-        in_tok  = getattr(meta, "prompt_token_count",     0)
-        out_tok = getattr(meta, "candidates_token_count", 0)
-        return resp.text, in_tok, out_tok, 0.0
+        raise RuntimeError(
+            f"proxy_url not set in '{self._detector_name}' config — direct API calls "
+            "bypass key isolation (RISK_DIARY.md Decision 5). Add proxy_url to the "
+            "model YAML."
+        )
 
     def _parse_response(self, raw: str) -> tuple[bool, float | None, dict]:
         import re as _re, json as _j
@@ -343,6 +335,7 @@ class AgenticAdapter(DetectorAdapter):
         self._max_turns: int         = int(cfg.get("max_turns", 5))
         self._temperature: float     = float(cfg.get("temperature", 0.0))
         self._proxy_url: str | None  = cfg.get("proxy_url") or None
+        self._detector_name: str     = Path(config_path).stem   # e.g. "claude_haiku_agentic"
         self._current_pkg: PackageInfo | None = None
 
     _TOOLS = [
@@ -377,27 +370,27 @@ class AgenticAdapter(DetectorAdapter):
         _init = template_override if template_override is not None else self._initial_template
         t0 = _time.monotonic()
         try:
-            final_text, total_tokens, total_cost = self._agentic_loop(pkg, _sys, _init)
+            final_text, in_tok, out_tok, total_cost = self._agentic_loop(pkg, _sys, _init)
             verdict, confidence, details = self._parse_response(final_text)
         except NotImplementedError:
             raise
         except Exception as exc:
             verdict, confidence, details = False, None, {"error": str(exc)}
-            total_tokens, total_cost = 0, 0.0
+            in_tok, out_tok, total_cost = 0, 0, 0.0
         finally:
             self._current_pkg = None
 
         details["model"] = self._model_name
         return EvalDetectionResult(
-            detector="agentic_claude",
+            detector=self._detector_name,
             experiment_mode="agentic",
             verdict=verdict,
             confidence=confidence,
             heuristic_flags=list(pkg.heuristic_flags),
             exec_time_ms=int((_time.monotonic() - t0) * 1000),
             api_cost_usd=total_cost,
-            input_tokens=total_tokens,
-            output_tokens=0,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
             details=details,
         )
 
@@ -490,44 +483,34 @@ class AgenticAdapter(DetectorAdapter):
                 "cost_usd":      call_cost,
             }
 
-        import anthropic
-        client = anthropic.Anthropic(api_key=_os.environ["ANTHROPIC_API_KEY"])
-        resp = client.messages.create(
-            model=self._model_name,
-            max_tokens=1024,
-            temperature=self._temperature,
-            system=_sys,
-            tools=self._TOOLS,
-            messages=messages,
+        raise RuntimeError(
+            "proxy_url not set in AgenticAdapter config — direct API calls bypass "
+            "key isolation (RISK_DIARY.md Decision 5). Add proxy_url to the model YAML."
         )
-        return {
-            "content":       [b.model_dump() for b in resp.content],
-            "stop_reason":   resp.stop_reason,
-            "input_tokens":  resp.usage.input_tokens,
-            "output_tokens": resp.usage.output_tokens,
-        }
 
     def _agentic_loop(
         self, pkg: PackageInfo, system_prompt: str, initial_template: str
-    ) -> tuple[str, int, float]:
+    ) -> tuple[str, int, int, float]:
         initial_user = initial_template.format(
             package_name=pkg.name, version=pkg.version
         )
         messages: list[dict] = [{"role": "user", "content": initial_user}]
-        total_tokens = 0
-        total_cost   = 0.0
+        total_input_tokens  = 0
+        total_output_tokens = 0
+        total_cost          = 0.0
 
         for _turn in range(self._max_turns):
             resp = self._make_api_call(messages, system_prompt=system_prompt)
-            total_tokens += resp["input_tokens"] + resp["output_tokens"]
-            total_cost   += resp.get("cost_usd", 0.0)
+            total_input_tokens  += resp["input_tokens"]
+            total_output_tokens += resp["output_tokens"]
+            total_cost          += resp.get("cost_usd", 0.0)
             content: list[dict] = resp["content"]
             messages.append({"role": "assistant", "content": content})
 
             if resp["stop_reason"] == "end_turn":
                 return "".join(
                     b["text"] for b in content if b.get("type") == "text"
-                ), total_tokens, total_cost
+                ), total_input_tokens, total_output_tokens, total_cost
 
             if resp["stop_reason"] == "tool_use":
                 tool_results = []
@@ -551,7 +534,7 @@ class AgenticAdapter(DetectorAdapter):
                 b["text"] for b in last_content
                 if isinstance(b, dict) and b.get("type") == "text"
             )
-        return final_text, total_tokens, total_cost
+        return final_text, total_input_tokens, total_output_tokens, total_cost
 
     def _handle_tool(self, name: str, tool_input: dict) -> object:
         pkg = self._current_pkg
@@ -598,10 +581,11 @@ class LLMRawAdapter(LLMAdapter):
     ) -> EvalDetectionResult:
         system = system_prompt     if system_prompt     is not None else self._system_prompt
         tmpl   = template_override if template_override is not None else self._user_template
+        listing, truncated = self._build_file_listing_raw(pkg)
         user   = tmpl.format(
             package_name=pkg.name,
             version=pkg.version,
-            file_listing=self._build_file_listing_raw(pkg),
+            file_listing=listing,
             heuristic_flags=", ".join(pkg.heuristic_flags) if pkg.heuristic_flags else "none",
         )
         t0 = _time.monotonic()
@@ -609,10 +593,22 @@ class LLMRawAdapter(LLMAdapter):
             raw_text, in_tok, out_tok, cost = self._call_api(system, user)
             verdict, confidence, details = self._parse_response(raw_text)
         except Exception as exc:
-            verdict, confidence, details = False, None, {"error": str(exc)}
-            in_tok, out_tok, cost = 0, 0, 0.0
+            return EvalDetectionResult(
+                detector=self._detector_name,
+                experiment_mode="error",
+                verdict=False,
+                confidence=None,
+                heuristic_flags=list(pkg.heuristic_flags),
+                exec_time_ms=int((_time.monotonic() - t0) * 1000),
+                api_cost_usd=0.0,
+                input_tokens=0,
+                output_tokens=0,
+                details={"error": str(exc), "model": self._model_name},
+            )
 
         details["model"] = self._model_name
+        if truncated:
+            details["truncated"] = True
         return EvalDetectionResult(
             detector=self._detector_name,
             experiment_mode="llm_raw",
@@ -626,14 +622,15 @@ class LLMRawAdapter(LLMAdapter):
             details=details,
         )
 
-    def _build_file_listing_raw(self, pkg: PackageInfo) -> str:
+    def _build_file_listing_raw(self, pkg: PackageInfo) -> tuple[str, bool]:
+        """Returns (listing, truncated). truncated=True when the 8000-char cap was hit."""
         parts: list[str] = []
         total = 0
         for path, content in pkg.files_raw.items():
             chunk = f"### {path} ###\n{content}\n\n"
             if total + len(chunk) > 8000:
                 parts.append("[truncated]")
-                break
+                return "".join(parts), True
             parts.append(chunk)
             total += len(chunk)
-        return "".join(parts)
+        return "".join(parts), False
