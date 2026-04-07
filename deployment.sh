@@ -14,22 +14,33 @@ else
 fi
 
 echo "Step 1: Creating unprivileged accounts"
-sudo useradd --system --create-home --home-dir /home/pypi-runner --shell /bin/bash --comment "PyPi-SCADA experiment runner" pypi-runner || true
-sudo useradd --system --create-home --home-dir /home/proxy-runner --shell /bin/bash --comment "PyPi-SCADA credential proxy" proxy-runner || true
+id -u pypi-runner &>/dev/null || sudo useradd --system --create-home --home-dir /home/pypi-runner --shell /bin/bash --comment "PyPi-SCADA experiment runner" pypi-runner
+id -u proxy-runner &>/dev/null || sudo useradd --system --create-home --home-dir /home/proxy-runner --shell /bin/bash --comment "PyPi-SCADA credential proxy" proxy-runner
 
 echo "Step 2: Cloning the repository"
-# Use an ephemeral .netrc so PULL_TOKEN is never embedded in the git remote URL
-# (.git/config) or visible in the process table during the clone.
-echo "machine github.com login Alexander-Mani password $PULL_TOKEN" \
-  | sudo -u pypi-runner tee /home/pypi-runner/.netrc > /dev/null
-sudo chmod 600 /home/pypi-runner/.netrc
+if [ ! -d "/home/pypi-runner/pypi-scada-repo" ]; then
+  # Use an ephemeral .netrc so PULL_TOKEN is never embedded in the git remote URL
+  # (.git/config) or visible in the process table during the clone.
+  echo "machine github.com login Alexander-Mani password $PULL_TOKEN" \
+    | sudo -u pypi-runner tee /home/pypi-runner/.netrc > /dev/null
+  sudo chmod 600 /home/pypi-runner/.netrc
 
-sudo -u pypi-runner git clone \
-  https://github.com/Alexander-Mani/PyPi-SCADA.git \
-  /home/pypi-runner/pypi-scada-repo/
+  sudo -u pypi-runner git clone \
+    https://github.com/Alexander-Mani/PyPi-SCADA.git \
+    /home/pypi-runner/pypi-scada-repo/ || { sudo -u pypi-runner rm -f /home/pypi-runner/.netrc; exit 1; }
 
-sudo -u pypi-runner rm /home/pypi-runner/.netrc
-sudo chown -R pypi-runner:pypi-runner /home/pypi-runner/pypi-scada-repo
+  sudo -u pypi-runner rm -f /home/pypi-runner/.netrc
+  sudo chown -R pypi-runner:pypi-runner /home/pypi-runner/pypi-scada-repo
+else
+  echo "Repository already exists at /home/pypi-runner/pypi-scada-repo, pulling latest changes."
+  echo "machine github.com login Alexander-Mani password $PULL_TOKEN" \
+    | sudo -u pypi-runner tee /home/pypi-runner/.netrc > /dev/null
+  sudo chmod 600 /home/pypi-runner/.netrc
+
+  sudo -u pypi-runner bash -c "cd /home/pypi-runner/pypi-scada-repo && git pull" || { sudo -u pypi-runner rm -f /home/pypi-runner/.netrc; exit 1; }
+
+  sudo -u pypi-runner rm -f /home/pypi-runner/.netrc
+fi
 
 echo "Step 3: Staging samples for the research pipeline"
 # The EvaluationRunner in evaluate.py expects samples under the repo root's samples/ directory.
@@ -73,7 +84,7 @@ export GEMINI_API_KEY=\"$GEMINI_API_KEY\"
 export TOGETHER_API_KEY=\"$TOGETHER_API_KEY\"
 ENVEOF
 chmod 600 /home/proxy-runner/.env
-echo 'source ~/.env' >> /home/proxy-runner/.bashrc
+grep -qF 'source ~/.env' /home/proxy-runner/.bashrc || echo 'source ~/.env' >> /home/proxy-runner/.bashrc
 "
 
 echo "Step 6: Configuring egress filtering (iptables)"
@@ -122,6 +133,7 @@ sudo -u proxy-runner bash -c "
 sudo -u proxy-runner bash -c "
   source /home/proxy-runner/.env
   source /home/proxy-runner/venv/bin/activate
+  pkill -u proxy-runner -f 'litellm --port 4000' || true
   nohup litellm --port 4000 > /home/proxy-runner/litellm.log 2>&1 &
 "
 
@@ -133,6 +145,7 @@ echo "Step 8: Starting the PyPI simulator (background)"
 sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo/src/simulator
+  pkill -u pypi-runner -f 'python main.py' || true
   nohup python main.py > /home/pypi-runner/simulator.log 2>&1 &
 "
 
