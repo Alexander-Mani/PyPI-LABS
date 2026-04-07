@@ -124,7 +124,7 @@ def _twine_upload(archive: Path, simulator_url: str, dry_run: bool) -> bool:
 # Benign / controls pass
 # ---------------------------------------------------------------------------
 
-ARCHIVE_SUFFIXES = {".whl", ".gz", ".zip"}
+ARCHIVE_SUFFIXES = {".whl", ".gz"}  # .zip excluded — causes noisy twine failures
 
 
 def _is_package_archive(path: Path) -> bool:

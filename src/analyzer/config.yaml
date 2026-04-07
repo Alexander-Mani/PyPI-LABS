@@ -1,11 +1,11 @@
 simulator:
   base_url: "http://127.0.0.1:8080"
 
-# Credential proxy — routes all LLM API calls through an isolated service that
-# holds the API keys. The analyzer process itself carries no keys in proxy mode.
-# Set url to null or omit to fall back to direct SDK calls (local dev only).
+# Credential proxy — legacy diff-pipeline config reference.
+# The active evaluate.py pipeline reads proxy_url from each configs/*.yaml model file.
+# This section is retained for logging setup context and operator reference only.
 credential_proxy:
-  url: "http://127.0.0.1:9090"
+  url: "http://127.0.0.1:4000"
 
 detection:
   # Which detectors to run (can be combined)
