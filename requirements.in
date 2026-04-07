@@ -1,0 +1,11 @@
+pyyaml
+flask
+loguru
+rich
+requests
+anthropic
+openai
+google-generativeai
+bandit
+semgrep
+pytest
