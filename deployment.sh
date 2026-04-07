@@ -6,8 +6,8 @@ set -e
 # It assumes a clean Ubuntu 22.04 LTS environment.
 
 echo "Sourcing operator environment variables..."
-if [ -f ~/.env ]; then
-  source ~/.env 
+if [ -f .env ]; then
+  source .env 
 else
   echo "ERROR: ~/.env not found. Ensure PULL_TOKEN and API keys are exported."
   exit 1
