@@ -7,29 +7,27 @@ drawing conclusions from the metrics output.
 
 ---
 
-## 1. Ground Truth Labelling for Account-Takeover Packages
+## 1. Account-Takeover Packages: Clean Pre-Compromise Releases
+
+**Status: Ground truth labelling is correct as of the folder-based refactor.**
 
 **Affected packages:** `num2words`, `ultralytics`
 
-The benign download script collects all versions of these packages up to and
-including the Last Known Good Release (LKGR). In `meta.json`, both packages
-have `malicious_package == target_package` because the attacker did not register
-a separate name — they took over the real package and pushed a poisoned update.
+The benign download script collected all versions up to and including the Last
+Known Good Release (LKGR). These clean pre-compromise versions live in
+`samples/benign/{package}/` and are correctly labelled `is_malicious=False` by
+the folder-based ground truth logic (folder membership, not `meta.json`).
 
-As a result, the evaluation runner's ground truth builder labels these packages
-as `True` (malicious), even though every archive in `benign/num2words/` and
-`benign/ultralytics/` is a clean, pre-compromise release.
+**The remaining open item:** The compromised versions (e.g., num2words 0.5.15,
+ultralytics 8.3.41) are the actual malicious releases. They must be present in
+`samples/malware_backstabbers_knife/` for the evaluation to measure ATO
+detection recall. If only clean versions are present, FN counts for these
+packages will be zero — which is correct (they are benign) but does not
+demonstrate ATO detection capability.
 
-**Consequence:** Every detector will produce a False Negative on these packages.
-This is expected and correct behaviour — the clean archives genuinely do not
-contain the injected payload, so a well-functioning detector *should* return
-benign. The FN count for account-takeover packages therefore measures how much
-of the poisoned version's signal "leaked" into pre-compromise releases (ideally
-none). Do not interpret these FNs as detector failures.
-
-**Mitigation path:** If you want to measure true account-takeover detection
-performance, the malicious versions (0.5.15 for num2words, 8.3.41 for
-ultralytics) must be added to the malware archive set and evaluated separately.
+**What to do:** Source the compromised archive for each ATO package and add it
+to `samples/malware_backstabbers_knife/`. Then re-run to see the ATO detection
+confusion matrix.
 
 ---
 

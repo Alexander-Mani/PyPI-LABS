@@ -20,10 +20,15 @@ Update status markers as work completes: [ ] not started · [~] in progress · [
 
 ## C — detection_controller.py (append only)
 - [x] C-1  EvalDetectionResult dataclass
-- [x] C-2  EntryPointStaticAdapter (temp dir, directory-level SAST)
-- [x] C-3  EntryPointLLMAdapter (YAML loading, provider dispatch, parse, timing)
+- [x] C-2  EntryPointStaticAdapter — REMOVED in Phase 3 cleanup (was legacy diff pipeline)
+- [x] C-3  EntryPointLLMAdapter — REMOVED in Phase 3 cleanup (was legacy diff pipeline)
 - [x] C-4  AgenticAdapter (tool_use loop, max_turns, token accumulation)
 - [x] C-5  EvalController (ThreadPoolExecutor, per-future error catch, DB write)
+
+**Phase 3 note:** The legacy diff pipeline section (~300 lines) was deleted from
+detection_controller.py in Phase 3. StaticDetectorAdapter, LLMDetectorAdapter,
+DetectionController, and the EntryPointStaticAdapter/EntryPointLLMAdapter
+backward-compat aliases no longer exist. EvalController is the sole active class.
 
 ## D — db_manager.py (append only)
 - [x] D-1  _EVAL_SCHEMA constant (eval_result + eval_run + indexes)
@@ -43,7 +48,8 @@ Update status markers as work completes: [ ] not started · [~] in progress · [
 - [x] F-1  EvaluationRunner.__init__
 - [x] F-2  _discover_benign() — latest version per package, skip controls/
 - [x] F-3  _discover_malware() — graceful if dir missing
-- [x] F-4  _build_ground_truth() — isolated, never passed to detectors
+- [x] F-4  Folder-based ground truth: is_malicious bool from _discover_*() folder
+           membership, stored per-row at insert time. _build_ground_truth() removed.
 - [x] F-5  run() main loop with per-archive exception guard
 - [x] F-6  _print_metrics() — rich.table TP/TN/FP/FN/F1 per detector
 

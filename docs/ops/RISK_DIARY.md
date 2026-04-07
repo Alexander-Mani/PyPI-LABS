@@ -176,3 +176,42 @@ extracted content lives only in RAM and is gone on reboot or explicit cleanup.
 A sufficiently large malicious archive could exhaust available tmpfs memory, causing
 an OOM condition. Mitigated by the relatively small size of the known malicious samples
 (all under 10 MB extracted).
+
+---
+
+## Decision 6 — Source-Aware Ground Truth Assignment (Folder-based Truth)
+
+**Decision:**
+Ground truth labels are assigned based on the source directory during sample
+discovery, rather than via a name-based lookup table. Benign versions (e.g.,
+0.5.14) and poisoned versions (e.g., 0.5.15) of the same package name are
+labeled `False` and `True` respectively, based on their presence in the `benign/`
+or `malware_backstabbers_knife/` directories.
+
+**Threat addressed (Methodological Flaw):**
+In Account Takeover (ATO) scenarios, the same package name exists in both benign
+and malicious states. A name-keyed ground truth dictionary (e.g., `truth["num2words"] = True`)
+causes "Ground Truth Collision," where a clean version of a targeted package is
+incorrectly labeled as malicious. This leads to:
+- **Inflation of False Negatives:** Accurate detectors that correctly identify
+  clean code are penalized.
+- **Flattery of Hallucination:** Inaccurate detectors that over-flag clean code
+  as malicious are incorrectly rewarded with True Positives.
+- **Skewed Metrics:** Precision and Recall become scientifically invalid,
+  undermining the core objective of the benchmarking study.
+
+**Controls applied:**
+- **Refactored Discovery:** `EvaluationRunner._discover_benign()` and
+  `_discover_malware()` return the truth label as part of the archive metadata.
+- **Detector Blindness:** The `ground_truth` label is passed to the database
+  layer only *after* the detection adapters have completed their work. The
+  detectors (SAST and LLMs) never receive the label.
+- **Version Isolation:** The evaluation pipeline treats each archive as a
+  discrete test instance, ensuring that a package's clean history does not
+  contaminate the evaluation of its poisoned releases.
+
+**Residual risk:**
+"Pre-existing Knowledge Bias" in Frontier LLMs. If a model has seen security
+reports for `num2words 0.5.15` during its training, it may flag the package
+based on memory rather than code analysis. This is documented as a limitation
+in the final thesis and addressed via the "Reasoning" analysis in the rubric.
