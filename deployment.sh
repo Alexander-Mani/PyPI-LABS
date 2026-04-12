@@ -78,9 +78,10 @@ sudo -u pypi-runner bash -c "
   unzip ${UNZIP_FLAGS} /home/lexi/samples/benign_and_controlls.zip -d /home/pypi-runner/pypi-scada-repo/samples/
   
   echo 'Staging malicious archives...'
+  shopt -s nullglob
   for f in /home/lexi/samples/*.zip; do
     name=\$(basename \"\$f\")
-    if [ \"\$name\" != 'benign_and_controlls.zip' ]; then
+    if [ \"\$name\" != 'benign_and_controlls.zip' ] && [ \"\$name\" != 'malware_samples.zip' ]; then
       cp \"\$f\" /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife/
     fi
   done
@@ -171,9 +172,9 @@ sudo -u proxy-runner bash -c "
   nohup litellm --port 4000 > /home/proxy-runner/litellm.log 2>&1 &
 "
 
-echo "Waiting for LiteLLM health check (up to 30 s)..."
+echo "Waiting for LiteLLM health check (up to 60 s)..."
 ready=0
-for _i in {1..30}; do
+for _i in {1..60}; do
   if sudo -u pypi-runner curl -fsS http://127.0.0.1:4000/health/readiness >/dev/null 2>&1; then
     ready=1
     break
@@ -181,7 +182,7 @@ for _i in {1..30}; do
   sleep 1
 done
 if [ "$ready" -ne 1 ]; then
-  echo "ERROR: LiteLLM did not become healthy within 30 seconds. Aborting."
+  echo "ERROR: LiteLLM did not become healthy within 60 seconds. Aborting."
   echo "LiteLLM process check (proxy-runner):"
   sudo -u proxy-runner pgrep -a -x litellm || true
   echo "Last 40 lines of /home/proxy-runner/litellm.log:"
@@ -205,23 +206,47 @@ sudo -u pypi-runner bash -c "
 
 sleep 5
 
-echo "Step 9: Uploading samples to simulator index"
+# UPLOAD_CATEGORIES controls which sample categories are injected.
+# Default: all three. Override: UPLOAD_CATEGORIES="malicious" bash deployment.sh
+# The value is validated before outer-shell expansion into the sudo subshell.
+_UPLOAD_CATS="${UPLOAD_CATEGORIES:-benign controls malicious}"
+if [[ -z "${_UPLOAD_CATS//[[:space:]]/}" ]]; then
+  echo "ERROR: UPLOAD_CATEGORIES cannot be empty" >&2
+  exit 1
+fi
+for _cat in $_UPLOAD_CATS; do
+  case "$_cat" in
+    benign|controls|malicious|all) ;;
+    *)
+      echo "ERROR: invalid UPLOAD_CATEGORIES entry: $_cat" >&2
+      echo "Allowed values: benign controls malicious all" >&2
+      exit 1
+      ;;
+  esac
+done
+
+echo "Step 9: Uploading samples to simulator index (categories: ${_UPLOAD_CATS})"
 sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo
-
-  # Use the staged samples in the repo for injection
-  python src/injector/upload_samples.py --samples-dir /home/pypi-runner/pypi-scada-repo/samples --simulator-url http://127.0.0.1:8080 --only benign
-  python src/injector/upload_samples.py --samples-dir /home/pypi-runner/pypi-scada-repo/samples --simulator-url http://127.0.0.1:8080 --only controls
-  python src/injector/upload_samples.py --samples-dir /home/pypi-runner/pypi-scada-repo/samples --simulator-url http://127.0.0.1:8080 --only malicious
+  for _cat in ${_UPLOAD_CATS}; do
+    python src/injector/upload_samples.py \
+      --samples-dir /home/pypi-runner/pypi-scada-repo/samples \
+      --simulator-url http://127.0.0.1:8080 \
+      --only \"\$_cat\"
+  done
 "
+
+# VERBOSE=1 enables --verbose flag on evaluate.py (DEBUG-level prompt/response logging).
+_VERBOSE_FLAG=""
+[[ "${VERBOSE:-0}" == "1" ]] && _VERBOSE_FLAG="--verbose"
 
 echo "Step 10: Running the evaluation pipeline (Entry-Point Scanning)"
 sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo
   # Defaulting to budget tier for safety; reads configs/models.json automatically.
-  python src/analyzer/evaluate.py --tier budget
+  python src/analyzer/evaluate.py --tier budget ${_VERBOSE_FLAG}
 "
 
 echo "Deployment and evaluation complete. Results stored in src/data/eval_results.db"

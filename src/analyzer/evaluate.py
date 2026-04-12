@@ -9,7 +9,7 @@ Labels are stored at insert time and never passed to extractors or adapters.
 
 Usage:
     python src/analyzer/evaluate.py [--config PATH] [--tier budget|medium|frontier]
-                                    [--skip-validation] [--sast-only]
+                                    [--skip-validation] [--sast-only] [--verbose]
 
 See CONCERNS.md for known limitations before interpreting results.
 """
@@ -190,11 +190,22 @@ class EvaluationRunner:
                 # archive-stem parsing for benign packages).
                 pkg.name    = name
                 pkg.version = version
+                log.info(
+                    f"    Decoded {len(pkg.files)} file(s) "
+                    f"({len(pkg.files_raw)} entry point(s))"
+                    + (f"  [bad-password: {pkg.bad_password_files}]"
+                       if pkg.bad_password_files else "")
+                )
                 pkg = self._filter.scan(pkg)
-                self._controller.run(
+                if pkg.heuristic_flags:
+                    log.info(f"    Heuristic flags: {', '.join(pkg.heuristic_flags)}")
+                results = self._controller.run(
                     run_id=run_id, pkg=pkg,
                     ground_truth=is_malicious, sast_only=sast_only,
                 )
+                n_valid   = sum(1 for r in results if r.experiment_mode != "error")
+                n_flagged = sum(1 for r in results if r.verdict and r.experiment_mode != "error")
+                log.info(f"    Verdict: {n_flagged}/{n_valid} detector(s) flagged malicious")
             except Exception as exc:
                 log.error(f"  Failed {archive_path.name}: {exc}")
 
@@ -367,9 +378,16 @@ if __name__ == "__main__":
         "--sast-only", action="store_true",
         help="Run only static tools (Bandit/Semgrep), skip all LLM/agentic adapters",
     )
+    parser.add_argument(
+        "--verbose", action="store_true",
+        help="Enable DEBUG-level logging (raw prompts, responses, per-file extraction)",
+    )
     args = parser.parse_args()
     with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
+    if args.verbose:
+        # Preserve configured sinks; just raise their level before first setup.
+        cfg.setdefault("logging", {})["level"] = "DEBUG"
     setup_logger(cfg)
     EvaluationRunner(cfg, tier=args.tier).run(
         skip_validation=args.skip_validation,

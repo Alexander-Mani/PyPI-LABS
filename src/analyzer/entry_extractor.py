@@ -203,6 +203,8 @@ class EntryPointExtractor:
             p for p in decoded if Path(p).name in _ENTRY_POINTS
         }
 
+        log.debug(f"  Entry-point candidates: {sorted(candidates)}")
+
         # BFS import resolution: up to 3 levels deep, within-package only
         included = set(candidates)
         frontier = {p for p in candidates if p.endswith(".py")}
@@ -215,6 +217,7 @@ class EntryPointExtractor:
                     if new_path not in included:
                         included.add(new_path)
                         next_frontier.add(new_path)
+                        log.debug(f"  BFS depth {_depth+1}: {path} → {new_path}")
             frontier = next_frontier
 
         return {p: decoded[p] for p in included if p in decoded}

@@ -12,6 +12,7 @@ import os as _os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from src.utils.logger import get_logger
 from entry_extractor import PackageInfo
 from adapters import (
     EvalDetectionResult,
@@ -21,6 +22,8 @@ from adapters import (
     LLMRawAdapter,
     AgenticAdapter,
 )
+
+log = get_logger()
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +106,12 @@ class EvalController:
                 adapter, strategy = futures[future]
                 try:
                     res = future.result()
+                    elapsed = res.exec_time_ms / 1000
+                    verdict_str = "MALICIOUS" if res.verdict else "benign"
+                    log.info(
+                        f"    ✓ {res.detector}:{res.experiment_mode}:{strategy}"
+                        f" → {verdict_str} ({elapsed:.1f}s)"
+                    )
                 except Exception as exc:
                     name = getattr(adapter, "_tool", None) or getattr(adapter, "_detector_name", None) or "unknown"
                     res = EvalDetectionResult(

@@ -22,7 +22,10 @@ from pathlib import Path
 
 import yaml as _yaml
 
+from src.utils.logger import get_logger
 from entry_extractor import PackageInfo
+
+log = get_logger()
 
 
 # ---------------------------------------------------------------------------
@@ -194,9 +197,16 @@ class LLMAdapter(DetectorAdapter):
             file_listing=listing,
             heuristic_flags=", ".join(pkg.heuristic_flags) if pkg.heuristic_flags else "none",
         )
+        log.debug(
+            f"[{self._detector_name}] prompt ({len(user)} chars, truncated={truncated}):\n{user}"
+        )
         t0 = _time.monotonic()
         try:
             raw_text, in_tok, out_tok, cost = self._call_api(system, user)
+            log.debug(
+                f"[{self._detector_name}] response "
+                f"(in={in_tok} out={out_tok} cost=${cost:.6f}):\n{raw_text}"
+            )
             verdict, confidence, details = self._parse_response(raw_text)
         except Exception as exc:
             return EvalDetectionResult(
@@ -587,9 +597,16 @@ class LLMRawAdapter(LLMAdapter):
             file_listing=listing,
             heuristic_flags=", ".join(pkg.heuristic_flags) if pkg.heuristic_flags else "none",
         )
+        log.debug(
+            f"[{self._detector_name}/raw] prompt ({len(user)} chars, truncated={truncated}):\n{user}"
+        )
         t0 = _time.monotonic()
         try:
             raw_text, in_tok, out_tok, cost = self._call_api(system, user)
+            log.debug(
+                f"[{self._detector_name}/raw] response "
+                f"(in={in_tok} out={out_tok} cost=${cost:.6f}):\n{raw_text}"
+            )
             verdict, confidence, details = self._parse_response(raw_text)
         except Exception as exc:
             return EvalDetectionResult(
