@@ -153,29 +153,36 @@ key identity.
 
 ---
 
-## Decision 4 — Malicious zip extraction to tmpfs
+## Decision 4 — Malicious archive staging
 
 **Decision:**
-`upload_samples.py` extracts password-protected malicious zip archives into
-`/tmp/pypi-scada-staging/` (which is a tmpfs mount on most Linux VMs). Each staging
-directory is deleted immediately after the inner archive is uploaded to the simulator.
-Extracted files are never written to the persistent filesystem.
+Deployment extracts the single password-protected malicious bundle
+(`malware_backstabbers_knife.zip`, password `infected`) into the ignored VM-local
+repo staging directory `samples/malware_backstabbers_knife/`. The uploader then
+uploads the staged distribution archives. Legacy per-package container zips are
+still extracted by `upload_samples.py` into `/tmp/pypi-scada-staging/` and deleted
+immediately after the inner archive is uploaded.
 
 **Threat addressed:**
-Extracted malicious package files could persist on disk after the experiment,
-representing an ongoing risk if the VM is repurposed or audited. tmpfs ensures
-extracted content lives only in RAM and is gone on reboot or explicit cleanup.
+Extracted malicious distribution archives could persist on disk after the
+experiment, representing an ongoing risk if the VM is repurposed or audited.
 
 **Controls applied:**
-- Extraction target: `/tmp/pypi-scada-staging/<uuid>/` — unique per zip, removed with
-  `shutil.rmtree` after upload.
-- If `upload_samples.py` is interrupted mid-run, `/tmp/pypi-scada-staging/` may retain
-  partial content. Operator cleans with `rm -rf /tmp/pypi-scada-staging/` before rerunning.
+- Deployment clears and recreates
+  `samples/malware_backstabbers_knife/` before extracting the encrypted bundle,
+  preventing stale package archives from previous runs.
+- `samples/` is git-ignored and VM-local; it must not be committed or copied to
+  non-experiment systems.
+- Legacy extraction target: `/tmp/pypi-scada-staging/<uuid>/` — unique per zip,
+  removed with `shutil.rmtree` after upload.
+- If `upload_samples.py` is interrupted mid-run, `/tmp/pypi-scada-staging/` may
+  retain partial content. Operator cleans with `rm -rf /tmp/pypi-scada-staging/`
+  before rerunning.
 
 **Residual risk:**
-A sufficiently large malicious archive could exhaust available tmpfs memory, causing
-an OOM condition. Mitigated by the relatively small size of the known malicious samples
-(all under 10 MB extracted).
+A sufficiently large malicious archive could consume VM disk or tmpfs space during
+staging. Mitigated by the relatively small size of the known malicious samples
+(all under 10 MB extracted) and by clearing the staging directory on each deployment.
 
 ---
 

@@ -7,9 +7,10 @@ local simulator via twine. Handles three archive categories:
 
   benign/   — per-package subdirs of .tar.gz / .whl files from PyPI
   controls/ — same layout; infrastructure packages used as FP baseline
-  malware_backstabbers_knife/ — password-protected .zip containers
-                                (password: "infected"); each contains an inner
-                                .tar.gz or .whl to upload
+  malware_backstabbers_knife/ — extracted malicious bundle containing
+                                package/version/.tar.gz or .whl archives;
+                                legacy password-protected container zips are
+                                also supported during transition
 
 Older versions within a package are uploaded before newer ones so that
 the simulator's list_versions() returns them in chronological order.
@@ -22,6 +23,7 @@ Usage:
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -96,6 +98,18 @@ def _version_key(path: Path):
 # Twine upload
 # ---------------------------------------------------------------------------
 
+_NAME_VER_RE = re.compile(
+    r"^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)-(\d[^-]*)(?:-.*)?$"
+)
+
+
+def _strip_dist_suffix(name: str) -> str:
+    for suffix in (".tar.gz", ".tar.bz2", ".tar.xz", ".zip"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return Path(name).stem
+
+
 def _archive_name_version(archive: Path) -> tuple[str, str] | None:
     """Return normalized (project, version) from a wheel/sdist filename."""
     if parse_sdist_filename is None or parse_wheel_filename is None:
@@ -107,11 +121,19 @@ def _archive_name_version(archive: Path) -> tuple[str, str] | None:
             name, version, *_ = parse_wheel_filename(archive.name)
         else:
             name, version = parse_sdist_filename(archive.name)
+        return str(name), str(version)
     except (InvalidSdistFilename, InvalidWheelFilename, ValueError) as exc:
-        log.error(f"Cannot parse archive name/version from {archive.name}: {exc}")
-        return None
+        log.warning(
+            f"Non-canonical archive filename, trying fallback parse: "
+            f"{archive.name} ({exc})"
+        )
 
-    return str(name), str(version)
+    match = _NAME_VER_RE.match(_strip_dist_suffix(archive.name))
+    if match:
+        return match.group(1), match.group(2)
+
+    log.error(f"Cannot parse archive name/version from {archive.name}")
+    return None
 
 
 def _simulator_has_version(simulator_url: str, name: str, version: str) -> bool | None:
@@ -210,10 +232,23 @@ def _twine_upload(archive: Path, simulator_url: str, dry_run: bool) -> str:
 # ---------------------------------------------------------------------------
 
 ARCHIVE_SUFFIXES = {".whl", ".gz"}  # .zip excluded — causes noisy twine failures
+DIST_ARCHIVE_SUFFIXES = (".whl", ".tar.gz", ".tar.bz2", ".tar.xz", ".zip")
 
 
 def _is_package_archive(path: Path) -> bool:
     return path.suffix in ARCHIVE_SUFFIXES and path.is_file()
+
+
+def _is_dist_archive(path: Path) -> bool:
+    return path.is_file() and path.name.endswith(DIST_ARCHIVE_SUFFIXES)
+
+
+def _is_staged_malware_archive(path: Path, malware_dir: Path) -> bool:
+    if not _is_dist_archive(path):
+        return False
+    # A top-level zip is treated as a legacy password-protected container, not a
+    # direct package archive. Nested zip sdists from the extracted bundle are OK.
+    return not (path.suffix == ".zip" and path.parent == malware_dir)
 
 
 def _upload_flat_category(category_dir: Path, simulator_url: str, dry_run: bool) -> tuple[int, int, int]:
@@ -304,11 +339,20 @@ def _extract_malicious_zip(zip_path: Path) -> Path | None:
     return None
 
 
+def _count_upload_result(result: str) -> tuple[int, int, int]:
+    if result == "uploaded":
+        return 1, 0, 0
+    if result == "skipped":
+        return 0, 1, 0
+    return 0, 0, 1
+
+
 def _upload_malicious_category(malicious_dir: Path, simulator_url: str, dry_run: bool) -> tuple[int, int, int]:
     """
-    Walk malware_backstabbers_knife/ for .zip files, extract each, upload
-    inner archive.
-    Staging dirs are cleaned up after each upload.
+    Upload malicious package archives staged under malware_backstabbers_knife/.
+    The preferred deployment format is an extracted encrypted bundle containing
+    package/version/*.whl or package/version/*.tar.gz files. Legacy individual
+    password-protected container zips are still supported during transition.
 
     Returns (uploaded_count, skipped_count, failure_count).
     """
@@ -316,12 +360,32 @@ def _upload_malicious_category(malicious_dir: Path, simulator_url: str, dry_run:
         log.warning(f"Directory not found, skipping: {malicious_dir}")
         return 0, 0, 0
 
-    zips = sorted(malicious_dir.glob("*.zip"))
-    log.info(f"Scanning malware_backstabbers_knife/: {len(zips)} zip(s)")
+    dist_archives = sorted(
+        p for p in malicious_dir.rglob("*")
+        if _is_staged_malware_archive(p, malicious_dir)
+    )
+    legacy_zips = sorted(p for p in malicious_dir.glob("*.zip") if p.is_file())
+    log.info(
+        f"Scanning malware_backstabbers_knife/: "
+        f"{len(dist_archives)} package archive(s), {len(legacy_zips)} legacy zip(s)"
+    )
 
     uploaded = skipped = failure = 0
 
-    for zip_path in zips:
+    for archive in dist_archives:
+        log.info(f"  Uploading: {archive.relative_to(malicious_dir)}")
+        if dry_run:
+            log.info(f"  [dry-run] would upload {archive.name}")
+            uploaded += 1
+            continue
+
+        result = _twine_upload(archive, simulator_url, dry_run)
+        up, sk, fail = _count_upload_result(result)
+        uploaded += up
+        skipped += sk
+        failure += fail
+
+    for zip_path in legacy_zips:
         log.info(f"  Extracting: {zip_path.name}")
 
         if dry_run:
@@ -340,12 +404,10 @@ def _upload_malicious_category(malicious_dir: Path, simulator_url: str, dry_run:
             staging_dir = staging_dir.parent
 
         result = _twine_upload(inner, simulator_url, dry_run)
-        if result == "uploaded":
-            uploaded += 1
-        elif result == "skipped":
-            skipped += 1
-        else:
-            failure += 1
+        up, sk, fail = _count_upload_result(result)
+        uploaded += up
+        skipped += sk
+        failure += fail
 
         shutil.rmtree(staging_dir, ignore_errors=True)
 

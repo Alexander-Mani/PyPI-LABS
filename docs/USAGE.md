@@ -140,9 +140,10 @@ credentials:
 
 ## 3. VM Deployment — `upload_samples.py`
 
-For the provisioned VM environment where samples arrive as a pre-zipped archive
-(`benign_and_controlls.zip`) and individual password-protected malicious zip files,
-use `upload_samples.py` instead of `controller.sh`.
+For the provisioned VM environment where samples arrive as a benign/control
+archive (`benign_and_controlls.zip`) and one password-protected malicious bundle
+(`malware_backstabbers_knife.zip`, password `infected`), use
+`upload_samples.py` instead of `controller.sh`.
 
 See `docs/ops/DEPLOYMENT_MANIFEST.md` for full setup steps (account creation, sample
 extraction, venv). The account and security constraints are documented in
@@ -157,7 +158,8 @@ extraction, venv). The account and security constraints are documented in
 samples-extracted/
 ├── benign/       # per-package subdirs of .tar.gz / .whl
 ├── controls/     # same layout; infrastructure packages
-└── malware_backstabbers_knife/    # password-protected .zip files (password: "infected")
+└── malware_backstabbers_knife/
+    └── <package>/<version>/<archive.whl|archive.tar.gz>
 ```
 
 ### Run
@@ -203,8 +205,9 @@ python src/injector/upload_samples.py \
 
 - Benign and control archives within each package subdirectory are sorted by version
   (older first) before upload, ensuring correct ordering in `list_versions()`.
-- Malicious zips are extracted to `/tmp/pypi-scada-staging/<uuid>/` (tmpfs) and the
-  staging directory is deleted immediately after each upload.
+- Malicious package archives are normally extracted from the single encrypted
+  deployment bundle before upload; legacy per-package container zips are still
+  extracted to `/tmp/pypi-scada-staging/<uuid>/` and cleaned immediately.
 - Already-uploaded simulator versions are detected via `/api/versions/<project>`
   and skipped before calling twine; reruns are safe.
 - Upload failures are logged and counted but do not abort the run; the exit code is

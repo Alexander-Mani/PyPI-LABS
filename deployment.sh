@@ -71,20 +71,15 @@ fi
 sudo -u pypi-runner bash -c "
   mkdir -p /home/pypi-runner/pypi-scada-repo/samples/benign
   mkdir -p /home/pypi-runner/pypi-scada-repo/samples/controls
-  mkdir -p /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife
   
   echo 'Extracting benign and controls...'
   # Extract at samples/ root so both benign/ and controls/ land in expected paths.
   unzip ${UNZIP_FLAGS} /home/lexi/samples/benign_and_controlls.zip -d /home/pypi-runner/pypi-scada-repo/samples/
   
-  echo 'Staging malicious archives...'
-  shopt -s nullglob
-  for f in /home/lexi/samples/*.zip; do
-    name=\$(basename \"\$f\")
-    if [ \"\$name\" != 'benign_and_controlls.zip' ] && [ \"\$name\" != 'malware_samples.zip' ]; then
-      cp \"\$f\" /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife/
-    fi
-  done
+  echo 'Extracting malicious bundle...'
+  rm -rf /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife
+  mkdir -p /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife
+  unzip -P infected ${UNZIP_FLAGS} /home/lexi/samples/malware_backstabbers_knife.zip -d /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife/
 "
 
 echo "Step 4: Setting up Python virtual environments"

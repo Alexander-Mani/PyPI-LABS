@@ -131,3 +131,54 @@ def test_warehouse_upload_uses_skip_existing_without_precheck(monkeypatch, tmp_p
     assert result == "uploaded"
     assert "--skip-existing" in captured["cmd"]
     assert "https://upload.pypi.org/legacy/" in captured["cmd"]
+
+
+def test_archive_name_version_falls_back_for_noncanonical_wheel(tmp_path):
+    filename = (
+        "torchtriton-2.0.0+0d7e753227-cp310-cp310-"
+        "manylinux-2-17-x86-64.manylinux2014-x86-64.whl"
+    )
+    archive = (
+        tmp_path
+        / filename
+    )
+    archive.write_text("placeholder", encoding="utf-8")
+
+    assert upload_samples._archive_name_version(archive) == (
+        "torchtriton",
+        "2.0.0+0d7e753227",
+    )
+
+
+def test_malicious_category_uploads_extracted_bundle_archives(monkeypatch, tmp_path):
+    malicious_dir = tmp_path / "malware_backstabbers_knife"
+    (malicious_dir / "colourama" / "0.1.6").mkdir(parents=True)
+    (malicious_dir / "secmeasure" / "0.1.0").mkdir(parents=True)
+    colourama = malicious_dir / "colourama" / "0.1.6" / "colourama-0.1.6.tar.gz"
+    secmeasure = malicious_dir / "secmeasure" / "0.1.0" / "secmeasure-0.1.0-py3-none-any.whl"
+    legacy_container = malicious_dir / "legacy-container.zip"
+    colourama.write_text("placeholder", encoding="utf-8")
+    secmeasure.write_text("placeholder", encoding="utf-8")
+    legacy_container.write_text("placeholder", encoding="utf-8")
+    uploaded = []
+
+    def fake_twine_upload(archive, simulator_url, dry_run):
+        uploaded.append(archive.relative_to(malicious_dir).as_posix())
+        assert simulator_url == "http://127.0.0.1:8080"
+        assert dry_run is False
+        return "uploaded"
+
+    monkeypatch.setattr(upload_samples, "_twine_upload", fake_twine_upload)
+    monkeypatch.setattr(upload_samples, "_extract_malicious_zip", lambda path: None)
+
+    result = upload_samples._upload_malicious_category(
+        malicious_dir,
+        "http://127.0.0.1:8080",
+        dry_run=False,
+    )
+
+    assert result == (2, 0, 1)
+    assert uploaded == [
+        "colourama/0.1.6/colourama-0.1.6.tar.gz",
+        "secmeasure/0.1.0/secmeasure-0.1.0-py3-none-any.whl",
+    ]

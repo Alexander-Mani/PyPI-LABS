@@ -13,7 +13,7 @@ The human operator executes these sequential steps to deploy the PyPI-SCADA pipe
 | Tools | `git`, `unzip`, `curl`, `pip`, `iptables` |
 | VM home | `/home/lexi/` |
 | Samples archive | `~/samples/benign_and_controlls.zip` |
-| Malicious zips | `~/samples/*.zip` (password: `infected`) |
+| Malicious bundle | `~/samples/malware_backstabbers_knife.zip` (password: `infected`) |
 | Environment | `~/.env` with `PULL_TOKEN`, `ANTHROPIC_API_KEY`, etc. |
 
 ***
@@ -66,15 +66,14 @@ The `evaluate.py` script expects a specific directory structure within the repos
 ```bash
 sudo -u pypi-runner bash -c "
   mkdir -p /home/pypi-runner/pypi-scada-repo/samples/benign
+  mkdir -p /home/pypi-runner/pypi-scada-repo/samples/controls
   mkdir -p /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife
   
-  unzip -q /home/lexi/samples/benign_and_controlls.zip -d /home/pypi-runner/pypi-scada-repo/samples/benign/
-  
-  for f in /home/lexi/samples/*.zip; do
-    if [ \"\$(basename \"\$f\")\" != 'benign_and_controlls.zip' ]; then
-      cp \"\$f\" /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife/
-    fi
-  done
+  unzip -q /home/lexi/samples/benign_and_controlls.zip -d /home/pypi-runner/pypi-scada-repo/samples/
+
+  rm -rf /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife
+  mkdir -p /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife
+  unzip -P infected -q /home/lexi/samples/malware_backstabbers_knife.zip -d /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife/
 "
 ```
 
@@ -196,4 +195,3 @@ sudo -u pypi-runner bash -c "
   python src/analyzer/evaluate.py --tier budget
 "
 ```
-
