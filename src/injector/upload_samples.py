@@ -21,11 +21,15 @@ Usage:
 """
 
 import argparse
+import json
 import shutil
 import subprocess
 import sys
 import tempfile
 import uuid
+import urllib.error
+import urllib.parse
+import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -48,6 +52,17 @@ from src.utils.logger import setup_logger, get_logger  # noqa: E402
 
 setup_logger(_LOG_CONFIG)
 log = get_logger()
+
+try:
+    from packaging.utils import (
+        InvalidSdistFilename,
+        InvalidWheelFilename,
+        parse_sdist_filename,
+        parse_wheel_filename,
+    )
+except ImportError:  # pragma: no cover - deployment dependency guard
+    InvalidSdistFilename = InvalidWheelFilename = ValueError
+    parse_sdist_filename = parse_wheel_filename = None
 
 # ---------------------------------------------------------------------------
 # Version sorting
@@ -81,18 +96,73 @@ def _version_key(path: Path):
 # Twine upload
 # ---------------------------------------------------------------------------
 
-def _twine_upload(archive: Path, simulator_url: str, dry_run: bool) -> bool:
+def _archive_name_version(archive: Path) -> tuple[str, str] | None:
+    """Return normalized (project, version) from a wheel/sdist filename."""
+    if parse_sdist_filename is None or parse_wheel_filename is None:
+        log.error("Cannot parse archive metadata: packaging is not installed")
+        return None
+
+    try:
+        if archive.name.endswith(".whl"):
+            name, version, *_ = parse_wheel_filename(archive.name)
+        else:
+            name, version = parse_sdist_filename(archive.name)
+    except (InvalidSdistFilename, InvalidWheelFilename, ValueError) as exc:
+        log.error(f"Cannot parse archive name/version from {archive.name}: {exc}")
+        return None
+
+    return str(name), str(version)
+
+
+def _simulator_has_version(simulator_url: str, name: str, version: str) -> bool | None:
+    """
+    Return True/False if the simulator API can be queried, None if unavailable.
+    """
+    project = urllib.parse.quote(name)
+    url = simulator_url.rstrip("/") + f"/api/versions/{project}"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        log.error(f"Could not query simulator versions for {name}: {exc}")
+        return None
+
+    versions = {str(v) for v in data.get("versions", [])}
+    return version in versions
+
+
+def _supports_twine_skip_existing(repo_url: str) -> bool:
+    return repo_url.startswith((
+        "https://upload.pypi.org/legacy/",
+        "https://test.pypi.org/legacy/",
+    ))
+
+
+def _twine_upload(archive: Path, simulator_url: str, dry_run: bool) -> str:
     """
     Upload a single archive to the simulator via twine.
-    Returns True on success, False on failure.
+    Returns "uploaded", "skipped", or "failed".
     Skips already-uploaded files when the target repository supports
     ``--skip-existing`` (e.g. PyPI/TestPyPI). Local simulator endpoints do not.
     """
     if dry_run:
         log.info(f"[dry-run] would upload {archive.name}")
-        return True
+        return "uploaded"
 
     repo_url = simulator_url.rstrip("/") + "/legacy/"
+    if not _supports_twine_skip_existing(repo_url):
+        parsed = _archive_name_version(archive)
+        if parsed is None:
+            return "failed"
+        name, version = parsed
+
+        exists = _simulator_has_version(simulator_url, name, version)
+        if exists is None:
+            return "failed"
+        if exists:
+            log.info(f"Skipped existing: {name}=={version}")
+            return "skipped"
+
     cmd = [
         sys.executable, "-m", "twine", "upload",
         "--repository-url", repo_url,
@@ -104,21 +174,21 @@ def _twine_upload(archive: Path, simulator_url: str, dry_run: bool) -> bool:
 
     # Twine rejects --skip-existing for custom repositories (including the local
     # simulator endpoint). Enable it only for Warehouse-hosted endpoints.
-    if repo_url.startswith(("https://upload.pypi.org/legacy/", "https://test.pypi.org/legacy/")):
+    if _supports_twine_skip_existing(repo_url):
         cmd.insert(-2, "--skip-existing")
 
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode == 0:
         log.info(f"Uploaded: {archive.name}")
-        return True
+        return "uploaded"
 
     # twine may exit non-zero for "already exists" even with --skip-existing
     # on older versions; treat it as success if the message says so.
     combined = result.stdout + result.stderr
     if "already exists" in combined.lower() or "skipping" in combined.lower():
         log.info(f"Skipped (already exists): {archive.name}")
-        return True
+        return "skipped"
 
     # twine 4+ enforces strict PyPI metadata spec. Very old archives (pre-2012)
     # have metadata version 1.0 but use Classifier: fields from version 1.1.
@@ -126,13 +196,13 @@ def _twine_upload(archive: Path, simulator_url: str, dry_run: bool) -> bool:
     if "invaliddistribution" in combined.lower() or \
             "invalid distribution metadata" in combined.lower():
         log.warning(f"Skipped (invalid legacy metadata, unrecoverable): {archive.name}")
-        return True
+        return "skipped"
 
     log.error(f"Upload failed: {archive.name}")
     for line in combined.splitlines():
         if line.strip():
             log.error(f"  {line.strip()}")
-    return False
+    return "failed"
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +216,7 @@ def _is_package_archive(path: Path) -> bool:
     return path.suffix in ARCHIVE_SUFFIXES and path.is_file()
 
 
-def _upload_flat_category(category_dir: Path, simulator_url: str, dry_run: bool) -> tuple[int, int]:
+def _upload_flat_category(category_dir: Path, simulator_url: str, dry_run: bool) -> tuple[int, int, int]:
     """
     Walk category_dir/  (benign/ or controls/).
     Expected layout:
@@ -159,13 +229,13 @@ def _upload_flat_category(category_dir: Path, simulator_url: str, dry_run: bool)
     Archives within each package dir are sorted by version (oldest first)
     before uploading.
 
-    Returns (success_count, failure_count).
+    Returns (uploaded_count, skipped_count, failure_count).
     """
     if not category_dir.exists():
         log.warning(f"Directory not found, skipping: {category_dir}")
-        return 0, 0
+        return 0, 0, 0
 
-    success = failure = 0
+    uploaded = skipped = failure = 0
 
     package_dirs = sorted(p for p in category_dir.iterdir() if p.is_dir())
     log.info(f"Scanning {category_dir.name}/: {len(package_dirs)} package(s)")
@@ -181,13 +251,15 @@ def _upload_flat_category(category_dir: Path, simulator_url: str, dry_run: bool)
 
         log.info(f"  {pkg_dir.name}: {len(archives)} archive(s)")
         for archive in archives:
-            ok = _twine_upload(archive, simulator_url, dry_run)
-            if ok:
-                success += 1
+            result = _twine_upload(archive, simulator_url, dry_run)
+            if result == "uploaded":
+                uploaded += 1
+            elif result == "skipped":
+                skipped += 1
             else:
                 failure += 1
 
-    return success, failure
+    return uploaded, skipped, failure
 
 
 # ---------------------------------------------------------------------------
@@ -232,29 +304,29 @@ def _extract_malicious_zip(zip_path: Path) -> Path | None:
     return None
 
 
-def _upload_malicious_category(malicious_dir: Path, simulator_url: str, dry_run: bool) -> tuple[int, int]:
+def _upload_malicious_category(malicious_dir: Path, simulator_url: str, dry_run: bool) -> tuple[int, int, int]:
     """
     Walk malware_backstabbers_knife/ for .zip files, extract each, upload
     inner archive.
     Staging dirs are cleaned up after each upload.
 
-    Returns (success_count, failure_count).
+    Returns (uploaded_count, skipped_count, failure_count).
     """
     if not malicious_dir.exists():
         log.warning(f"Directory not found, skipping: {malicious_dir}")
-        return 0, 0
+        return 0, 0, 0
 
     zips = sorted(malicious_dir.glob("*.zip"))
     log.info(f"Scanning malware_backstabbers_knife/: {len(zips)} zip(s)")
 
-    success = failure = 0
+    uploaded = skipped = failure = 0
 
     for zip_path in zips:
         log.info(f"  Extracting: {zip_path.name}")
 
         if dry_run:
             log.info(f"  [dry-run] would extract and upload from {zip_path.name}")
-            success += 1
+            uploaded += 1
             continue
 
         inner = _extract_malicious_zip(zip_path)
@@ -267,15 +339,17 @@ def _upload_malicious_category(malicious_dir: Path, simulator_url: str, dry_run:
         while staging_dir.parent != _STAGING_ROOT and staging_dir != _STAGING_ROOT:
             staging_dir = staging_dir.parent
 
-        ok = _twine_upload(inner, simulator_url, dry_run)
-        if ok:
-            success += 1
+        result = _twine_upload(inner, simulator_url, dry_run)
+        if result == "uploaded":
+            uploaded += 1
+        elif result == "skipped":
+            skipped += 1
         else:
             failure += 1
 
         shutil.rmtree(staging_dir, ignore_errors=True)
 
-    return success, failure
+    return uploaded, skipped, failure
 
 
 # ---------------------------------------------------------------------------
@@ -323,25 +397,29 @@ def main() -> None:
     if dry_run:
         log.info("Mode: dry-run — no uploads will be performed")
 
-    total_ok = total_fail = 0
+    total_uploaded = total_skipped = total_fail = 0
 
     if mode in ("benign", "all"):
-        ok, fail = _upload_flat_category(samples_dir / "benign", simulator_url, dry_run)
-        total_ok += ok
+        uploaded, skipped, fail = _upload_flat_category(samples_dir / "benign", simulator_url, dry_run)
+        total_uploaded += uploaded
+        total_skipped += skipped
         total_fail += fail
 
     if mode in ("controls", "all"):
-        ok, fail = _upload_flat_category(samples_dir / "controls", simulator_url, dry_run)
-        total_ok += ok
+        uploaded, skipped, fail = _upload_flat_category(samples_dir / "controls", simulator_url, dry_run)
+        total_uploaded += uploaded
+        total_skipped += skipped
         total_fail += fail
 
     if mode in ("malicious", "all"):
-        ok, fail = _upload_malicious_category(samples_dir / "malware_backstabbers_knife", simulator_url, dry_run)
-        total_ok += ok
+        uploaded, skipped, fail = _upload_malicious_category(samples_dir / "malware_backstabbers_knife", simulator_url, dry_run)
+        total_uploaded += uploaded
+        total_skipped += skipped
         total_fail += fail
 
     log.info("─" * 50)
-    log.info(f"Uploaded : {total_ok}")
+    log.info(f"Uploaded : {total_uploaded}")
+    log.info(f"Skipped  : {total_skipped}")
     if total_fail:
         log.error(f"Failed   : {total_fail}")
         sys.exit(1)

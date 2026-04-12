@@ -205,8 +205,8 @@ python src/injector/upload_samples.py \
   (older first) before upload, ensuring correct ordering in `list_versions()`.
 - Malicious zips are extracted to `/tmp/pypi-scada-staging/<uuid>/` (tmpfs) and the
   staging directory is deleted immediately after each upload.
-- Already-uploaded files are skipped (`--skip-existing` passed to twine); reruns are
-  safe.
+- Already-uploaded simulator versions are detected via `/api/versions/<project>`
+  and skipped before calling twine; reruns are safe.
 - Upload failures are logged and counted but do not abort the run; the exit code is
   non-zero if any failure occurred.
 
