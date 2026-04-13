@@ -31,25 +31,23 @@ confusion matrix.
 
 ---
 
-## 2. Malware Archives Not Present on Disk
+## 2. Simulator-Resolved Input Is Required
 
-**Affected component:** `_discover_malware()` and `run()` in `evaluate.py`
+**Affected component:** simulator resolver and `run()` in `evaluate.py`
 
-The directory `samples/malware_backstabbers_knife/` is excluded from version
-control (`.gitignore`) and does not currently exist on disk. When the evaluation
-runner starts, it checks for malicious archives (`.zip`, `.tar.gz`, `.whl`). If
-none are found, the runner raises a hard `SystemExit("HALT: ...")` to prevent
-executing a scientifically invalid benchmark.
+The staged dataset is now used for candidate metadata and ground-truth labels,
+but the analyzer scans artifacts downloaded from the local simulator. This keeps
+the simulator central to the experiment while avoiding `pip install` and package
+execution.
 
-**Consequence:** The pipeline refuses to run without malware present unless the
-operator explicitly passes the `--sast-only` flag, which bypasses the HALT for
-intentional false-positive-only testing.
+**Consequence:** If packages are staged on disk but not uploaded to the simulator,
+the analyzer will not evaluate them. If malicious versions cannot be resolved
+from the simulator, non-`--sast-only` runs halt because recall/F1 would be invalid.
 
-**What to do:** Download or restore the malicious archives (in `.zip`, `.tar.gz`,
-or `.whl` format) to `samples/malware_backstabbers_knife/`. For password-protected
-`.zip` files (e.g., from the Backstabber's Collection), the extractor expects
-the password `"infected"`. Once present, re-run `evaluate.py` to get a complete
-confusion matrix.
+**What to do:** Run the simulator, upload the staged dataset with
+`upload_samples.py`, then run `python src/analyzer/evaluate.py --dry-run-resolution
+--skip-validation` to verify the exact package/version/artifact set before a
+budget or frontier evaluation.
 
 ---
 
@@ -85,26 +83,24 @@ and medium tier alternatives are listed in `configs/models.json`.
 
 ---
 
-## 4. Benign Version Selection (Latest Only)
+## 4. Bounded Version And Artifact Selection
 
-**Affected component:** `_discover_benign()` in `evaluate.py`
+**Affected component:** simulator resolver in `evaluate.py`
 
-Each package in `samples/benign/` has many historical versions (e.g., colorama
-has 46, ultralytics has 465). The evaluation runner takes only the **last entry**
-from each `manifest.json` (the most recent version) rather than processing every
-version. This avoids hundreds of redundant API calls for the LLM and agentic
-pipelines, but it means the false-positive measurement is based on a single
-snapshot per package, not a distribution across the package's full history.
+Each package can have many versions and multiple artifacts per version. The
+evaluation runner therefore resolves a bounded candidate set from the simulator:
+latest and previous stable PEP 440 versions, plus dataset-declared LKGR versions
+when available. Per selected version it uses the configured artifact policy
+(`pip+sdist` by default) rather than scanning every wheel/platform/sdist artifact.
 
-**Consequence:** A package version that happens to contain a suspicious-looking
-but entirely benign pattern (e.g., a legitimate base64-encoded resource embedded
-in a wheel) could inflate the FP rate in a way that would average out across
-multiple versions. The SAST pipeline is particularly susceptible to this since
-Bandit flags patterns without semantic understanding.
+**Consequence:** Metrics describe the bounded simulator-resolved candidate set,
+not the entire historical package universe. If both a wheel and sdist are scanned
+for a selected version, reports should distinguish artifact count from package
+version count.
 
-**Mitigation path:** Add a `--all-versions` flag to `evaluate.py` that iterates
-every manifest entry rather than just the last. Use this for deep false-positive
-characterisation runs; use the default (latest only) for rapid iteration.
+**Mitigation path:** Use `--dry-run-resolution --skip-validation` before any paid
+run. Adjust `--versions-per-project` and `--artifact-policy` deliberately, and
+document the chosen policy in the final thesis results.
 
 ---
 
@@ -256,4 +252,3 @@ and engineering process is disciplined.
 **Acceptance criteria before final presentation:**
 - One complete reproducible run package is available end-to-end.
 - Supervisor/examiner can replay the workflow from documented steps.
-

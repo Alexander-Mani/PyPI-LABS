@@ -68,6 +68,12 @@ class EvalController:
         pkg: PackageInfo,
         ground_truth: bool | None = None,
         sast_only: bool = False,
+        artifact_filename: str | None = None,
+        artifact_url: str | None = None,
+        source_index_url: str | None = None,
+        sample_role: str | None = None,
+        attack_vector: str | None = None,
+        resolver_policy: str | None = None,
     ) -> list[EvalDetectionResult]:
         from prompt_manager import PromptManager
         pm = PromptManager.instance()
@@ -94,7 +100,7 @@ class EvalController:
                     tasks.append((a, s, sp, im))
 
         results: list[EvalDetectionResult] = []
-        gt_label = ground_truth  # bool | None — derived from folder membership
+        gt_label = ground_truth  # bool | None — derived from dataset labels
 
         with ThreadPoolExecutor(max_workers=4) as pool:
             futures: dict = {
@@ -107,7 +113,11 @@ class EvalController:
                 try:
                     res = future.result()
                     elapsed = res.exec_time_ms / 1000
-                    verdict_str = "MALICIOUS" if res.verdict else "benign"
+                    verdict_str = (
+                        "ERROR"
+                        if res.experiment_mode == "error"
+                        else "MALICIOUS" if res.verdict else "benign"
+                    )
                     log.info(
                         f"    ✓ {res.detector}:{res.experiment_mode}:{strategy}"
                         f" → {verdict_str} ({elapsed:.1f}s)"
@@ -121,6 +131,7 @@ class EvalController:
                         exec_time_ms=0, api_cost_usd=0.0,
                         details={"error": str(exc)},
                     )
+                    log.info(f"    ✓ {name}:error:{strategy} → ERROR (0.0s)")
 
                 results.append(res)
                 # Propagate extractor-level bad-password skips into the result details.
@@ -133,6 +144,12 @@ class EvalController:
                     experiment_mode=res.experiment_mode,
                     prompt_strategy=strategy,
                     detector=res.detector,
+                    artifact_filename=artifact_filename or "",
+                    artifact_url=artifact_url,
+                    source_index_url=source_index_url,
+                    sample_role=sample_role,
+                    attack_vector=attack_vector,
+                    resolver_policy=resolver_policy,
                     verdict=res.verdict,
                     ground_truth=gt_label,
                     heuristic_flags=res.heuristic_flags,

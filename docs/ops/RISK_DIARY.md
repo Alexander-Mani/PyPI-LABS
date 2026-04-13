@@ -159,9 +159,9 @@ key identity.
 Deployment extracts the single password-protected malicious bundle
 (`malware_backstabbers_knife.zip`, password `infected`) into the ignored VM-local
 repo staging directory `samples/malware_backstabbers_knife/`. The uploader then
-uploads the staged distribution archives. Legacy per-package container zips are
-still extracted by `upload_samples.py` into `/tmp/pypi-scada-staging/` and deleted
-immediately after the inner archive is uploaded.
+uploads the staged distribution artifacts into the simulator. The analyzer does
+not scan this staging directory directly; it resolves and downloads selected
+artifacts from the simulator before static analysis.
 
 **Threat addressed:**
 Extracted malicious distribution archives could persist on disk after the
@@ -189,11 +189,13 @@ staging. Mitigated by the relatively small size of the known malicious samples
 ## Decision 6 — Source-Aware Ground Truth Assignment (Folder-based Truth)
 
 **Decision:**
-Ground truth labels are assigned based on the source directory during sample
-discovery, rather than via a name-based lookup table. Benign versions (e.g.,
-0.5.14) and poisoned versions (e.g., 0.5.15) of the same package name are
+Ground truth labels are assigned based on the source directory and version in
+the staged dataset, rather than via a name-based lookup table. Benign versions
+(e.g., 0.5.14) and poisoned versions (e.g., 0.5.15) of the same package name are
 labeled `False` and `True` respectively, based on their presence in the `benign/`
-or `malware_backstabbers_knife/` directories.
+or `malware_backstabbers_knife/` directories. The artifact bytes used for scanning
+are then fetched from the simulator so the benchmark exercises the controlled
+package-index path.
 
 **Threat addressed (Methodological Flaw):**
 In Account Takeover (ATO) scenarios, the same package name exists in both benign
@@ -208,14 +210,15 @@ incorrectly labeled as malicious. This leads to:
   undermining the core objective of the benchmarking study.
 
 **Controls applied:**
-- **Refactored Discovery:** `EvaluationRunner._discover_benign()` and
-  `_discover_malware()` return the truth label as part of the archive metadata.
+- **Simulator-Resolved Discovery:** `EvaluationRunner` builds version-aware labels
+  from the staged dataset, queries the simulator index, and downloads selected
+  package artifacts for scanning.
 - **Detector Blindness:** The `ground_truth` label is passed to the database
   layer only *after* the detection adapters have completed their work. The
   detectors (SAST and LLMs) never receive the label.
-- **Version Isolation:** The evaluation pipeline treats each archive as a
-  discrete test instance, ensuring that a package's clean history does not
-  contaminate the evaluation of its poisoned releases.
+- **Version/Artifact Isolation:** The evaluation database key includes package,
+  version, artifact filename, detector, mode, and prompt strategy so multiple
+  versions of the same project cannot overwrite each other.
 
 **Residual risk:**
 "Pre-existing Knowledge Bias" in Frontier LLMs. If a model has seen security

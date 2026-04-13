@@ -46,11 +46,13 @@ backward-compat aliases no longer exist. EvalController is the sole active class
 
 ## F — evaluate.py
 - [x] F-1  EvaluationRunner.__init__
-- [x] F-2  _discover_benign() — latest version per package, skip controls/
-- [x] F-3  _discover_malware() — graceful if dir missing
-- [x] F-4  Folder-based ground truth: is_malicious bool from _discover_*() folder
-           membership, stored per-row at insert time. _build_ground_truth() removed.
-- [x] F-5  run() main loop with per-archive exception guard
+- [x] F-2  Simulator-resolved sample planning — query `/simple/<project>/`, select
+           bounded PEP 440 versions, download artifacts without install/execute.
+- [x] F-3  Version-aware ground truth — folder/manifest labels are used for metrics,
+           but detector input comes from simulator-downloaded artifacts.
+- [x] F-4  Controls remain opt-in via `--include-controls`; default runs avoid the
+           high-volume control set.
+- [x] F-5  run() main loop with per-artifact exception guard
 - [x] F-6  _print_metrics() — rich.table TP/TN/FP/FN/F1 per detector
 
 ## G — Integration
