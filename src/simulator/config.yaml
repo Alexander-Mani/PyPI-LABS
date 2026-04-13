@@ -14,7 +14,8 @@ attack_simulation:
   # Dependency confusion: accept arbitrary high version numbers
   allow_arbitrary_versions: true
 
-  # Credential takeover: enforce version bump on each upload
+  # Idempotency: reject duplicate distribution files while allowing wheel+sdist
+  # artifacts for the same release, as PyPI does.
   enforce_version_bump: true
 
 logging:

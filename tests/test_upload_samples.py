@@ -9,34 +9,10 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import types
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
-
-
-class _FakeLogger:
-    def remove(self):
-        return None
-
-    def add(self, *args, **kwargs):
-        return None
-
-    def info(self, *args, **kwargs):
-        return None
-
-    def warning(self, *args, **kwargs):
-        return None
-
-    def error(self, *args, **kwargs):
-        return None
-
-    def debug(self, *args, **kwargs):
-        return None
-
-
-sys.modules.setdefault("loguru", types.SimpleNamespace(logger=_FakeLogger()))
 
 from src.injector import upload_samples  # noqa: E402
 
@@ -55,14 +31,16 @@ class _FakeResponse:
         return self._body
 
 
-def test_local_existing_version_skips_twine(monkeypatch, tmp_path):
+def test_local_existing_artifact_skips_twine(monkeypatch, tmp_path):
     archive = tmp_path / "colorama-0.1.1.tar.gz"
     archive.write_text("placeholder", encoding="utf-8")
 
     def fake_urlopen(url, timeout):
-        assert url == "http://127.0.0.1:8080/api/versions/colorama"
+        assert url == "http://127.0.0.1:8080/api/files/colorama"
         assert timeout == 5
-        return _FakeResponse(b'{"project": "colorama", "versions": ["0.1.1"]}')
+        return _FakeResponse(
+            b'{"project": "colorama", "files": [{"version": "0.1.1", "filename": "colorama-0.1.1.tar.gz"}]}'
+        )
 
     def fail_run(*args, **kwargs):
         raise AssertionError("twine should not run for an existing simulator version")
@@ -79,13 +57,15 @@ def test_local_existing_version_skips_twine(monkeypatch, tmp_path):
     assert result == "skipped"
 
 
-def test_local_new_version_uploads_without_skip_existing(monkeypatch, tmp_path):
+def test_local_new_artifact_uploads_without_skip_existing(monkeypatch, tmp_path):
     archive = tmp_path / "colorama-0.1.2.tar.gz"
     archive.write_text("placeholder", encoding="utf-8")
     captured = {}
 
     def fake_urlopen(url, timeout):
-        return _FakeResponse(b'{"project": "colorama", "versions": ["0.1.1"]}')
+        return _FakeResponse(
+            b'{"project": "colorama", "files": [{"version": "0.1.2", "filename": "colorama-0.1.2.whl"}]}'
+        )
 
     def fake_run(cmd, capture_output, text):
         captured["cmd"] = cmd
@@ -119,7 +99,7 @@ def test_warehouse_upload_uses_skip_existing_without_precheck(monkeypatch, tmp_p
         captured["cmd"] = cmd
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(upload_samples, "_simulator_has_version", fail_precheck)
+    monkeypatch.setattr(upload_samples, "_simulator_has_artifact", fail_precheck)
     monkeypatch.setattr(upload_samples.subprocess, "run", fake_run)
 
     result = upload_samples._twine_upload(
@@ -182,3 +162,12 @@ def test_malicious_category_uploads_extracted_bundle_archives(monkeypatch, tmp_p
         "colourama/0.1.6/colourama-0.1.6.tar.gz",
         "secmeasure/0.1.0/secmeasure-0.1.0-py3-none-any.whl",
     ]
+
+
+def test_controls_dir_falls_back_to_nested_benign_controls(tmp_path):
+    samples_dir = tmp_path / "samples"
+    (samples_dir / "controls").mkdir(parents=True)
+    nested = samples_dir / "benign" / "controls"
+    nested.mkdir(parents=True)
+
+    assert upload_samples._controls_dir(samples_dir) == nested

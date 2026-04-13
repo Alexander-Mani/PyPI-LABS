@@ -57,11 +57,15 @@ class PackageIndex:
 
         sim_cfg = self._cfg.get("attack_simulation", {})
 
-        # Credential takeover: enforce version bump
+        # PyPI permits multiple distribution files for the same release
+        # (e.g., wheel + sdist), but the exact same file should not be
+        # uploaded twice during idempotent deployment reruns.
         if sim_cfg.get("enforce_version_bump", True):
-            if self._metadata.version_exists(name, version):
-                log.warning(f"Upload rejected: {name}=={version} already exists")
-                return "Version already exists", 400
+            if self._metadata.file_exists(name, version, file_obj.filename):
+                log.warning(
+                    f"Upload rejected: {name}=={version} {file_obj.filename} already exists"
+                )
+                return "Distribution file already exists", 400
 
         # Store file
         filename = file_obj.filename
@@ -123,6 +127,11 @@ class PyPISimulatorApp:
         def api_versions(project_name: str):
             versions = self._package_index._metadata.list_versions(project_name)
             return {"project": project_name, "versions": versions}
+
+        @app.route("/api/files/<project_name>")
+        def api_files(project_name: str):
+            files = self._package_index._metadata.list_files(project_name)
+            return {"project": project_name, "files": files}
 
     def run(self):
         srv = self._cfg["server"]

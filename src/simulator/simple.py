@@ -6,9 +6,9 @@ standard `pip install` can discover and download packages from the
 simulated index directory.
 """
 
-import re
 from pathlib import Path
 from flask import Blueprint, render_template_string, abort
+from packaging.utils import canonicalize_name
 
 
 # ---------------------------------------------------------------------------
@@ -17,7 +17,7 @@ from flask import Blueprint, render_template_string, abort
 
 def _normalize(name: str) -> str:
     """Normalise a package name per PEP 503 (lower-case, collapse runs of [-_.])."""
-    return re.sub(r"[-_.]+", "-", name).lower()
+    return str(canonicalize_name(name.strip()))
 
 
 # ---------------------------------------------------------------------------

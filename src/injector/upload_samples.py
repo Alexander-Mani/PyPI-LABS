@@ -2,11 +2,12 @@
 """
 upload_samples.py — VM-targeted batch uploader for the PyPi-SCADA injector.
 
-Scans a pre-extracted samples directory and uploads all packages to the
+Scans a pre-extracted samples directory and uploads all distribution artifacts to the
 local simulator via twine. Handles three archive categories:
 
   benign/   — per-package subdirs of .tar.gz / .whl files from PyPI
   controls/ — same layout; infrastructure packages used as FP baseline
+              (benign/controls/ is also accepted as a legacy layout)
   malware_backstabbers_knife/ — extracted malicious bundle containing
                                 package/version/.tar.gz or .whl archives;
                                 legacy password-protected container zips are
@@ -59,11 +60,13 @@ try:
     from packaging.utils import (
         InvalidSdistFilename,
         InvalidWheelFilename,
+        canonicalize_name,
         parse_sdist_filename,
         parse_wheel_filename,
     )
 except ImportError:  # pragma: no cover - deployment dependency guard
     InvalidSdistFilename = InvalidWheelFilename = ValueError
+    canonicalize_name = None
     parse_sdist_filename = parse_wheel_filename = None
 
 # ---------------------------------------------------------------------------
@@ -121,7 +124,7 @@ def _archive_name_version(archive: Path) -> tuple[str, str] | None:
             name, version, *_ = parse_wheel_filename(archive.name)
         else:
             name, version = parse_sdist_filename(archive.name)
-        return str(name), str(version)
+        return str(canonicalize_name(str(name))), str(version)
     except (InvalidSdistFilename, InvalidWheelFilename, ValueError) as exc:
         log.warning(
             f"Non-canonical archive filename, trying fallback parse: "
@@ -130,27 +133,33 @@ def _archive_name_version(archive: Path) -> tuple[str, str] | None:
 
     match = _NAME_VER_RE.match(_strip_dist_suffix(archive.name))
     if match:
-        return match.group(1), match.group(2)
+        return str(canonicalize_name(match.group(1))), match.group(2)
 
     log.error(f"Cannot parse archive name/version from {archive.name}")
     return None
 
 
-def _simulator_has_version(simulator_url: str, name: str, version: str) -> bool | None:
+def _simulator_has_artifact(simulator_url: str, name: str, version: str, filename: str) -> bool | None:
     """
     Return True/False if the simulator API can be queried, None if unavailable.
+    Idempotency is artifact-level because a PyPI release may legitimately have
+    both a wheel and an sdist for the same package version.
     """
     project = urllib.parse.quote(name)
-    url = simulator_url.rstrip("/") + f"/api/versions/{project}"
+    url = simulator_url.rstrip("/") + f"/api/files/{project}"
     try:
         with urllib.request.urlopen(url, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
-        log.error(f"Could not query simulator versions for {name}: {exc}")
+        log.error(f"Could not query simulator files for {name}: {exc}")
         return None
 
-    versions = {str(v) for v in data.get("versions", [])}
-    return version in versions
+    files = data.get("files", [])
+    return any(
+        str(item.get("version")) == version and str(item.get("filename")) == filename
+        for item in files
+        if isinstance(item, dict)
+    )
 
 
 def _supports_twine_skip_existing(repo_url: str) -> bool:
@@ -178,11 +187,11 @@ def _twine_upload(archive: Path, simulator_url: str, dry_run: bool) -> str:
             return "failed"
         name, version = parsed
 
-        exists = _simulator_has_version(simulator_url, name, version)
+        exists = _simulator_has_artifact(simulator_url, name, version, archive.name)
         if exists is None:
             return "failed"
         if exists:
-            log.info(f"Skipped existing: {name}=={version}")
+            log.info(f"Skipped existing: {name}=={version} {archive.name}")
             return "skipped"
 
     cmd = [
@@ -349,7 +358,7 @@ def _count_upload_result(result: str) -> tuple[int, int, int]:
 
 def _upload_malicious_category(malicious_dir: Path, simulator_url: str, dry_run: bool) -> tuple[int, int, int]:
     """
-    Upload malicious package archives staged under malware_backstabbers_knife/.
+    Upload malicious distribution artifacts staged under malware_backstabbers_knife/.
     The preferred deployment format is an extracted encrypted bundle containing
     package/version/*.whl or package/version/*.tar.gz files. Legacy individual
     password-protected container zips are still supported during transition.
@@ -367,7 +376,7 @@ def _upload_malicious_category(malicious_dir: Path, simulator_url: str, dry_run:
     legacy_zips = sorted(p for p in malicious_dir.glob("*.zip") if p.is_file())
     log.info(
         f"Scanning malware_backstabbers_knife/: "
-        f"{len(dist_archives)} package archive(s), {len(legacy_zips)} legacy zip(s)"
+        f"{len(dist_archives)} distribution artifact(s), {len(legacy_zips)} legacy zip(s)"
     )
 
     uploaded = skipped = failure = 0
@@ -412,6 +421,21 @@ def _upload_malicious_category(malicious_dir: Path, simulator_url: str, dry_run:
         shutil.rmtree(staging_dir, ignore_errors=True)
 
     return uploaded, skipped, failure
+
+
+def _controls_dir(samples_dir: Path) -> Path:
+    """
+    Controls have existed in both samples/controls/ and samples/benign/controls/
+    across dataset bundles. Prefer the top-level layout, but fall back to the
+    nested layout when the top-level directory is absent or empty.
+    """
+    top_level = samples_dir / "controls"
+    nested = samples_dir / "benign" / "controls"
+    if top_level.exists() and any(top_level.iterdir()):
+        return top_level
+    if nested.exists():
+        return nested
+    return top_level
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +492,7 @@ def main() -> None:
         total_fail += fail
 
     if mode in ("controls", "all"):
-        uploaded, skipped, fail = _upload_flat_category(samples_dir / "controls", simulator_url, dry_run)
+        uploaded, skipped, fail = _upload_flat_category(_controls_dir(samples_dir), simulator_url, dry_run)
         total_uploaded += uploaded
         total_skipped += skipped
         total_fail += fail
