@@ -60,7 +60,8 @@ else
 fi
 
 echo "Step 3: Staging samples for the research pipeline"
-# The EvaluationRunner in evaluate.py expects samples under the repo root's samples/ directory.
+# The uploader and evaluator ground-truth builder expect samples under the repo root.
+# The evaluator scans artifacts downloaded back from the simulator, not this staging directory directly.
 # Default behavior is interactive unzip prompts (preserves operator choice).
 # Set FORCE_UNZIP_OVERWRITE=1 to force overwrite without prompts.
 UNZIP_FLAGS="-q"
@@ -236,12 +237,36 @@ sudo -u pypi-runner bash -c "
 _VERBOSE_FLAG=""
 [[ "${VERBOSE:-0}" == "1" ]] && _VERBOSE_FLAG="--verbose"
 
+_ARTIFACT_POLICY="${ARTIFACT_POLICY:-pip+sdist}"
+case "$_ARTIFACT_POLICY" in
+  pip|pip+sdist|sdist) ;;
+  *)
+    echo "ERROR: invalid ARTIFACT_POLICY: $_ARTIFACT_POLICY" >&2
+    echo "Allowed values: pip, pip+sdist, sdist" >&2
+    exit 1
+    ;;
+esac
+
+_VERSIONS_PER_PROJECT="${VERSIONS_PER_PROJECT:-2}"
+if ! [[ "$_VERSIONS_PER_PROJECT" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: VERSIONS_PER_PROJECT must be a positive integer" >&2
+  exit 1
+fi
+
+_INCLUDE_CONTROLS_FLAG=""
+[[ "${INCLUDE_CONTROLS:-0}" == "1" ]] && _INCLUDE_CONTROLS_FLAG="--include-controls"
+
 echo "Step 10: Running the evaluation pipeline (Entry-Point Scanning)"
 sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo
   # Defaulting to budget tier for safety; reads configs/models.json automatically.
-  python src/analyzer/evaluate.py --tier budget ${_VERBOSE_FLAG}
+  python src/analyzer/evaluate.py --tier budget --dry-run-resolution --skip-validation \
+    --versions-per-project \"${_VERSIONS_PER_PROJECT}\" \
+    --artifact-policy \"${_ARTIFACT_POLICY}\" ${_INCLUDE_CONTROLS_FLAG}
+  python src/analyzer/evaluate.py --tier budget ${_VERBOSE_FLAG} \
+    --versions-per-project \"${_VERSIONS_PER_PROJECT}\" \
+    --artifact-policy \"${_ARTIFACT_POLICY}\" ${_INCLUDE_CONTROLS_FLAG}
 "
 
 echo "Deployment and evaluation complete. Results stored in src/data/eval_results.db"
