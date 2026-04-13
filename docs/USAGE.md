@@ -42,7 +42,8 @@ Directories created automatically on first run:
 | `GET /simple/<project>/` | GET | PEP 503 project page (all files) |
 | `GET /packages/<project>/<filename>` | GET | Download a distribution file |
 | `POST /legacy/` | POST | twine upload endpoint |
-| `GET /api/versions/<project>` | GET | Analyzer helper — list all uploaded versions |
+| `GET /api/versions/<project>` | GET | Metadata helper — list all uploaded versions |
+| `GET /api/files/<project>` | GET | Injector helper — list uploaded `(version, filename)` artifacts |
 
 ### Test it manually
 
@@ -55,6 +56,9 @@ curl http://127.0.0.1:8080/simple/my-package/
 
 # Ask which versions were uploaded (used by the Analyzer)
 curl http://127.0.0.1:8080/api/versions/my-package
+
+# Ask which distribution files were uploaded (used by upload idempotency)
+curl http://127.0.0.1:8080/api/files/my-package
 
 # Install a package from the simulator (pip)
 pip install --index-url http://127.0.0.1:8080/simple/ my-package
@@ -75,7 +79,7 @@ storage:
 attack_simulation:
   allow_similar_names: true    # typosquatting: no Levenshtein guards
   allow_arbitrary_versions: true  # dep confusion: any version accepted
-  enforce_version_bump: true   # cred takeover: re-uploading same version → 400
+  enforce_version_bump: true   # duplicate file upload -> 400; wheel+sdist is allowed
 ```
 
 ---
@@ -94,16 +98,9 @@ The Injector uploads `.tar.gz` / `.whl` packages to the running Simulator via `t
 ### Run
 
 ```bash
-cd src/injector/
-
-# Upload everything (malicious + benign)
-./controller.sh all
-
-# Upload only malicious packages
-./controller.sh malicious
-
-# Upload only benign packages
-./controller.sh benign
+python src/injector/upload_samples.py \
+  --samples-dir samples \
+  --simulator-url http://127.0.0.1:8080
 ```
 
 ### Verify an upload
@@ -120,22 +117,6 @@ pip install --dry-run \
     my-package
 ```
 
-### Config (`injector/config.yaml`)
-
-```yaml
-simulator:
-  upload_url: "http://127.0.0.1:8080/legacy/"
-  repository_url: "http://127.0.0.1:8080/simple/"
-
-dataset:
-  malicious_dir: "../../samples/malware_backstabbers_knife"
-  benign_dir: "../../samples/benign"
-
-credentials:
-  username: "__token__"
-  password: "sim-token"   # any string — simulator has no real auth
-```
-
 ---
 
 ## 3. VM Deployment — `upload_samples.py`
@@ -143,7 +124,7 @@ credentials:
 For the provisioned VM environment where samples arrive as a benign/control
 archive (`benign_and_controlls.zip`) and one password-protected malicious bundle
 (`malware_backstabbers_knife.zip`, password `infected`), use
-`upload_samples.py` instead of `controller.sh`.
+`upload_samples.py`.
 
 See `docs/ops/DEPLOYMENT_MANIFEST.md` for full setup steps (account creation, sample
 extraction, venv). The account and security constraints are documented in
@@ -152,7 +133,8 @@ extraction, venv). The account and security constraints are documented in
 ### Prerequisites
 
 - Simulator running on `http://127.0.0.1:8080`
-- Samples extracted into a directory with this layout:
+- Samples extracted into a directory with this layout. Controls may be either
+  top-level `controls/` or nested `benign/controls/`; the VM uploader supports both.
 
 ```
 samples-extracted/
@@ -208,10 +190,49 @@ python src/injector/upload_samples.py \
 - Malicious package archives are normally extracted from the single encrypted
   deployment bundle before upload; legacy per-package container zips are still
   extracted to `/tmp/pypi-scada-staging/<uuid>/` and cleaned immediately.
-- Already-uploaded simulator versions are detected via `/api/versions/<project>`
-  and skipped before calling twine; reruns are safe.
+- The malware upload log reports distribution artifacts, not unique malicious
+  package projects. The analyzer later performs bounded package/version/artifact
+  selection from the simulator index.
+- Already-uploaded simulator artifacts are detected via `/api/files/<project>`
+  and skipped before calling twine; reruns are safe while still allowing a wheel
+  and sdist for the same release.
 - Upload failures are logged and counted but do not abort the run; the exit code is
   non-zero if any failure occurred.
+
+---
+
+## 4. Analyzer
+
+`evaluate.py` treats the simulator as the package index. It queries the simulator,
+downloads selected artifacts, and statically scans the downloaded archive without
+installing or executing it.
+
+Default selection policy:
+
+- Versions: latest and previous stable PEP 440 version per labelled project.
+- Extra baseline: dataset-declared LKGR versions are included when present.
+- Artifacts: pip-like preferred wheel plus the sdist when a distinct sdist exists.
+- Controls: skipped unless `--include-controls` is passed.
+
+```bash
+# Confirm what would be evaluated, without downloading/scanning.
+python src/analyzer/evaluate.py --dry-run-resolution --skip-validation
+
+# SAST-only simulator-resolved run.
+python src/analyzer/evaluate.py --sast-only
+
+# Budget LLM run; frontier should be reserved for final verified execution.
+python src/analyzer/evaluate.py --tier budget
+```
+
+Useful flags:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--versions-per-project` | `2` | Select latest-N stable versions per project |
+| `--artifact-policy` | `pip+sdist` | `pip`, `pip+sdist`, or `sdist` |
+| `--include-controls` | off | Include high-volume benign controls |
+| `--dry-run-resolution` | off | Print selected simulator artifacts without scanning |
 
 ---
 
@@ -220,9 +241,10 @@ python src/injector/upload_samples.py \
 ```
 1. Start simulator      →  cd src/simulator && python main.py
 2. Place packages       →  drop .tar.gz/.whl into samples/benign/ or samples/malware_backstabbers_knife/
-3. Run injector         →  cd src/injector && ./controller.sh all
+3. Run injector         →  python src/injector/upload_samples.py --samples-dir samples --simulator-url http://127.0.0.1:8080
 4. Confirm uploads      →  curl http://127.0.0.1:8080/simple/
-5. Run evaluation       →  python src/analyzer/evaluate.py  (entry-point scan, offline)
+5. Dry-run resolver     →  python src/analyzer/evaluate.py --dry-run-resolution --skip-validation
+6. Run evaluation       →  python src/analyzer/evaluate.py  (downloads from simulator, then scans)
    With LLM detectors   →  start LiteLLM first (see docs/ops/DEPLOYMENT_MANIFEST.md Step 7)
 ```
 
@@ -233,7 +255,7 @@ python src/injector/upload_samples.py \
 | Component | Log file |
 |---|---|
 | Simulator | `src/simulator/logs/simulator.log` |
-| Injector  | configured via `src/injector/config.yaml` |
+| Injector  | console output from `src/injector/upload_samples.py` |
 | Analyzer  | configured via `src/analyzer/config.yaml` |
 | LiteLLM   | `/home/proxy-runner/litellm.log` (VM deployment only) |
 
@@ -270,8 +292,6 @@ Run scripts from the repo root (`python src/analyzer/evaluate.py`), not from ins
 **`twine upload` fails with connection error**
 Simulator is not running. Start it first with `python main.py`.
 
-**Upload rejected: `Version already exists`**
-`enforce_version_bump: true` is set in `simulator/config.yaml`. Either bump the version in your package or set the flag to `false` for testing.
-
-**`controller.sh: python3: command not found`**
-The injector uses Python as a YAML parser fallback. Make sure `python3` and `pyyaml` are available in your PATH.
+**Upload rejected: `Distribution file already exists`**
+`enforce_version_bump: true` is set in `simulator/config.yaml`. Re-running the
+uploader should skip existing artifacts automatically via `/api/files/<project>`.

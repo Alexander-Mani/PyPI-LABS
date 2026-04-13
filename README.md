@@ -27,7 +27,7 @@ samples/
 
 ### Simulator (`src/simulator/`)
 
-A minimal PyPI-compatible HTTP server for controlled experiments. Hosts a flat-file package index and exposes endpoints for `pip install`, `twine upload`, and the analyzer's version-listing API.
+A minimal PyPI-compatible HTTP server for controlled experiments. Hosts a flat-file package index and exposes endpoints for `pip install`, `twine upload`, artifact download, and metadata checks used by the injector/analyzer.
 
 - `main.py` -- `PyPISimulatorApp`, `PackageIndex` (Flask app, upload handling)
 - `simple.py` -- `SimpleAPI`, `ProjectIndex`, `SimpleIndexRenderer` (PEP 503 HTML index)
@@ -37,24 +37,20 @@ A minimal PyPI-compatible HTTP server for controlled experiments. Hosts a flat-f
 Attack simulation flags control the simulator's acceptance behavior:
 - `allow_similar_names` -- disables Levenshtein guards (enables typosquatting)
 - `allow_arbitrary_versions` -- accepts inflated version numbers (enables dependency confusion)
-- `enforce_version_bump` -- requires new version on each upload (enables credential takeover replay)
+- `enforce_version_bump` -- rejects duplicate distribution files while still allowing multiple artifacts for the same release, matching PyPI wheel/sdist behavior
 
 ### Injector (`src/injector/`)
 
 Feeds packages from the sample dataset into the simulator in the correct chronological order.
 
-- `controller.sh` -- shell wrapper around `twine` that uploads `.tar.gz`/`.whl` files to the simulator's `/legacy/` endpoint (local dev workflow)
-- `upload_samples.py` -- VM-targeted batch uploader; scans a pre-extracted `samples-extracted/` directory, sorts benign and control archives by version before upload, and extracts password-protected malicious zips before uploading the inner archive (VM deployment workflow)
-- `pull_benign.py` -- downloads benign version pairs from PyPI into the dataset directory
-- `benign_samples.yaml` -- defines which version pairs to download per attack category
-- `config.yaml` -- simulator URLs, dataset paths, twine credentials
+- `upload_samples.py` -- batch uploader for benign, controls, and malware; sorts benign/control archives by version before upload, supports the single encrypted malware bundle layout, and skips artifacts already present in the simulator.
 
 ### Analyzer (`src/analyzer/`)
 
-The primary detection pipeline is the **entry-point scanning evaluation pipeline**, which runs offline against the sample archives. This architecture captures execution at install-time (`setup.py`, `pyproject.toml`) and import-time (`__init__.py`).
+The primary detection pipeline is the **entry-point scanning evaluation pipeline**, which resolves package artifacts from the local PyPI simulator without installing or executing them. This architecture captures install-time (`setup.py`, `pyproject.toml`) and import-time (`__init__.py`) attack surface while keeping malware inert.
 
 **Entry-point scanning evaluation pipeline** (primary):
-- `evaluate.py` -- `EvaluationRunner` (discovers archives → extract → filter → detect → print TP/TN/FP/FN/F1 table)
+- `evaluate.py` -- `EvaluationRunner` (resolve from simulator → download artifact → extract → filter → detect → print TP/TN/FP/FN/F1 table)
 - `entry_extractor.py` -- `EntryPointExtractor`, `PackageInfo` (unpacks `.tar.gz`/`.whl`/`.zip`, extracts `setup.py`, `__init__.py`, `pyproject.toml` and their imports up to **3 levels deep** via BFS)
 - `heuristic_filter.py` -- `HeuristicFilter` (flags `base64_or_hex`, `network_in_install_hook`, `shell_execution`, `bundled_binary` before LLM evaluation)
 - `detection_controller.py` -- `EvalController` (orchestration layer)
@@ -95,6 +91,8 @@ The benign dataset is structured in four tiers, each serving a distinct pipeline
 The high-volume controls cover the 10 most-downloaded PyPI packages (`boto3`, `urllib3`, `requests`, `certifi`, `botocore`, `setuptools`, `packaging`, `idna`, `charset-normalizer`, `python-dateutil`) — approximately 5,500 versions total. They are kept under `benign/controls/` and skipped by the evaluation runner's default mode to avoid thousands of redundant API calls.
 
 **Sample management scripts:**
+
+These helper scripts live in the ignored local/VM `samples/` workspace and are not repo-tracked files:
 - `samples/download_benign.py` -- downloads versions from PyPI for differential baseline and targeted control tiers
 - `samples/create_synthetic.py` -- builds minimal benign stubs for dependency confusion packages
 - `samples/download_controls.py` -- downloads all historical versions of the top-10 packages into `benign/controls/`; supports `--dry-run`
@@ -112,24 +110,27 @@ python3.11 -m venv .venv && source .venv/bin/activate
 pip install --require-hashes --no-deps -r requirements/requirements.txt
 
 # 2. Collect benign samples
+# These helpers are local/VM sample-workspace files, not repo-tracked files.
 python samples/download_benign.py
 python samples/create_synthetic.py
 # Optional: high-volume controls (≈5 500 files, takes a while)
 python samples/download_controls.py
 
-# 3. Run the offline evaluation pipeline (no simulator needed)
+# 3. Start the simulator and upload the dataset
+cd src/simulator && python main.py
+cd ../..
+python src/injector/upload_samples.py --samples-dir samples --simulator-url http://127.0.0.1:8080
+
+# 4. Verify simulator-resolved evaluation scope
+python src/analyzer/evaluate.py --dry-run-resolution --skip-validation
+
+# 5. Run the evaluation pipeline against simulator-fetched artifacts
 #    SAST only — no LiteLLM required
 python src/analyzer/evaluate.py --sast-only
 
 #    Full pipeline — start LiteLLM proxy first (see docs/ops/DEPLOYMENT_MANIFEST.md Step 7)
 #    Default tier is 'budget'; results stored in src/data/eval_results.db
 python src/analyzer/evaluate.py --tier budget
-
-# 4. Start the simulator (local dev only — for injection testing)
-cd src/simulator && python main.py
-
-# 5. Inject packages via controller.sh (local dev only)
-cd src/injector && bash controller.sh all
 
 # 6. Run the test suite
 pytest tests/
@@ -157,7 +158,7 @@ the rationale for the unprivileged account, API key handling, network isolation 
 evaluation, and tmpfs extraction of malicious archives — are documented in
 [`docs/ops/RISK_DIARY.md`](docs/ops/RISK_DIARY.md).
 
-Use `upload_samples.py` (not `controller.sh`) on the VM:
+Use `upload_samples.py` on the VM:
 
 ```bash
 python src/injector/upload_samples.py \

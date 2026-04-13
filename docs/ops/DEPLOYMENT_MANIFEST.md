@@ -1,6 +1,6 @@
 # Deployment Manifest: PyPI-SCADA VM
 
-The human operator executes these sequential steps to deploy the PyPI-SCADA pipeline on the provisioned virtual machine. This architecture implements **Entry-Point Scanning** and routes all LLM requests through a local LiteLLM proxy.
+The human operator executes these sequential steps to deploy the PyPI-SCADA pipeline on the provisioned virtual machine. This architecture implements **Entry-Point Scanning**, resolves package artifacts from the local PyPI simulator, and routes all LLM requests through a local LiteLLM proxy.
 
 ***
 
@@ -61,7 +61,7 @@ sudo -u pypi-runner rm /home/pypi-runner/.netrc
 
 ## Step 3: Stage Samples
 
-The `evaluate.py` script expects a specific directory structure within the repository.
+The uploader and ground-truth builder expect a specific directory structure within the repository. `evaluate.py` uses this staged dataset for labels and candidate metadata, but downloads the artifacts it scans from the simulator.
 
 ```bash
 sudo -u pypi-runner bash -c "
@@ -192,6 +192,18 @@ sudo -u pypi-runner bash -c "
 sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo
+  python src/analyzer/evaluate.py --tier budget --dry-run-resolution --skip-validation
   python src/analyzer/evaluate.py --tier budget
 "
+```
+
+The evaluation stage resolves packages from the simulator. It does not install or
+execute package code. Optional overrides:
+
+```bash
+ARTIFACT_POLICY=pip        # pip, pip+sdist, or sdist
+VERSIONS_PER_PROJECT=2     # latest-N stable versions per labelled project
+UPLOAD_CATEGORIES=malicious # benign, controls, malicious, all; space-separated
+INCLUDE_CONTROLS=1         # include high-volume benign controls
+VERBOSE=1                  # DEBUG logs
 ```

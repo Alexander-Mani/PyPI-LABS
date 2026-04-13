@@ -32,6 +32,7 @@ MANIFEST
 *.manifest
 *.spec
 .claude_view
+commits.sh
 
 # Installer logs
 pip-log.txt
