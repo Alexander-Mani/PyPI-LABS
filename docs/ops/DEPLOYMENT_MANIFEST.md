@@ -192,7 +192,7 @@ before evaluation:
 sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo
-  python scripts/litellm_smoke.py --base-url http://127.0.0.1:4000
+  python scripts/litellm_smoke.py --base-url http://127.0.0.1:4000 --retries 3 --retry-delay 20
 "
 ```
 
