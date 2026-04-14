@@ -26,6 +26,16 @@ from adapters import (
 log = get_logger()
 
 
+def _summarize_error(details: dict | None, limit: int = 500) -> str:
+    if not details:
+        return "no error details"
+    message = str(details.get("error") or details)
+    collapsed = " ".join(message.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[:limit] + "..."
+
+
 # ---------------------------------------------------------------------------
 # EvalController — orchestrates all adapter tracks in parallel
 # ---------------------------------------------------------------------------
@@ -122,6 +132,8 @@ class EvalController:
                         f"    ✓ {res.detector}:{res.experiment_mode}:{strategy}"
                         f" → {verdict_str} ({elapsed:.1f}s)"
                     )
+                    if res.experiment_mode == "error":
+                        log.warning(f"      error detail: {_summarize_error(res.details)}")
                 except Exception as exc:
                     name = getattr(adapter, "_tool", None) or getattr(adapter, "_detector_name", None) or "unknown"
                     res = EvalDetectionResult(
@@ -132,6 +144,7 @@ class EvalController:
                         details={"error": str(exc)},
                     )
                     log.info(f"    ✓ {name}:error:{strategy} → ERROR (0.0s)")
+                    log.warning(f"      error detail: {_summarize_error(res.details)}")
 
                 results.append(res)
                 # Propagate extractor-level bad-password skips into the result details.
