@@ -35,7 +35,7 @@ log = get_logger()
 @dataclass
 class EvalDetectionResult:
     detector: str
-    experiment_mode: str    # "static" | "hybrid" | "agentic" | "llm_raw"
+    experiment_mode: str    # "static" | "hybrid" | "agentic" | "llm_raw" | "error"
     verdict: bool           # True = malicious
     confidence: float | None
     heuristic_flags: list[str]
@@ -384,8 +384,18 @@ class AgenticAdapter(DetectorAdapter):
         except NotImplementedError:
             raise
         except Exception as exc:
-            verdict, confidence, details = False, None, {"error": str(exc)}
-            in_tok, out_tok, total_cost = 0, 0, 0.0
+            return EvalDetectionResult(
+                detector=self._detector_name,
+                experiment_mode="error",
+                verdict=False,
+                confidence=None,
+                heuristic_flags=list(pkg.heuristic_flags),
+                exec_time_ms=int((_time.monotonic() - t0) * 1000),
+                api_cost_usd=0.0,
+                input_tokens=0,
+                output_tokens=0,
+                details={"error": str(exc), "model": self._model_name},
+            )
         finally:
             self._current_pkg = None
 

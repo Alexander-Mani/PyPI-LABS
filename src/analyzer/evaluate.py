@@ -543,6 +543,42 @@ class EvaluationRunner:
             resolver_policy=benign_sample.resolver_policy,
         )
 
+        llm_results = [r for r in results if r.experiment_mode != "static"]
+        successful_llm_results = [r for r in llm_results if r.experiment_mode != "error"]
+        tokenized_llm_results = [
+            r for r in successful_llm_results
+            if (r.input_tokens + r.output_tokens) > 0
+        ]
+
+        if not llm_results:
+            raise SystemExit(
+                "HALT: financial validation did not run any LLM/agentic adapters. "
+                "Check tier selection and analyzer model configs."
+            )
+        if not successful_llm_results:
+            raise SystemExit(
+                "HALT: financial validation produced no successful LLM/agentic "
+                "results. Check LiteLLM proxy readiness and model routing."
+            )
+        if not tokenized_llm_results:
+            raise SystemExit(
+                "HALT: financial validation produced successful LLM/agentic rows "
+                "with zero token usage. Check LiteLLM proxy/model routing."
+            )
+
+        missing_price_models = sorted(
+            {
+                str(r.details.get("model", ""))
+                for r in tokenized_llm_results
+                if str(r.details.get("model", "")) not in _TOKEN_PRICES
+            }
+        )
+        if missing_price_models:
+            raise SystemExit(
+                "HALT: missing token price configuration for model(s): "
+                + ", ".join(missing_price_models)
+            )
+
         actual_total   = sum(r.api_cost_usd for r in results)
         expected_total = 0.0
         for r in results:
@@ -565,6 +601,11 @@ class EvaluationRunner:
                     f"{divergence * 100:.1f}% > 20%. "
                     "Check model routing or pricing table."
                 )
+        elif expected_total > 0:
+            log.warning(
+                "LiteLLM reported zero cost for nonzero LLM token usage; "
+                "using token-math estimate for budget projection."
+            )
 
         n_packages = len(samples)
         per_pkg    = actual_total if actual_total > 0 else expected_total
