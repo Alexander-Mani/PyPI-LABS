@@ -89,6 +89,30 @@ def test_financial_validation_passes_when_selected_detector_succeeds():
     _runner_with_controller(Controller())._validate_financial_airgap()
 
 
+def test_financial_validation_warns_not_halts_on_cost_divergence_under_cap():
+    class Controller:
+        def expected_non_static_detectors(self):
+            return {"gpt_nano"}
+
+        def run(self, **kwargs):
+            return [
+                EvalDetectionResult(
+                    detector="gpt_nano",
+                    experiment_mode="hybrid",
+                    verdict=False,
+                    confidence=0.9,
+                    heuristic_flags=[],
+                    exec_time_ms=1,
+                    api_cost_usd=0.0001,
+                    input_tokens=100,
+                    output_tokens=20,
+                    details={"model": "gpt-5.4-nano"},
+                ),
+            ]
+
+    _runner_with_controller(Controller())._validate_financial_airgap()
+
+
 def test_financial_validation_halts_when_selected_detector_all_errors():
     class Controller:
         def expected_non_static_detectors(self):

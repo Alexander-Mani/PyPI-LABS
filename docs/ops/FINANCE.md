@@ -29,7 +29,7 @@ This funds the massive context safety net. The pipeline routes complex dependenc
 The operator must maintain a strict paper trail to secure university reimbursement. 
 
 * **Vendor Receipts:** The operator downloads all PDF invoices generated during prepaid top-ups or monthly billing cycles.
-* **Database Logs:** LiteLLM calculates the exact USD cost of every API request based on token consumption. The analyzer pipeline writes this metric into the `eval_results.db` SQLite database. The operator uses SQL queries to correlate costs directly to experimental runs.
+* **Database Logs:** LiteLLM reports the actual USD cost of every API request. The analyzer pipeline writes this metric into the `eval_results.db` SQLite database and uses it as the authoritative budget-control value. The static token-price table is retained as a sanity-check estimate; divergence is logged for review but does not halt a run unless the projected LiteLLM-reported cost exceeds the hard cap.
 * **Bank Statements:** The operator exports the monthly Indó statement to verify ISK to USD conversion rates and foreign transaction fees.
 
 ---

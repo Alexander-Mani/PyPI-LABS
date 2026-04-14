@@ -68,6 +68,7 @@ _TOKEN_PRICES: dict[str, tuple[float, float]] = {
 }
 
 _BUDGET_HARD_CAP_USD = 10.00
+_COST_DIVERGENCE_WARN_THRESHOLD = 0.20
 _STEM_RE = re.compile(r"^(.+?)-(\d[^-]*)(?:-.*)?$")
 _PROFILES_PATH = _REPO_ROOT / "configs" / "evaluation_profiles.yaml"
 
@@ -553,8 +554,9 @@ class EvaluationRunner:
         """
         Run one benign package through all active LLM adapters.
         Compare LiteLLM-reported cost against token-math estimate.
-        Project to full dataset and HALT if projection > hard cap
-        or if actual/expected diverge by > 20%.
+        Project to full dataset and HALT if projection > hard cap.
+        Token-math divergence is logged as a sanity-check warning because the
+        LiteLLM-reported actual cost is the authoritative budget value.
         """
         samples = self._resolve_simulator_samples(download=False)
         benign_sample = next((sample for sample in samples if not sample.ground_truth), None)
@@ -658,12 +660,13 @@ class EvaluationRunner:
 
         if expected_total > 0 and actual_total > 0:
             divergence = abs(actual_total - expected_total) / expected_total
-            if divergence > 0.20:
-                raise SystemExit(
-                    f"HALT: LiteLLM-reported cost (${actual_total:.4f}) diverges "
+            if divergence > _COST_DIVERGENCE_WARN_THRESHOLD:
+                log.warning(
+                    f"LiteLLM-reported cost (${actual_total:.4f}) diverges "
                     f"from token-math estimate (${expected_total:.4f}) by "
-                    f"{divergence * 100:.1f}% > 20%. "
-                    "Check model routing or pricing table."
+                    f"{divergence * 100:.1f}% > "
+                    f"{_COST_DIVERGENCE_WARN_THRESHOLD * 100:.0f}%; "
+                    "using LiteLLM actual cost for budget projection."
                 )
         elif expected_total > 0:
             log.warning(
