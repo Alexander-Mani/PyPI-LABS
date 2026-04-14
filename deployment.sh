@@ -132,7 +132,7 @@ sudo iptables -F OUTPUT || true
 sudo iptables -A OUTPUT -m owner --uid-owner pypi-runner -o lo -j ACCEPT || true
 sudo iptables -A OUTPUT -m owner --uid-owner pypi-runner -j DROP || true
 
-# proxy-runner: Allow local, DNS, and specific vendor CIDRs
+# proxy-runner: Allow local, DNS, and resolved LLM vendor API endpoints
 sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -o lo -j ACCEPT || true
 
 # DNS restricted to Google Public DNS (8.8.8.8, 8.8.4.4) and Cloudflare (1.1.1.1).
@@ -144,14 +144,29 @@ for _dns_ip in 8.8.8.8 8.8.4.4 1.1.1.1; do
     -p tcp --dport 53 -d "$_dns_ip" -j ACCEPT || true
 done
 
-ANTHROPIC_CIDR="104.18.0.0/16" 
-OPENAI_CIDR="162.159.0.0/16"
-GOOGLE_CIDR="142.250.0.0/15"
-
-sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d $ANTHROPIC_CIDR -p tcp --dport 443 -j ACCEPT || true
-sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d $OPENAI_CIDR -p tcp --dport 443 -j ACCEPT || true
-sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d $GOOGLE_CIDR -p tcp --dport 443 -j ACCEPT || true
-sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d api.together.xyz -p tcp --dport 443 -j ACCEPT || true
+LLM_VENDOR_HOSTS=(
+  api.anthropic.com
+  api.openai.com
+  generativelanguage.googleapis.com
+  api.together.xyz
+)
+declare -A _allowed_vendor_ips=()
+for _vendor_host in "${LLM_VENDOR_HOSTS[@]}"; do
+  echo "Resolving LLM vendor host: ${_vendor_host}"
+  mapfile -t _vendor_ips < <(getent ahostsv4 "$_vendor_host" | awk '{print $1}' | sort -u)
+  if [[ "${#_vendor_ips[@]}" -eq 0 ]]; then
+    echo "ERROR: could not resolve IPv4 address for ${_vendor_host}" >&2
+    exit 1
+  fi
+  for _vendor_ip in "${_vendor_ips[@]}"; do
+    if [[ -n "${_allowed_vendor_ips[$_vendor_ip]:-}" ]]; then
+      continue
+    fi
+    _allowed_vendor_ips[$_vendor_ip]=1
+    echo "Allowing proxy-runner HTTPS egress to ${_vendor_host} (${_vendor_ip})"
+    sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d "$_vendor_ip" -p tcp --dport 443 -j ACCEPT || true
+  done
+done
 sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -j DROP || true
 
 echo "Step 7: Starting LiteLLM proxy"
@@ -185,6 +200,18 @@ if [ "$ready" -ne 1 ]; then
   sudo -u proxy-runner pgrep -a -x litellm || true
   echo "Last 40 lines of /home/proxy-runner/litellm.log:"
   sudo -u proxy-runner tail -n 40 /home/proxy-runner/litellm.log || true
+  exit 1
+fi
+
+echo "Running LiteLLM budget-model smoke test"
+if ! sudo -u pypi-runner bash -c "
+  source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
+  cd /home/pypi-runner/pypi-scada-repo
+  python scripts/litellm_smoke.py --base-url http://127.0.0.1:4000
+"; then
+  echo "ERROR: LiteLLM smoke test failed. Aborting before evaluation."
+  echo "Last 80 lines of /home/proxy-runner/litellm.log:"
+  sudo -u proxy-runner tail -n 80 /home/proxy-runner/litellm.log || true
   exit 1
 fi
 

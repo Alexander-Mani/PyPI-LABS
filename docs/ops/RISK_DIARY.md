@@ -90,14 +90,12 @@ sudo iptables -A OUTPUT -m owner --uid-owner pypi-runner ! -o lo -j DROP
 # proxy-runner: loopback always allowed
 sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -o lo -j ACCEPT
 
-# proxy-runner: LLM vendor endpoints only
-ANTHROPIC_CIDR="104.18.0.0/16"
-OPENAI_CIDR="162.159.0.0/16"
-GOOGLE_CIDR="142.250.0.0/15"
-sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d $ANTHROPIC_CIDR -p tcp --dport 443 -j ACCEPT
-sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d $OPENAI_CIDR -p tcp --dport 443 -j ACCEPT
-sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d $GOOGLE_CIDR -p tcp --dport 443 -j ACCEPT
-sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d api.together.xyz -p tcp --dport 443 -j ACCEPT
+# proxy-runner: LLM vendor endpoints only, resolved at deployment time
+for host in api.anthropic.com api.openai.com generativelanguage.googleapis.com api.together.xyz; do
+  for ip in $(getent ahostsv4 "$host" | awk '{print $1}' | sort -u); do
+    sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d "$ip" -p tcp --dport 443 -j ACCEPT
+  done
+done
 sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -j DROP
 ```
 
@@ -105,8 +103,8 @@ sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -j DROP
 DNS-over-HTTPS payloads tunnelling over localhost-forwarded ports; unlikely in the
 lab network topology. Also, if the malware payload targets the local simulator's
 HTTP port (8080), it could interact with the simulated index — logged but not blocked.
-The vendor CIDR blocks used are broad Cloudflare ranges — they may cover non-LLM
-endpoints. Accepted given the experimental context.
+LLM vendor CDN IPs can rotate after deployment, so long-running VMs may need the
+egress rules refreshed by rerunning the firewall step or redeploying.
 
 ---
 

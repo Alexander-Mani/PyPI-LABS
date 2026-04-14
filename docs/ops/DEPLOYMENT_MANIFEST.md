@@ -123,7 +123,7 @@ chmod 600 /home/proxy-runner/.env
 
 ## Step 6: Configure Egress Filtering
 
-Restrict `pypi-runner` to local traffic only. Allow `proxy-runner` to reach approved API CIDRs and resolve DNS.
+Restrict `pypi-runner` to local traffic only. Allow `proxy-runner` to reach approved API hostnames resolved at deployment time and resolve DNS.
 
 ```bash
 sudo modprobe xt_owner
@@ -133,11 +133,11 @@ sudo iptables -F OUTPUT || true
 sudo iptables -A OUTPUT -m owner --uid-owner pypi-runner -o lo -j ACCEPT
 sudo iptables -A OUTPUT -m owner --uid-owner pypi-runner -j DROP
 
-# proxy-runner: Allow local, DNS (locked to safe resolvers), and vendor CIDRs
+# proxy-runner: Allow local, DNS (locked to safe resolvers), and resolved vendor API IPs
 sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -o lo -j ACCEPT
 
 # DNS restricted to Google (8.8.8.8, 8.8.4.4) and Cloudflare (1.1.1.1)
-# — prevents DNS tunneling from malware under test
+# - prevents DNS tunneling from malware under test
 for _dns_ip in 8.8.8.8 8.8.4.4 1.1.1.1; do
   sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner \
     -p udp --dport 53 -d "$_dns_ip" -j ACCEPT
@@ -145,10 +145,27 @@ for _dns_ip in 8.8.8.8 8.8.4.4 1.1.1.1; do
     -p tcp --dport 53 -d "$_dns_ip" -j ACCEPT
 done
 
-sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d 104.18.0.0/16 -p tcp --dport 443 -j ACCEPT  # Anthropic/Cloudflare
-sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d 162.159.0.0/16 -p tcp --dport 443 -j ACCEPT # OpenAI/Cloudflare
-sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d 142.250.0.0/15 -p tcp --dport 443 -j ACCEPT # Google
-sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d api.together.xyz -p tcp --dport 443 -j ACCEPT # Together AI
+LLM_VENDOR_HOSTS=(
+  api.anthropic.com
+  api.openai.com
+  generativelanguage.googleapis.com
+  api.together.xyz
+)
+declare -A _allowed_vendor_ips=()
+for _vendor_host in "${LLM_VENDOR_HOSTS[@]}"; do
+  mapfile -t _vendor_ips < <(getent ahostsv4 "$_vendor_host" | awk '{print $1}' | sort -u)
+  if [[ "${#_vendor_ips[@]}" -eq 0 ]]; then
+    echo "ERROR: could not resolve IPv4 address for ${_vendor_host}" >&2
+    exit 1
+  fi
+  for _vendor_ip in "${_vendor_ips[@]}"; do
+    if [[ -n "${_allowed_vendor_ips[$_vendor_ip]:-}" ]]; then
+      continue
+    fi
+    _allowed_vendor_ips[$_vendor_ip]=1
+    sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d "$_vendor_ip" -p tcp --dport 443 -j ACCEPT
+  done
+done
 sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -j DROP
 ```
 
@@ -165,6 +182,17 @@ sudo -u proxy-runner bash -c "
   source /home/proxy-runner/.env
   source /home/proxy-runner/venv/bin/activate
   nohup litellm --config /home/proxy-runner/litellm_config.yaml --port 4000 > /home/proxy-runner/litellm.log 2>&1 &
+"
+```
+
+After `/health/readiness` returns healthy, run the budget-tier proxy smoke test
+before evaluation:
+
+```bash
+sudo -u pypi-runner bash -c "
+  source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
+  cd /home/pypi-runner/pypi-scada-repo
+  python scripts/litellm_smoke.py --base-url http://127.0.0.1:4000
 "
 ```
 

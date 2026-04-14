@@ -282,7 +282,7 @@ litellm --config configs/litellm_config.yaml --port 4000
 
 **VM deployment:** See `docs/ops/DEPLOYMENT_MANIFEST.md` Step 7 — LiteLLM runs as
 `proxy-runner` with keys in `~proxy-runner/.env` and egress restricted to
-vendor CIDR blocks via iptables owner rules.
+deployment-time resolved vendor API IPs via iptables owner rules.
 
 ---
 
@@ -298,3 +298,12 @@ Simulator is not running. Start it first with `python main.py`.
 **Upload rejected: `Distribution file already exists`**
 `enforce_version_bump: true` is set in `simulator/config.yaml`. Re-running the
 uploader should skip existing artifacts automatically via `/api/files/<project>`.
+
+**SQLite says `attempt to write a readonly database` during inspection**
+Open the evaluation database in read-only immutable mode when inspecting it from
+outside the `pypi-runner` account:
+
+```bash
+sqlite3 'file:src/data/eval_results.db?mode=ro&immutable=1' \
+  'select id, detector, experiment_mode, details from eval_result order by id desc limit 20;'
+```
