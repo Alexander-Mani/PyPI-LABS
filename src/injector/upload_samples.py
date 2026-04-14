@@ -19,7 +19,7 @@ the simulator's list_versions() returns them in chronological order.
 Usage:
     python upload_samples.py [--samples-dir PATH] [--simulator-url URL]
                              [--only {benign,controls,malicious,all}]
-                             [--dry-run]
+                             [--dry-run] [--progress {auto,always,never}]
 """
 
 import argparse
@@ -48,13 +48,31 @@ _LOG_CONFIG = {
         "file": str(Path(__file__).resolve().parent / "logs" / "upload_samples.log"),
         "level": "INFO",
         "console_output": True,
+        "per_run": True,
     }
 }
 
-from src.utils.logger import setup_logger, get_logger  # noqa: E402
+from src.utils.logger import get_active_log_path, get_logger, setup_logger  # noqa: E402
 
 setup_logger(_LOG_CONFIG)
 log = get_logger()
+
+try:
+    from rich.console import Console
+    from rich.progress import (
+        BarColumn,
+        MofNCompleteColumn,
+        Progress,
+        TextColumn,
+        TimeElapsedColumn,
+    )
+except ImportError:  # pragma: no cover - deployment dependency guard
+    Console = None
+    BarColumn = None
+    MofNCompleteColumn = None
+    Progress = None
+    TextColumn = None
+    TimeElapsedColumn = None
 
 try:
     from packaging.utils import (
@@ -68,6 +86,104 @@ except ImportError:  # pragma: no cover - deployment dependency guard
     InvalidSdistFilename = InvalidWheelFilename = ValueError
     canonicalize_name = None
     parse_sdist_filename = parse_wheel_filename = None
+
+
+def _log_info(message: str, *, file_only: bool = False) -> None:
+    if file_only:
+        log.bind(file_only=True).info(message)
+    else:
+        log.info(message)
+
+
+def _log_warning(message: str, *, file_only: bool = False) -> None:
+    if file_only:
+        log.bind(file_only=True).warning(message)
+    else:
+        log.warning(message)
+
+
+def _should_use_progress(mode: str, dry_run: bool) -> bool:
+    if dry_run or mode == "never":
+        return False
+    if Progress is None:
+        if mode == "always":
+            log.warning("Rich is not installed; falling back to plain upload logs")
+        return False
+    if mode == "always":
+        return True
+    return sys.stderr.isatty()
+
+
+class _UploadProgress:
+    def __init__(self, enabled: bool, label: str, total: int):
+        self.enabled = enabled and total > 0
+        self.label = label
+        self.total = total
+        self.uploaded = 0
+        self.skipped = 0
+        self.failed = 0
+        self._progress = None
+        self._task_id = None
+
+    def __enter__(self):
+        if self.enabled:
+            self._progress = Progress(
+                TextColumn("[bold]{task.description}"),
+                BarColumn(),
+                MofNCompleteColumn(),
+                TextColumn("{task.fields[status]}"),
+                TimeElapsedColumn(),
+                console=Console(stderr=True),
+                transient=False,
+            )
+            self._progress.start()
+            self._task_id = self._progress.add_task(
+                f"{self.label}",
+                total=self.total,
+                status=self._status(),
+            )
+            _log_info(f"  {self.label}: {self.total} archive(s)", file_only=True)
+        else:
+            _log_info(f"  {self.label}: {self.total} archive(s)")
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        if self.enabled and self._progress is not None and self._task_id is not None:
+            self._progress.update(
+                self._task_id,
+                description=f"{self.label} complete",
+                status=self._status(),
+            )
+            self._progress.stop()
+        return False
+
+    def set_item(self, item_name: str) -> None:
+        if not (
+            self.enabled
+            and self._progress is not None
+            and self._task_id is not None
+        ):
+            return
+        self._progress.update(
+            self._task_id,
+            description=f"{self.label} :: {item_name}",
+            status=self._status(),
+        )
+
+    def record(self, result: str) -> None:
+        if result == "uploaded":
+            self.uploaded += 1
+        elif result == "skipped":
+            self.skipped += 1
+        else:
+            self.failed += 1
+
+        if self.enabled and self._progress is not None and self._task_id is not None:
+            self._progress.advance(self._task_id)
+            self._progress.update(self._task_id, status=self._status())
+
+    def _status(self) -> str:
+        return f"uploaded={self.uploaded} skipped={self.skipped} failed={self.failed}"
 
 # ---------------------------------------------------------------------------
 # Version sorting
@@ -169,7 +285,13 @@ def _supports_twine_skip_existing(repo_url: str) -> bool:
     ))
 
 
-def _twine_upload(archive: Path, simulator_url: str, dry_run: bool) -> str:
+def _twine_upload(
+    archive: Path,
+    simulator_url: str,
+    dry_run: bool,
+    *,
+    quiet: bool = False,
+) -> str:
     """
     Upload a single archive to the simulator via twine.
     Returns "uploaded", "skipped", or "failed".
@@ -177,7 +299,7 @@ def _twine_upload(archive: Path, simulator_url: str, dry_run: bool) -> str:
     ``--skip-existing`` (e.g. PyPI/TestPyPI). Local simulator endpoints do not.
     """
     if dry_run:
-        log.info(f"[dry-run] would upload {archive.name}")
+        _log_info(f"[dry-run] would upload {archive.name}", file_only=quiet)
         return "uploaded"
 
     repo_url = simulator_url.rstrip("/") + "/legacy/"
@@ -191,7 +313,10 @@ def _twine_upload(archive: Path, simulator_url: str, dry_run: bool) -> str:
         if exists is None:
             return "failed"
         if exists:
-            log.info(f"Skipped existing: {name}=={version} {archive.name}")
+            _log_info(
+                f"Skipped existing: {name}=={version} {archive.name}",
+                file_only=quiet,
+            )
             return "skipped"
 
     cmd = [
@@ -211,14 +336,14 @@ def _twine_upload(archive: Path, simulator_url: str, dry_run: bool) -> str:
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode == 0:
-        log.info(f"Uploaded: {archive.name}")
+        _log_info(f"Uploaded: {archive.name}", file_only=quiet)
         return "uploaded"
 
     # twine may exit non-zero for "already exists" even with --skip-existing
     # on older versions; treat it as success if the message says so.
     combined = result.stdout + result.stderr
     if "already exists" in combined.lower() or "skipping" in combined.lower():
-        log.info(f"Skipped (already exists): {archive.name}")
+        _log_info(f"Skipped (already exists): {archive.name}", file_only=quiet)
         return "skipped"
 
     # twine 4+ enforces strict PyPI metadata spec. Very old archives (pre-2012)
@@ -226,7 +351,10 @@ def _twine_upload(archive: Path, simulator_url: str, dry_run: bool) -> str:
     # These cannot be fixed without re-packaging; skip them rather than aborting.
     if "invaliddistribution" in combined.lower() or \
             "invalid distribution metadata" in combined.lower():
-        log.warning(f"Skipped (invalid legacy metadata, unrecoverable): {archive.name}")
+        _log_warning(
+            f"Skipped (invalid legacy metadata, unrecoverable): {archive.name}",
+            file_only=quiet,
+        )
         return "skipped"
 
     log.error(f"Upload failed: {archive.name}")
@@ -260,7 +388,13 @@ def _is_staged_malware_archive(path: Path, malware_dir: Path) -> bool:
     return not (path.suffix == ".zip" and path.parent == malware_dir)
 
 
-def _upload_flat_category(category_dir: Path, simulator_url: str, dry_run: bool) -> tuple[int, int, int]:
+def _upload_flat_category(
+    category_dir: Path,
+    simulator_url: str,
+    dry_run: bool,
+    *,
+    progress_enabled: bool = False,
+) -> tuple[int, int, int]:
     """
     Walk category_dir/  (benign/ or controls/).
     Expected layout:
@@ -293,15 +427,22 @@ def _upload_flat_category(category_dir: Path, simulator_url: str, dry_run: bool)
             log.debug(f"No archives in {pkg_dir.name}, skipping")
             continue
 
-        log.info(f"  {pkg_dir.name}: {len(archives)} archive(s)")
-        for archive in archives:
-            result = _twine_upload(archive, simulator_url, dry_run)
-            if result == "uploaded":
-                uploaded += 1
-            elif result == "skipped":
-                skipped += 1
-            else:
-                failure += 1
+        with _UploadProgress(progress_enabled, pkg_dir.name, len(archives)) as progress:
+            for archive in archives:
+                progress.set_item(archive.name)
+                result = _twine_upload(
+                    archive,
+                    simulator_url,
+                    dry_run,
+                    quiet=progress_enabled,
+                )
+                progress.record(result)
+                if result == "uploaded":
+                    uploaded += 1
+                elif result == "skipped":
+                    skipped += 1
+                else:
+                    failure += 1
 
     return uploaded, skipped, failure
 
@@ -356,7 +497,13 @@ def _count_upload_result(result: str) -> tuple[int, int, int]:
     return 0, 0, 1
 
 
-def _upload_malicious_category(malicious_dir: Path, simulator_url: str, dry_run: bool) -> tuple[int, int, int]:
+def _upload_malicious_category(
+    malicious_dir: Path,
+    simulator_url: str,
+    dry_run: bool,
+    *,
+    progress_enabled: bool = False,
+) -> tuple[int, int, int]:
     """
     Upload malicious distribution artifacts staged under malware_backstabbers_knife/.
     The preferred deployment format is an extracted encrypted bundle containing
@@ -381,18 +528,34 @@ def _upload_malicious_category(malicious_dir: Path, simulator_url: str, dry_run:
 
     uploaded = skipped = failure = 0
 
+    grouped_archives: dict[str, list[Path]] = {}
     for archive in dist_archives:
-        log.info(f"  Uploading: {archive.relative_to(malicious_dir)}")
-        if dry_run:
-            log.info(f"  [dry-run] would upload {archive.name}")
-            uploaded += 1
-            continue
+        rel_parts = archive.relative_to(malicious_dir).parts
+        package_name = rel_parts[0] if rel_parts else archive.parent.name
+        grouped_archives.setdefault(package_name, []).append(archive)
 
-        result = _twine_upload(archive, simulator_url, dry_run)
-        up, sk, fail = _count_upload_result(result)
-        uploaded += up
-        skipped += sk
-        failure += fail
+    for package_name in sorted(grouped_archives):
+        archives = grouped_archives[package_name]
+        with _UploadProgress(progress_enabled, package_name, len(archives)) as progress:
+            for archive in archives:
+                rel = archive.relative_to(malicious_dir)
+                if progress_enabled:
+                    _log_info(f"  Uploading: {rel}", file_only=True)
+                else:
+                    log.info(f"  Uploading: {rel}")
+
+                progress.set_item(archive.name)
+                result = _twine_upload(
+                    archive,
+                    simulator_url,
+                    dry_run,
+                    quiet=progress_enabled,
+                )
+                progress.record(result)
+                up, sk, fail = _count_upload_result(result)
+                uploaded += up
+                skipped += sk
+                failure += fail
 
     for zip_path in legacy_zips:
         log.info(f"  Extracting: {zip_path.name}")
@@ -469,6 +632,12 @@ def main() -> None:
         action="store_true",
         help="Print what would be uploaded without calling twine",
     )
+    parser.add_argument(
+        "--progress",
+        choices=["auto", "always", "never"],
+        default="auto",
+        help="Terminal progress display for uploads (default: auto)",
+    )
     args = parser.parse_args()
 
     samples_dir = Path(args.samples_dir).resolve()
@@ -479,6 +648,11 @@ def main() -> None:
     mode = args.only
     simulator_url = args.simulator_url
     dry_run = args.dry_run
+    progress_enabled = _should_use_progress(args.progress, dry_run)
+
+    active_log_path = get_active_log_path()
+    if active_log_path is not None:
+        log.info(f"Detailed log: {active_log_path}")
 
     if dry_run:
         log.info("Mode: dry-run — no uploads will be performed")
@@ -486,19 +660,34 @@ def main() -> None:
     total_uploaded = total_skipped = total_fail = 0
 
     if mode in ("benign", "all"):
-        uploaded, skipped, fail = _upload_flat_category(samples_dir / "benign", simulator_url, dry_run)
+        uploaded, skipped, fail = _upload_flat_category(
+            samples_dir / "benign",
+            simulator_url,
+            dry_run,
+            progress_enabled=progress_enabled,
+        )
         total_uploaded += uploaded
         total_skipped += skipped
         total_fail += fail
 
     if mode in ("controls", "all"):
-        uploaded, skipped, fail = _upload_flat_category(_controls_dir(samples_dir), simulator_url, dry_run)
+        uploaded, skipped, fail = _upload_flat_category(
+            _controls_dir(samples_dir),
+            simulator_url,
+            dry_run,
+            progress_enabled=progress_enabled,
+        )
         total_uploaded += uploaded
         total_skipped += skipped
         total_fail += fail
 
     if mode in ("malicious", "all"):
-        uploaded, skipped, fail = _upload_malicious_category(samples_dir / "malware_backstabbers_knife", simulator_url, dry_run)
+        uploaded, skipped, fail = _upload_malicious_category(
+            samples_dir / "malware_backstabbers_knife",
+            simulator_url,
+            dry_run,
+            progress_enabled=progress_enabled,
+        )
         total_uploaded += uploaded
         total_skipped += skipped
         total_fail += fail

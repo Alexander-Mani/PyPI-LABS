@@ -142,10 +142,11 @@ def test_malicious_category_uploads_extracted_bundle_archives(monkeypatch, tmp_p
     legacy_container.write_text("placeholder", encoding="utf-8")
     uploaded = []
 
-    def fake_twine_upload(archive, simulator_url, dry_run):
+    def fake_twine_upload(archive, simulator_url, dry_run, *, quiet=False):
         uploaded.append(archive.relative_to(malicious_dir).as_posix())
         assert simulator_url == "http://127.0.0.1:8080"
         assert dry_run is False
+        assert quiet is False
         return "uploaded"
 
     monkeypatch.setattr(upload_samples, "_twine_upload", fake_twine_upload)
@@ -171,3 +172,54 @@ def test_controls_dir_falls_back_to_nested_benign_controls(tmp_path):
     nested.mkdir(parents=True)
 
     assert upload_samples._controls_dir(samples_dir) == nested
+
+
+def test_flat_category_progress_makes_routine_upload_logs_quiet(monkeypatch, tmp_path):
+    category_dir = tmp_path / "benign"
+    package_dir = category_dir / "colorama"
+    package_dir.mkdir(parents=True)
+    (package_dir / "colorama-0.1.1.tar.gz").write_text("placeholder", encoding="utf-8")
+    quiet_values = []
+
+    class FakeProgress:
+        def __init__(self, enabled, label, total):
+            assert enabled is True
+            assert label == "colorama"
+            assert total == 1
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def set_item(self, item_name):
+            assert item_name == "colorama-0.1.1.tar.gz"
+
+        def record(self, result):
+            assert result == "uploaded"
+
+    def fake_twine_upload(archive, simulator_url, dry_run, *, quiet=False):
+        assert archive.name == "colorama-0.1.1.tar.gz"
+        quiet_values.append(quiet)
+        return "uploaded"
+
+    monkeypatch.setattr(upload_samples, "_UploadProgress", FakeProgress)
+    monkeypatch.setattr(upload_samples, "_twine_upload", fake_twine_upload)
+
+    assert upload_samples._upload_flat_category(
+        category_dir,
+        "http://127.0.0.1:8080",
+        dry_run=False,
+        progress_enabled=True,
+    ) == (1, 0, 0)
+    assert quiet_values == [True]
+
+
+def test_progress_disabled_for_dry_run():
+    assert upload_samples._should_use_progress("auto", dry_run=True) is False
+    assert upload_samples._should_use_progress("always", dry_run=True) is False
+
+
+def test_progress_never_mode_disables_progress():
+    assert upload_samples._should_use_progress("never", dry_run=False) is False

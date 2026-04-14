@@ -1,15 +1,32 @@
 import sys
+from datetime import datetime
 from pathlib import Path
+
 from loguru import logger
 
 # Prevent double-configuration if imported multiple times
 _logger_configured = False
+_active_log_path = None
+
+
+def _resolve_log_path(config):
+    log_path = Path(config["logging"]["file"])
+    if not config["logging"].get("per_run", False):
+        return log_path
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    return log_path.with_name(f"{log_path.stem}-{stamp}{log_path.suffix}")
+
+
+def _console_filter(record):
+    return not record["extra"].get("file_only", False)
+
 
 def setup_logger(config):
     """
     Configures loguru based on config.yaml settings.
     """
-    global _logger_configured
+    global _logger_configured, _active_log_path
     if _logger_configured:
         return logger
 
@@ -17,7 +34,7 @@ def setup_logger(config):
     logger.remove()
 
     # 2. Get Settings
-    log_path = Path(config['logging']['file'])
+    log_path = _resolve_log_path(config)
     level = config['logging']['level'].upper()
     console_out = config['logging']['console_output']
 
@@ -41,9 +58,11 @@ def setup_logger(config):
         logger.add(
             sys.stderr, 
             level=level, 
+            filter=_console_filter,
             format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>"
         )
 
+    _active_log_path = log_path
     _logger_configured = True
     return logger
 
@@ -51,3 +70,7 @@ def get_logger():
     """Returns the global logger instance."""
     return logger
 
+
+def get_active_log_path():
+    """Return the concrete log file path chosen by setup_logger()."""
+    return _active_log_path
