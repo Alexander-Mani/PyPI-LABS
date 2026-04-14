@@ -1,0 +1,19 @@
+# Analyzer model profiles for reproducible evaluation runs.
+# Entries are src/analyzer/configs/*.yaml stems. Static SAST detectors always run.
+profiles:
+  budget:
+    tier: budget
+    configs:
+      - claude_haiku
+      - gpt_nano
+      - gemini_flash_lite
+      - together_budget
+      - claude_haiku_agentic
+
+  budget_no_gemini:
+    tier: budget
+    configs:
+      - claude_haiku
+      - gpt_nano
+      - together_budget
+      - claude_haiku_agentic

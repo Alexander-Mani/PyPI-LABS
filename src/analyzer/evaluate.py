@@ -10,7 +10,8 @@ The analyzer downloads matching artifacts from the simulator before scanning;
 labels are stored at insert time and never passed to extractors or adapters.
 
 Usage:
-    python src/analyzer/evaluate.py [--config PATH] [--tier budget|medium|frontier]
+    python src/analyzer/evaluate.py [--config PATH] [--profile budget]
+                                    [--tier budget|medium|frontier]
                                     [--skip-validation] [--sast-only]
                                     [--dry-run-resolution] [--verbose]
 
@@ -68,6 +69,7 @@ _TOKEN_PRICES: dict[str, tuple[float, float]] = {
 
 _BUDGET_HARD_CAP_USD = 10.00
 _STEM_RE = re.compile(r"^(.+?)-(\d[^-]*)(?:-.*)?$")
+_PROFILES_PATH = _REPO_ROOT / "configs" / "evaluation_profiles.yaml"
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,38 @@ class GroundTruthLabel:
     sample_role: str
     attack_vector: str | None = None
     baseline_target: str | None = None
+
+
+def _load_evaluation_profile(profile_name: str) -> tuple[str, set[str]]:
+    import yaml as _yaml
+
+    with open(_PROFILES_PATH, encoding="utf-8") as f:
+        data = _yaml.safe_load(f) or {}
+
+    profiles = data.get("profiles", {})
+    profile = profiles.get(profile_name)
+    if profile is None:
+        known = ", ".join(sorted(profiles)) or "none"
+        raise SystemExit(f"HALT: unknown evaluation profile '{profile_name}'. Known: {known}")
+
+    tier = str(profile.get("tier", "budget"))
+    configs = profile.get("configs") or []
+    if not isinstance(configs, list) or not all(isinstance(item, str) for item in configs):
+        raise SystemExit(
+            f"HALT: evaluation profile '{profile_name}' must define a non-empty "
+            "list of analyzer config stems under 'configs'."
+        )
+    if not configs:
+        raise SystemExit(f"HALT: evaluation profile '{profile_name}' selects no model configs.")
+    return tier, set(configs)
+
+
+def _collapse_error(details: dict, limit: int = 300) -> str:
+    message = str(details.get("error") or details)
+    collapsed = " ".join(message.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[:limit] + "..."
 
 
 # ---------------------------------------------------------------------------
@@ -88,12 +122,16 @@ class EvaluationRunner:
         self,
         config: dict,
         tier: str = "budget",
+        profile: str | None = None,
+        model_config_stems: set[str] | None = None,
         versions_per_project: int = 2,
         artifact_policy: str = "pip+sdist",
         include_controls: bool = False,
     ):
         self._cfg  = config
         self._tier = tier
+        self._profile = profile
+        self._run_label = f"profile:{profile}" if profile else f"tier:{tier}"
         if versions_per_project < 1:
             raise ValueError("versions_per_project must be >= 1")
         self._versions_per_project = versions_per_project
@@ -106,6 +144,7 @@ class EvaluationRunner:
             configs_dir=_ANALYZER_DIR / "configs",
             db=self._db,
             tier=tier,
+            model_config_stems=model_config_stems,
         )
         self._samples_root = _REPO_ROOT / "samples"
         self._simulator_url = config.get("simulator", {}).get("base_url", "http://127.0.0.1:8080")
@@ -440,8 +479,12 @@ class EvaluationRunner:
         dry_run_resolution: bool = False,
     ) -> None:
         run_id = str(uuid.uuid4())
-        log.info(f"EvaluationRunner start — run_id={run_id}  tier={self._tier}  sast_only={sast_only}")
-        self._db.create_eval_run(run_id, tier=self._tier if not sast_only else "sast-only")
+        log.info(
+            f"EvaluationRunner start — run_id={run_id}  "
+            f"profile={self._profile or 'tier-filter'}  tier={self._tier}  "
+            f"sast_only={sast_only}"
+        )
+        self._db.create_eval_run(run_id, tier=self._run_label if not sast_only else "sast-only")
 
         if not skip_validation and not sast_only and not dry_run_resolution:
             self._validate_financial_airgap()
@@ -521,11 +564,11 @@ class EvaluationRunner:
 
         log.info(
             f"Financial validation: {benign_sample.package_name} "
-            f"{benign_sample.version} on tier={self._tier}"
+            f"{benign_sample.version} on {self._run_label}"
         )
 
         val_id = f"airgap-{uuid.uuid4()}"
-        self._db.create_eval_run(val_id, tier=f"{self._tier}-validation")
+        self._db.create_eval_run(val_id, tier=f"{self._run_label}-validation")
         validation_archive = self._download_sample(benign_sample)
         pkg = self._extractor.extract(validation_archive)
         pkg.name    = benign_sample.package_name
@@ -553,12 +596,33 @@ class EvaluationRunner:
         if not llm_results:
             raise SystemExit(
                 "HALT: financial validation did not run any LLM/agentic adapters. "
-                "Check tier selection and analyzer model configs."
+                "Check profile/tier selection and analyzer model configs."
             )
-        if not successful_llm_results:
+
+        expected_detectors = self._controller.expected_non_static_detectors()
+        successful_detectors = {r.detector for r in successful_llm_results}
+        failed_detectors = sorted(expected_detectors - successful_detectors)
+        if failed_detectors:
+            details: list[str] = []
+            for detector in failed_detectors:
+                error_row = next(
+                    (
+                        r for r in llm_results
+                        if r.detector == detector and r.experiment_mode == "error"
+                    ),
+                    None,
+                )
+                if error_row is None:
+                    details.append(f"{detector}: no result rows")
+                    continue
+                model = str(error_row.details.get("model") or "unknown-model")
+                details.append(f"{detector} ({model}): {_collapse_error(error_row.details)}")
             raise SystemExit(
-                "HALT: financial validation produced no successful LLM/agentic "
-                "results. Check LiteLLM proxy readiness and model routing."
+                "HALT: financial validation failed for selected model profile "
+                f"{self._run_label}: "
+                + " | ".join(details)
+                + ". If this is a temporary provider outage, rerun with an explicit "
+                "reduced profile such as --profile budget_no_gemini."
             )
         if not tokenized_llm_results:
             raise SystemExit(
@@ -617,7 +681,7 @@ class EvaluationRunner:
         if projected > _BUDGET_HARD_CAP_USD:
             raise SystemExit(
                 f"HALT: projected cost ${projected:.2f} exceeds hard cap "
-                f"${_BUDGET_HARD_CAP_USD}. Use --tier budget or --skip-validation."
+                f"${_BUDGET_HARD_CAP_USD}. Use --profile budget or --skip-validation."
             )
 
         log.info("Financial validation passed.")
@@ -722,8 +786,13 @@ if __name__ == "__main__":
         help="Path to analyzer config YAML",
     )
     parser.add_argument(
-        "--tier", choices=["budget", "medium", "frontier"], default="budget",
-        help="Model tier to use (default: budget)",
+        "--profile",
+        default=None,
+        help="Evaluation model profile from configs/evaluation_profiles.yaml (default: budget)",
+    )
+    parser.add_argument(
+        "--tier", choices=["budget", "medium", "frontier"], default=None,
+        help="Legacy model-tier filter; ignored when --profile is set unless matching profile tier",
     )
     parser.add_argument(
         "--skip-validation", action="store_true",
@@ -762,13 +831,31 @@ if __name__ == "__main__":
     args = parser.parse_args()
     with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
+
+    profile_name = args.profile
+    tier = args.tier
+    model_config_stems: set[str] | None = None
+    if profile_name is not None:
+        profile_tier, model_config_stems = _load_evaluation_profile(profile_name)
+        if tier is not None and tier != profile_tier:
+            raise SystemExit(
+                f"HALT: --tier {tier} conflicts with --profile {profile_name} "
+                f"(profile tier: {profile_tier})."
+            )
+        tier = profile_tier
+    elif tier is None:
+        profile_name = "budget"
+        tier, model_config_stems = _load_evaluation_profile(profile_name)
+
     if args.verbose:
         # Preserve configured sinks; just raise their level before first setup.
         cfg.setdefault("logging", {})["level"] = "DEBUG"
     setup_logger(cfg)
     EvaluationRunner(
         cfg,
-        tier=args.tier,
+        tier=tier,
+        profile=profile_name,
+        model_config_stems=model_config_stems,
         versions_per_project=args.versions_per_project,
         artifact_policy=args.artifact_policy,
         include_controls=args.include_controls,

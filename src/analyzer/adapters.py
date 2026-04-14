@@ -268,7 +268,7 @@ class LLMAdapter(DetectorAdapter):
             base_url=self._proxy_url.rstrip("/") + "/v1",
             api_key="no-key-needed",
         )
-        with client.with_raw_response.chat.completions.create(
+        http_resp = client.with_raw_response.chat.completions.create(
             model=self._model_name,
             temperature=self._temperature,
             max_tokens=512,
@@ -276,9 +276,9 @@ class LLMAdapter(DetectorAdapter):
                 {"role": "system", "content": system},
                 {"role": "user",   "content": user},
             ],
-        ) as http_resp:
-            cost = float(http_resp.headers.get("x-litellm-response-cost") or 0.0)
-            resp = http_resp.parse()
+        )
+        cost = float(http_resp.headers.get("x-litellm-response-cost") or 0.0)
+        resp = http_resp.parse()
         text = resp.choices[0].message.content or ""
         in_tok  = resp.usage.prompt_tokens     if resp.usage else 0
         out_tok = resp.usage.completion_tokens if resp.usage else 0
@@ -472,15 +472,15 @@ class AgenticAdapter(DetectorAdapter):
                 }
                 for t in self._TOOLS
             ]
-            with client.with_raw_response.chat.completions.create(
+            http_resp = client.with_raw_response.chat.completions.create(
                 model=self._model_name,
                 temperature=self._temperature,
                 max_tokens=1024,
                 messages=oai_messages,
                 tools=oai_tools,
-            ) as http_resp:
-                call_cost = float(http_resp.headers.get("x-litellm-response-cost") or 0.0)
-                resp = http_resp.parse()
+            )
+            call_cost = float(http_resp.headers.get("x-litellm-response-cost") or 0.0)
+            resp = http_resp.parse()
             oai_msg_out = resp.choices[0].message
             finish = resp.choices[0].finish_reason
             content_blocks: list[dict] = []

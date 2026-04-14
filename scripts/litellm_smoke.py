@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke-test LiteLLM proxy routing for the PyPI-SCADA budget tier."""
+"""Smoke-test LiteLLM proxy routing for a PyPI-SCADA model profile."""
 
 from __future__ import annotations
 
@@ -9,15 +9,40 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+import yaml
 
 
-DEFAULT_MODELS = [
-    "claude-haiku-4-5",
-    "gpt-5.4-nano",
-    "gemini-3.1-flash-lite-preview",
-    "together_ai/Qwen/Qwen3.5-9B",
-]
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_PROFILE_FILE = _REPO_ROOT / "configs" / "evaluation_profiles.yaml"
+_ANALYZER_CONFIGS = _REPO_ROOT / "src" / "analyzer" / "configs"
 TRANSIENT_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+def _load_profile_models(profile_name: str) -> list[str]:
+    with open(_PROFILE_FILE, encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+
+    profiles = data.get("profiles", {})
+    profile = profiles.get(profile_name)
+    if profile is None:
+        known = ", ".join(sorted(profiles)) or "none"
+        raise SystemExit(f"unknown LiteLLM smoke-test profile '{profile_name}'. Known: {known}")
+
+    models: list[str] = []
+    for stem in profile.get("configs", []):
+        cfg_path = _ANALYZER_CONFIGS / f"{stem}.yaml"
+        if not cfg_path.exists():
+            raise SystemExit(f"profile '{profile_name}' references missing config: {stem}")
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        model_name = cfg.get("model_name")
+        if not model_name:
+            raise SystemExit(f"config '{cfg_path}' has no model_name")
+        if model_name not in models:
+            models.append(str(model_name))
+    return models
 
 
 def _truncate(text: str, limit: int = 1000) -> str:
@@ -85,15 +110,17 @@ def smoke_model(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:4000")
-    parser.add_argument("--models", nargs="+", default=DEFAULT_MODELS)
+    parser.add_argument("--profile", default="budget")
+    parser.add_argument("--models", nargs="+", default=None)
     parser.add_argument("--timeout", type=float, default=45.0)
     parser.add_argument("--max-tokens", type=int, default=8)
     parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--retry-delay", type=float, default=15.0)
     args = parser.parse_args(argv)
 
+    models = args.models if args.models is not None else _load_profile_models(args.profile)
     failed = False
-    for model in args.models:
+    for model in models:
         ok, message = smoke_model(
             args.base_url,
             model,

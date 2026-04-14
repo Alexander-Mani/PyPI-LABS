@@ -139,3 +139,26 @@ def test_smoke_model_does_not_retry_auth_failure(monkeypatch):
     assert ok is False
     assert "HTTP 401" in message
     assert len(calls) == 1
+
+
+def test_smoke_main_uses_profile_when_models_not_supplied(monkeypatch, capsys):
+    captured_profile = {}
+
+    def fake_load_profile_models(profile_name):
+        captured_profile["name"] = profile_name
+        return ["gpt-5.4-nano"]
+
+    def fake_urlopen(req, timeout):
+        return _FakeResponse()
+
+    monkeypatch.setattr(litellm_smoke, "_load_profile_models", fake_load_profile_models)
+    monkeypatch.setattr(litellm_smoke.urllib.request, "urlopen", fake_urlopen)
+
+    rc = litellm_smoke.main(
+        ["--profile", "budget_no_gemini", "--timeout", "1", "--retry-delay", "0"]
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured_profile["name"] == "budget_no_gemini"
+    assert "OK gpt-5.4-nano" in captured.out

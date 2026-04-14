@@ -8,6 +8,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _ANALYZER_CONFIGS = _REPO_ROOT / "src" / "analyzer" / "configs"
 _LITELLM_CONFIG = _REPO_ROOT / "configs" / "litellm_config.yaml"
+_PROFILE_CONFIG = _REPO_ROOT / "configs" / "evaluation_profiles.yaml"
 
 
 def _analyzer_model_names() -> dict[str, str]:
@@ -22,12 +23,41 @@ def _analyzer_model_names() -> dict[str, str]:
     return models
 
 
+def _analyzer_model_names_by_stem() -> dict[str, str]:
+    return {
+        Path(config_name).stem: model_name
+        for config_name, model_name in _analyzer_model_names().items()
+    }
+
+
 def _litellm_model_names() -> set[str]:
     pattern = re.compile(r"""^\s*-\s*model_name:\s*["']?([^"'\n#]+)""", re.MULTILINE)
     return {
         match.group(1).strip()
         for match in pattern.finditer(_LITELLM_CONFIG.read_text(encoding="utf-8"))
     }
+
+
+def _profile_config_stems() -> dict[str, set[str]]:
+    profiles: dict[str, set[str]] = {}
+    current_profile: str | None = None
+    in_configs = False
+
+    for line in _PROFILE_CONFIG.read_text(encoding="utf-8").splitlines():
+        profile_match = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
+        if profile_match:
+            current_profile = profile_match.group(1)
+            profiles[current_profile] = set()
+            in_configs = False
+            continue
+        if current_profile and re.match(r"^    configs:\s*$", line):
+            in_configs = True
+            continue
+        config_match = re.match(r"^      - ([A-Za-z0-9_-]+)\s*$", line)
+        if current_profile and in_configs and config_match:
+            profiles[current_profile].add(config_match.group(1))
+
+    return profiles
 
 
 def test_litellm_config_covers_analyzer_model_names():
@@ -47,3 +77,35 @@ def test_litellm_drop_params_uses_litellm_settings():
 
     assert "litellm_settings:" in text
     assert not re.search(r"^general_settings:\s*\n\s+drop_params:", text, re.MULTILINE)
+
+
+def test_evaluation_profiles_reference_existing_analyzer_configs():
+    analyzer_stems = set(_analyzer_model_names_by_stem())
+    missing = {
+        f"{profile}: {stem}"
+        for profile, stems in _profile_config_stems().items()
+        for stem in stems
+        if stem not in analyzer_stems
+    }
+
+    assert not missing
+
+
+def test_evaluation_profiles_models_are_litellm_routable():
+    analyzer_models = _analyzer_model_names_by_stem()
+    litellm_names = _litellm_model_names()
+    missing = {
+        f"{profile}: {stem}: {analyzer_models[stem]}"
+        for profile, stems in _profile_config_stems().items()
+        for stem in stems
+        if analyzer_models[stem] not in litellm_names
+    }
+
+    assert not missing
+
+
+def test_budget_no_gemini_profile_excludes_gemini_flash_lite():
+    profiles = _profile_config_stems()
+
+    assert "gemini_flash_lite" in profiles["budget"]
+    assert "gemini_flash_lite" not in profiles["budget_no_gemini"]

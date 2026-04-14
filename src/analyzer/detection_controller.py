@@ -42,12 +42,20 @@ def _summarize_error(details: dict | None, limit: int = 500) -> str:
 
 class EvalController:
 
-    def __init__(self, configs_dir: str | Path, db, tier: str = "budget"):
+    def __init__(
+        self,
+        configs_dir: str | Path,
+        db,
+        tier: str = "budget",
+        model_config_stems: set[str] | None = None,
+    ):
         # Lazy import to avoid cross-package issues at module load time.
         from src.data.db_manager import DBManager  # noqa: F401 (type reference)
         import yaml as _yaml
         self._db = db
         configs_dir = Path(configs_dir)
+        selected_stems = set(model_config_stems) if model_config_stems is not None else None
+        loaded_stems: set[str] = set()
 
         self._static: list[StaticAdapter] = [
             StaticAdapter("bandit"),
@@ -63,14 +71,33 @@ class EvalController:
                 continue  # strategy registry, not a model config
             with open(yaml_path, encoding="utf-8") as f:
                 cfg = _yaml.safe_load(f)
-            cfg_tier = cfg.get("tier", "frontier")
-            if cfg_tier != tier:
+            if selected_stems is None:
+                cfg_tier = cfg.get("tier", "frontier")
+                if cfg_tier != tier:
+                    continue
+            elif yaml_path.stem not in selected_stems:
                 continue
+
+            loaded_stems.add(yaml_path.stem)
             if "agentic" in yaml_path.stem:
                 self._agentic.append(AgenticAdapter(yaml_path))
             else:
                 self._llm.append(LLMAdapter(yaml_path))
                 self._llm_raw.append(LLMRawAdapter(yaml_path))
+
+        if selected_stems is not None:
+            missing = sorted(selected_stems - loaded_stems)
+            if missing:
+                raise ValueError(
+                    "Model profile references missing analyzer config(s): "
+                    + ", ".join(missing)
+                )
+
+    def expected_non_static_detectors(self) -> set[str]:
+        return {
+            getattr(adapter, "_detector_name")
+            for adapter in [*self._llm, *self._llm_raw, *self._agentic]
+        }
 
     def run(
         self,
