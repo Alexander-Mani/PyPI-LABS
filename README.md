@@ -43,7 +43,7 @@ Attack simulation flags control the simulator's acceptance behavior:
 
 Feeds packages from the sample dataset into the simulator in the correct chronological order.
 
-- `upload_samples.py` -- batch uploader for benign, controls, and malware; sorts benign/control archives by version before upload, supports the single encrypted malware bundle layout, and skips artifacts already present in the simulator.
+- `upload_samples.py` -- batch uploader for benign, controls, and malware; sorts benign/control archives by version before upload, supports the single encrypted malware bundle layout, skips artifacts already present in the simulator, and writes per-run upload logs while keeping the terminal output compact.
 
 ### Analyzer (`src/analyzer/`)
 
@@ -129,8 +129,8 @@ python src/analyzer/evaluate.py --dry-run-resolution --skip-validation
 python src/analyzer/evaluate.py --sast-only
 
 #    Full pipeline — start LiteLLM proxy first (see docs/ops/DEPLOYMENT_MANIFEST.md Step 7)
-#    Default tier is 'budget'; results stored in src/data/eval_results.db
-python src/analyzer/evaluate.py --tier budget
+#    Default model profile is 'budget'; results stored in src/data/eval_results.db
+python src/analyzer/evaluate.py --profile budget
 
 # 6. Run the test suite
 pytest tests/

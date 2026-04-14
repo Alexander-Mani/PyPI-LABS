@@ -185,14 +185,14 @@ sudo -u proxy-runner bash -c "
 "
 ```
 
-After `/health/readiness` returns healthy, run the budget-tier proxy smoke test
-before evaluation:
+After `/health/readiness` returns healthy, run the selected model-profile proxy
+smoke test before evaluation:
 
 ```bash
 sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo
-  python scripts/litellm_smoke.py --base-url http://127.0.0.1:4000 --retries 3 --retry-delay 20
+  python scripts/litellm_smoke.py --base-url http://127.0.0.1:4000 --profile budget --retries 3 --retry-delay 20
 "
 ```
 
@@ -223,8 +223,8 @@ sudo -u pypi-runner bash -c "
 sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo
-  python src/analyzer/evaluate.py --tier budget --dry-run-resolution --skip-validation
-  python src/analyzer/evaluate.py --tier budget
+  python src/analyzer/evaluate.py --profile budget --dry-run-resolution --skip-validation
+  python src/analyzer/evaluate.py --profile budget
 "
 ```
 
@@ -236,5 +236,6 @@ ARTIFACT_POLICY=pip        # pip, pip+sdist, or sdist
 VERSIONS_PER_PROJECT=2     # latest-N stable versions per labelled project
 UPLOAD_CATEGORIES=malicious # benign, controls, malicious, all; space-separated
 INCLUDE_CONTROLS=1         # include high-volume benign controls
+MODEL_PROFILE=budget_no_gemini # explicit reduced profile for temporary Gemini outages
 VERBOSE=1                  # DEBUG logs
 ```

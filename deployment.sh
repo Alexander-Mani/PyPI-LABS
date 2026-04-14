@@ -90,7 +90,7 @@ sudo -u pypi-runner bash -c "
   python3 -m venv venv
   source venv/bin/activate
   pip install --require-hashes --no-deps --quiet -r requirements/requirements.txt
-  # injector/upload_samples.py shells out to `python -m twine` from this venv.
+  # injector/upload_samples.py shells out to python -m twine from this venv.
   pip install --require-hashes --no-deps --quiet -r requirements/injector-requirements.txt
 "
 
@@ -203,11 +203,17 @@ if [ "$ready" -ne 1 ]; then
   exit 1
 fi
 
-echo "Running LiteLLM budget-model smoke test"
+_MODEL_PROFILE="${MODEL_PROFILE:-budget}"
+if [[ -z "${_MODEL_PROFILE//[[:space:]]/}" ]]; then
+  echo "ERROR: MODEL_PROFILE cannot be empty" >&2
+  exit 1
+fi
+
+echo "Running LiteLLM model-profile smoke test (profile: ${_MODEL_PROFILE})"
 if ! sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo
-  python scripts/litellm_smoke.py --base-url http://127.0.0.1:4000 --retries 3 --retry-delay 20
+  python scripts/litellm_smoke.py --base-url http://127.0.0.1:4000 --profile \"${_MODEL_PROFILE}\" --retries 3 --retry-delay 20
 "; then
   echo "ERROR: LiteLLM smoke test failed. Aborting before evaluation."
   echo "Last 80 lines of /home/proxy-runner/litellm.log:"
@@ -289,11 +295,11 @@ echo "Step 10: Running the evaluation pipeline (Entry-Point Scanning)"
 sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo
-  # Defaulting to budget tier for safety; reads configs/models.json automatically.
-  python src/analyzer/evaluate.py --tier budget --dry-run-resolution --skip-validation \
+  # Defaulting to the budget model profile for safety; reads configs/evaluation_profiles.yaml.
+  python src/analyzer/evaluate.py --profile \"${_MODEL_PROFILE}\" --dry-run-resolution --skip-validation \
     --versions-per-project \"${_VERSIONS_PER_PROJECT}\" \
     --artifact-policy \"${_ARTIFACT_POLICY}\" ${_INCLUDE_CONTROLS_FLAG}
-  python src/analyzer/evaluate.py --tier budget ${_VERBOSE_FLAG} \
+  python src/analyzer/evaluate.py --profile \"${_MODEL_PROFILE}\" ${_VERBOSE_FLAG} \
     --versions-per-project \"${_VERSIONS_PER_PROJECT}\" \
     --artifact-policy \"${_ARTIFACT_POLICY}\" ${_INCLUDE_CONTROLS_FLAG}
 "

@@ -172,6 +172,11 @@ python src/injector/upload_samples.py \
 python src/injector/upload_samples.py \
   --samples-dir /home/pypi-runner/samples-extracted \
   --dry-run
+
+# Force progress UI even when stdout/stderr is not detected as a TTY
+python src/injector/upload_samples.py \
+  --samples-dir /home/pypi-runner/samples-extracted \
+  --progress always
 ```
 
 ### CLI reference
@@ -182,6 +187,7 @@ python src/injector/upload_samples.py \
 | `--simulator-url` | `http://127.0.0.1:8080` | Base URL of the simulator |
 | `--only` | `all` | Category filter: `benign`, `controls`, `malicious`, or `all` |
 | `--dry-run` | off | Print what would be uploaded without calling twine |
+| `--progress` | `auto` | Upload progress display: `auto`, `always`, or `never` |
 
 ### Behaviour notes
 
@@ -196,6 +202,8 @@ python src/injector/upload_samples.py \
 - Already-uploaded simulator artifacts are detected via `/api/files/<project>`
   and skipped before calling twine; reruns are safe while still allowing a wheel
   and sdist for the same release.
+- Interactive runs use a compact per-package progress display by default. Detailed
+  per-archive upload decisions are still written to `src/injector/logs/upload_samples-*.log`.
 - Upload failures are logged and counted but do not abort the run; the exit code is
   non-zero if any failure occurred.
 
@@ -221,8 +229,11 @@ python src/analyzer/evaluate.py --dry-run-resolution --skip-validation
 # SAST-only simulator-resolved run.
 python src/analyzer/evaluate.py --sast-only
 
-# Budget LLM run; frontier should be reserved for final verified execution.
-python src/analyzer/evaluate.py --tier budget
+# Budget profile LLM run; frontier-tier configs should be reserved for final verified execution.
+python src/analyzer/evaluate.py --profile budget
+
+# If Gemini has a temporary provider outage, use the explicit reduced profile.
+python src/analyzer/evaluate.py --profile budget_no_gemini
 ```
 
 Useful flags:
@@ -233,6 +244,8 @@ Useful flags:
 | `--artifact-policy` | `pip+sdist` | `pip`, `pip+sdist`, or `sdist` |
 | `--include-controls` | off | Include high-volume benign controls |
 | `--dry-run-resolution` | off | Print selected simulator artifacts without scanning |
+| `--profile` | `budget` | Model profile from `configs/evaluation_profiles.yaml` |
+| `--tier` | off | Legacy tier filter; use profiles for reproducible runs |
 
 ---
 
@@ -255,7 +268,7 @@ Useful flags:
 | Component | Log file |
 |---|---|
 | Simulator | `src/simulator/logs/simulator.log` |
-| Injector  | console output from `src/injector/upload_samples.py` |
+| Injector  | console progress plus `src/injector/logs/upload_samples-*.log` |
 | Analyzer  | configured via `src/analyzer/config.yaml` |
 | LiteLLM   | `/home/proxy-runner/litellm.log` (VM deployment only) |
 
@@ -268,7 +281,9 @@ Log level and file path are controlled by `logging:` in each component's `config
 All LLM detector calls route through LiteLLM running as `proxy-runner` on
 `http://127.0.0.1:4000`. The analyzer process holds no API keys. The proxy
 configuration in `configs/litellm_config.yaml` maps analyzer model names to
-provider-specific LiteLLM routes.
+provider-specific LiteLLM routes. Evaluation model sets are selected through
+`configs/evaluation_profiles.yaml`; `budget_no_gemini` exists for explicitly
+documented temporary Gemini outages.
 
 **Local dev:** Start LiteLLM manually with API keys in your environment:
 
