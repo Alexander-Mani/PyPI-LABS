@@ -26,6 +26,9 @@ class _FakeLogger:
     def debug(self, *args, **kwargs):
         return None
 
+    def bind(self, *args, **kwargs):
+        return self
+
 
 if importlib.util.find_spec("loguru") is None:
     sys.modules.setdefault("loguru", types.SimpleNamespace(logger=_FakeLogger()))

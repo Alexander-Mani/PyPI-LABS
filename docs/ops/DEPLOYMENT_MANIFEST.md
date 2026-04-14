@@ -237,5 +237,6 @@ VERSIONS_PER_PROJECT=2     # latest-N stable versions per labelled project
 UPLOAD_CATEGORIES=malicious # benign, controls, malicious, all; space-separated
 INCLUDE_CONTROLS=1         # include high-volume benign controls
 MODEL_PROFILE=budget_no_gemini # explicit reduced profile for temporary Gemini outages
+EVAL_PROGRESS=always      # auto, always, never; live analyzer dashboard control
 VERBOSE=1                  # DEBUG logs
 ```

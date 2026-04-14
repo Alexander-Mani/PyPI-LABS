@@ -234,6 +234,9 @@ python src/analyzer/evaluate.py --profile budget
 
 # If Gemini has a temporary provider outage, use the explicit reduced profile.
 python src/analyzer/evaluate.py --profile budget_no_gemini
+
+# Force the live evaluation dashboard in an SSH/tmux session.
+python src/analyzer/evaluate.py --profile budget_no_gemini --progress always
 ```
 
 Useful flags:
@@ -246,6 +249,13 @@ Useful flags:
 | `--dry-run-resolution` | off | Print selected simulator artifacts without scanning |
 | `--profile` | `budget` | Model profile from `configs/evaluation_profiles.yaml` |
 | `--tier` | off | Legacy tier filter; use profiles for reproducible runs |
+| `--progress` | `auto` | Live evaluation dashboard: `auto`, `always`, or `never` |
+
+Interactive evaluation runs use a compact dashboard for artifact progress,
+in-flight detector status, remaining artifacts, and accumulated API cost by
+provider. Dry-run resolution always stays plain text, even with
+`--progress always`, so the planned artifact list remains readable. Full
+detector-by-detector details are written to `src/analyzer/logs/analyzer-*.log`.
 
 ---
 
@@ -269,7 +279,7 @@ Useful flags:
 |---|---|
 | Simulator | `src/simulator/logs/simulator.log` |
 | Injector  | console progress plus `src/injector/logs/upload_samples-*.log` |
-| Analyzer  | configured via `src/analyzer/config.yaml` |
+| Analyzer  | console progress plus `src/analyzer/logs/analyzer-*.log` |
 | LiteLLM   | `/home/proxy-runner/litellm.log` (VM deployment only) |
 
 Log level and file path are controlled by `logging:` in each component's `config.yaml`.

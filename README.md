@@ -131,6 +131,8 @@ python src/analyzer/evaluate.py --sast-only
 #    Full pipeline — start LiteLLM proxy first (see docs/ops/DEPLOYMENT_MANIFEST.md Step 7)
 #    Default model profile is 'budget'; results stored in src/data/eval_results.db
 python src/analyzer/evaluate.py --profile budget
+#    SSH/tmux dashboard; detailed detector logs are still per-run.
+python src/analyzer/evaluate.py --profile budget --progress always
 
 # 6. Run the test suite
 pytest tests/

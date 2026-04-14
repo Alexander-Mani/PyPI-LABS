@@ -291,6 +291,16 @@ fi
 _INCLUDE_CONTROLS_FLAG=""
 [[ "${INCLUDE_CONTROLS:-0}" == "1" ]] && _INCLUDE_CONTROLS_FLAG="--include-controls"
 
+_EVAL_PROGRESS="${EVAL_PROGRESS:-auto}"
+case "$_EVAL_PROGRESS" in
+  auto|always|never) ;;
+  *)
+    echo "ERROR: invalid EVAL_PROGRESS: $_EVAL_PROGRESS" >&2
+    echo "Allowed values: auto, always, never" >&2
+    exit 1
+    ;;
+esac
+
 echo "Step 10: Running the evaluation pipeline (Entry-Point Scanning)"
 sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
@@ -298,10 +308,12 @@ sudo -u pypi-runner bash -c "
   # Defaulting to the budget model profile for safety; reads configs/evaluation_profiles.yaml.
   python src/analyzer/evaluate.py --profile \"${_MODEL_PROFILE}\" --dry-run-resolution --skip-validation \
     --versions-per-project \"${_VERSIONS_PER_PROJECT}\" \
-    --artifact-policy \"${_ARTIFACT_POLICY}\" ${_INCLUDE_CONTROLS_FLAG}
+    --artifact-policy \"${_ARTIFACT_POLICY}\" \
+    --progress \"${_EVAL_PROGRESS}\" ${_INCLUDE_CONTROLS_FLAG}
   python src/analyzer/evaluate.py --profile \"${_MODEL_PROFILE}\" ${_VERBOSE_FLAG} \
     --versions-per-project \"${_VERSIONS_PER_PROJECT}\" \
-    --artifact-policy \"${_ARTIFACT_POLICY}\" ${_INCLUDE_CONTROLS_FLAG}
+    --artifact-policy \"${_ARTIFACT_POLICY}\" \
+    --progress \"${_EVAL_PROGRESS}\" ${_INCLUDE_CONTROLS_FLAG}
 "
 
 echo "Deployment and evaluation complete. Results stored in src/data/eval_results.db"

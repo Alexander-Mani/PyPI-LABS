@@ -11,6 +11,7 @@ from __future__ import annotations
 import os as _os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Callable
 
 from src.utils.logger import get_logger
 from entry_extractor import PackageInfo
@@ -25,6 +26,8 @@ from adapters import (
 
 log = get_logger()
 
+TaskDescriptor = dict[str, str]
+
 
 def _summarize_error(details: dict | None, limit: int = 500) -> str:
     if not details:
@@ -34,6 +37,58 @@ def _summarize_error(details: dict | None, limit: int = 500) -> str:
     if len(collapsed) <= limit:
         return collapsed
     return collapsed[:limit] + "..."
+
+
+def _adapter_name(adapter: DetectorAdapter) -> str:
+    return (
+        getattr(adapter, "_tool", None)
+        or getattr(adapter, "_detector_name", None)
+        or "unknown"
+    )
+
+
+def _adapter_mode(adapter: DetectorAdapter) -> str:
+    explicit = getattr(adapter, "_experiment_mode", None)
+    if explicit:
+        return str(explicit)
+    if isinstance(adapter, StaticAdapter):
+        return "static"
+    if isinstance(adapter, LLMRawAdapter):
+        return "llm_raw"
+    if isinstance(adapter, LLMAdapter):
+        return "hybrid"
+    if isinstance(adapter, AgenticAdapter):
+        return "agentic"
+    return "unknown"
+
+
+def _task_descriptor(adapter: DetectorAdapter, strategy: str) -> TaskDescriptor:
+    return {
+        "detector": _adapter_name(adapter),
+        "mode": _adapter_mode(adapter),
+        "strategy": strategy,
+    }
+
+
+def _log_result(
+    res: EvalDetectionResult,
+    strategy: str,
+    *,
+    quiet_console: bool,
+) -> None:
+    target_log = log.bind(file_only=True) if quiet_console else log
+    elapsed = res.exec_time_ms / 1000
+    verdict_str = (
+        "ERROR"
+        if res.experiment_mode == "error"
+        else "MALICIOUS" if res.verdict else "benign"
+    )
+    target_log.info(
+        f"    ✓ {res.detector}:{res.experiment_mode}:{strategy}"
+        f" -> {verdict_str} ({elapsed:.1f}s)"
+    )
+    if res.experiment_mode == "error":
+        target_log.warning(f"      error detail: {_summarize_error(res.details)}")
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +154,35 @@ class EvalController:
             for adapter in [*self._llm, *self._llm_raw, *self._agentic]
         }
 
+    def _build_tasks(self, sast_only: bool = False) -> list[tuple]:
+        # Build a uniform task list: (adapter, strategy, sys_override, tpl_override).
+        # All adapters share the DetectorAdapter.run() signature so they can be
+        # dispatched identically. Static adapters ignore the prompt params.
+        tasks: list[tuple] = []
+        for a in self._static:
+            tasks.append((a, "zero_shot", None, None))
+
+        if sast_only:
+            return tasks
+
+        from prompt_manager import PromptManager
+        pm = PromptManager.instance()
+
+        for a in self._llm:
+            for s in pm.llm_strategy_names():
+                sp, ut = pm.get_llm_strategy(s)
+                tasks.append((a, s, sp, ut))
+        for a in self._llm_raw:
+            for s in pm.llm_strategy_names():
+                sp, ut = pm.get_llm_strategy(s)
+                tasks.append((a, s, sp, ut))
+        for a in self._agentic:
+            for s in pm.agentic_strategy_names():
+                sp, im = pm.get_agentic_strategy(s)
+                tasks.append((a, s, sp, im))
+
+        return tasks
+
     def run(
         self,
         run_id: str,
@@ -111,30 +195,16 @@ class EvalController:
         sample_role: str | None = None,
         attack_vector: str | None = None,
         resolver_policy: str | None = None,
+        on_tasks_prepared: Callable[[list[TaskDescriptor]], None] | None = None,
+        on_result: Callable[[EvalDetectionResult, str, str], None] | None = None,
+        quiet_console: bool = False,
     ) -> list[EvalDetectionResult]:
-        from prompt_manager import PromptManager
-        pm = PromptManager.instance()
-
-        # Build a uniform task list: (adapter, strategy, sys_override, tpl_override).
-        # All adapters share the DetectorAdapter.run() signature so they can be
-        # dispatched identically. Static adapters ignore the prompt params.
-        tasks: list[tuple] = []
-        for a in self._static:
-            tasks.append((a, "zero_shot", None, None))
-
-        if not sast_only:
-            for a in self._llm:
-                for s in pm.llm_strategy_names():
-                    sp, ut = pm.get_llm_strategy(s)
-                    tasks.append((a, s, sp, ut))
-            for a in self._llm_raw:
-                for s in pm.llm_strategy_names():
-                    sp, ut = pm.get_llm_strategy(s)
-                    tasks.append((a, s, sp, ut))
-            for a in self._agentic:
-                for s in pm.agentic_strategy_names():
-                    sp, im = pm.get_agentic_strategy(s)
-                    tasks.append((a, s, sp, im))
+        tasks = self._build_tasks(sast_only=sast_only)
+        if on_tasks_prepared is not None:
+            on_tasks_prepared([
+                _task_descriptor(adapter, strategy)
+                for adapter, strategy, _sys_p, _tpl in tasks
+            ])
 
         results: list[EvalDetectionResult] = []
         gt_label = ground_truth  # bool | None — derived from dataset labels
@@ -147,22 +217,12 @@ class EvalController:
 
             for future in as_completed(futures):
                 adapter, strategy = futures[future]
+                intended_mode = _adapter_mode(adapter)
                 try:
                     res = future.result()
-                    elapsed = res.exec_time_ms / 1000
-                    verdict_str = (
-                        "ERROR"
-                        if res.experiment_mode == "error"
-                        else "MALICIOUS" if res.verdict else "benign"
-                    )
-                    log.info(
-                        f"    ✓ {res.detector}:{res.experiment_mode}:{strategy}"
-                        f" → {verdict_str} ({elapsed:.1f}s)"
-                    )
-                    if res.experiment_mode == "error":
-                        log.warning(f"      error detail: {_summarize_error(res.details)}")
+                    _log_result(res, strategy, quiet_console=quiet_console)
                 except Exception as exc:
-                    name = getattr(adapter, "_tool", None) or getattr(adapter, "_detector_name", None) or "unknown"
+                    name = _adapter_name(adapter)
                     res = EvalDetectionResult(
                         detector=name, experiment_mode="error",
                         verdict=False, confidence=None,
@@ -170,10 +230,11 @@ class EvalController:
                         exec_time_ms=0, api_cost_usd=0.0,
                         details={"error": str(exc)},
                     )
-                    log.info(f"    ✓ {name}:error:{strategy} → ERROR (0.0s)")
-                    log.warning(f"      error detail: {_summarize_error(res.details)}")
+                    _log_result(res, strategy, quiet_console=quiet_console)
 
                 results.append(res)
+                if on_result is not None:
+                    on_result(res, strategy, intended_mode)
                 # Propagate extractor-level bad-password skips into the result details.
                 if pkg.bad_password_files:
                     res.details["skipped_bad_password"] = pkg.bad_password_files

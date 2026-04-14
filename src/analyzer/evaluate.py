@@ -13,7 +13,9 @@ Usage:
     python src/analyzer/evaluate.py [--config PATH] [--profile budget]
                                     [--tier budget|medium|frontier]
                                     [--skip-validation] [--sast-only]
-                                    [--dry-run-resolution] [--verbose]
+                                    [--dry-run-resolution]
+                                    [--progress auto|always|never]
+                                    [--verbose]
 
 See CONCERNS.md for known limitations before interpreting results.
 """
@@ -36,11 +38,12 @@ for _p in (_REPO_ROOT, _ANALYZER_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from src.utils.logger import get_logger, setup_logger
+from src.utils.logger import get_active_log_path, get_logger, setup_logger
 from src.data.db_manager import DBManager
 from entry_extractor import EntryPointExtractor
 from heuristic_filter import HeuristicFilter
 from detection_controller import EvalController
+from progress_ui import AnalyzerProgress, should_use_progress
 from simulator_resolver import (
     IndexArtifact,
     ResolvedSample,
@@ -128,6 +131,7 @@ class EvaluationRunner:
         versions_per_project: int = 2,
         artifact_policy: str = "pip+sdist",
         include_controls: bool = False,
+        progress_enabled: bool = False,
     ):
         self._cfg  = config
         self._tier = tier
@@ -138,6 +142,7 @@ class EvaluationRunner:
         self._versions_per_project = versions_per_project
         self._artifact_policy = artifact_policy
         self._include_controls = include_controls
+        self._progress_enabled = progress_enabled
         self._db   = DBManager()
         self._extractor = EntryPointExtractor()
         self._filter    = HeuristicFilter()
@@ -509,40 +514,63 @@ class EvaluationRunner:
                 )
             return
 
-        for sample in samples:
-            log.info(
-                f"  Processing {sample.package_name} {sample.version} "
-                f"({sample.artifact_filename})"
-            )
-            try:
-                pkg = self._extractor.extract(sample.archive_path)
-                # Override name/version with simulator-resolved values.
-                pkg.name    = sample.package_name
-                pkg.version = sample.version
-                log.info(
-                    f"    Decoded {len(pkg.files)} file(s) "
-                    f"({len(pkg.files_raw)} entry point(s))"
-                    + (f"  [bad-password: {pkg.bad_password_files}]"
-                       if pkg.bad_password_files else "")
+        with AnalyzerProgress(
+            enabled=self._progress_enabled,
+            total_samples=len(samples),
+            run_id=run_id,
+            run_label=self._run_label if not sast_only else "sast-only",
+        ) as progress:
+            run_log = log.bind(file_only=True) if progress.active else log
+            for index, sample in enumerate(samples, start=1):
+                progress.start_package(index, sample)
+                run_log.info(
+                    f"  Processing {sample.package_name} {sample.version} "
+                    f"({sample.artifact_filename})"
                 )
-                pkg = self._filter.scan(pkg)
-                if pkg.heuristic_flags:
-                    log.info(f"    Heuristic flags: {', '.join(pkg.heuristic_flags)}")
-                results = self._controller.run(
-                    run_id=run_id, pkg=pkg,
-                    ground_truth=sample.ground_truth, sast_only=sast_only,
-                    artifact_filename=sample.artifact_filename,
-                    artifact_url=sample.artifact_url,
-                    source_index_url=sample.source_index_url,
-                    sample_role=sample.sample_role,
-                    attack_vector=sample.attack_vector,
-                    resolver_policy=sample.resolver_policy,
-                )
-                n_valid   = sum(1 for r in results if r.experiment_mode != "error")
-                n_flagged = sum(1 for r in results if r.verdict and r.experiment_mode != "error")
-                log.info(f"    Verdict: {n_flagged}/{n_valid} detector(s) flagged malicious")
-            except Exception as exc:
-                log.error(f"  Failed {sample.artifact_filename}: {exc}")
+                try:
+                    pkg = self._extractor.extract(sample.archive_path)
+                    # Override name/version with simulator-resolved values.
+                    pkg.name    = sample.package_name
+                    pkg.version = sample.version
+                    progress.record_extraction(
+                        decoded_files=len(pkg.files),
+                        entry_points=len(pkg.files_raw),
+                        bad_password_files=pkg.bad_password_files,
+                    )
+                    run_log.info(
+                        f"    Decoded {len(pkg.files)} file(s) "
+                        f"({len(pkg.files_raw)} entry point(s))"
+                        + (f"  [bad-password: {pkg.bad_password_files}]"
+                           if pkg.bad_password_files else "")
+                    )
+                    pkg = self._filter.scan(pkg)
+                    progress.record_heuristics(pkg.heuristic_flags)
+                    if pkg.heuristic_flags:
+                        run_log.info(f"    Heuristic flags: {', '.join(pkg.heuristic_flags)}")
+                    results = self._controller.run(
+                        run_id=run_id, pkg=pkg,
+                        ground_truth=sample.ground_truth, sast_only=sast_only,
+                        artifact_filename=sample.artifact_filename,
+                        artifact_url=sample.artifact_url,
+                        source_index_url=sample.source_index_url,
+                        sample_role=sample.sample_role,
+                        attack_vector=sample.attack_vector,
+                        resolver_policy=sample.resolver_policy,
+                        on_tasks_prepared=(
+                            progress.set_detector_tasks if progress.active else None
+                        ),
+                        on_result=(
+                            progress.record_result if progress.active else None
+                        ),
+                        quiet_console=progress.active,
+                    )
+                    n_valid   = sum(1 for r in results if r.experiment_mode != "error")
+                    n_flagged = sum(1 for r in results if r.verdict and r.experiment_mode != "error")
+                    progress.complete_package(valid_results=n_valid, flagged_results=n_flagged)
+                    run_log.info(f"    Verdict: {n_flagged}/{n_valid} detector(s) flagged malicious")
+                except Exception as exc:
+                    progress.fail_package(sample.artifact_filename, exc)
+                    run_log.error(f"  Failed {sample.artifact_filename}: {exc}")
 
         self._print_metrics(run_id)
 
@@ -828,6 +856,12 @@ if __name__ == "__main__":
         help="Include high-volume controls in simulator-resolved evaluation",
     )
     parser.add_argument(
+        "--progress",
+        choices=["auto", "always", "never"],
+        default="auto",
+        help="Live analyzer progress display: auto, always, or never",
+    )
+    parser.add_argument(
         "--verbose", action="store_true",
         help="Enable DEBUG-level logging (raw prompts, responses, per-file extraction)",
     )
@@ -854,6 +888,13 @@ if __name__ == "__main__":
         # Preserve configured sinks; just raise their level before first setup.
         cfg.setdefault("logging", {})["level"] = "DEBUG"
     setup_logger(cfg)
+    active_log_path = get_active_log_path()
+    if active_log_path is not None:
+        log.info(f"Detailed log: {active_log_path}")
+    progress_enabled = should_use_progress(
+        args.progress,
+        dry_run_resolution=args.dry_run_resolution,
+    )
     EvaluationRunner(
         cfg,
         tier=tier,
@@ -862,6 +903,7 @@ if __name__ == "__main__":
         versions_per_project=args.versions_per_project,
         artifact_policy=args.artifact_policy,
         include_controls=args.include_controls,
+        progress_enabled=progress_enabled,
     ).run(
         skip_validation=args.skip_validation,
         sast_only=args.sast_only,
