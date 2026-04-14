@@ -1,0 +1,61 @@
+# LiteLLM proxy configuration for PyPi-SCADA.
+# Maps bare model names used in src/analyzer/configs/*.yaml to provider routes.
+# Deploy to /home/proxy-runner/litellm_config.yaml on the VM.
+# Start with: litellm --config litellm_config.yaml --port 4000
+
+model_list:
+
+  # --- Budget tier ---
+  - model_name: claude-haiku-4-5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+
+  - model_name: gpt-5.4-nano
+    litellm_params:
+      model: openai/gpt-5.4-nano
+
+  - model_name: gemini-3.1-flash-lite-preview
+    litellm_params:
+      model: gemini/gemini-3.1-flash-lite-preview
+
+  # together_ai/* names pass through as-is; listed for health check visibility
+  - model_name: together_ai/Qwen/Qwen3.5-9B
+    litellm_params:
+      model: together_ai/Qwen/Qwen3.5-9B
+
+  # --- Medium tier ---
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+
+  - model_name: gpt-5.4-mini
+    litellm_params:
+      model: openai/gpt-5.4-mini
+
+  - model_name: gemini-3-flash
+    litellm_params:
+      model: gemini/gemini-3-flash
+
+  - model_name: together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo
+    litellm_params:
+      model: together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo
+
+  # --- Frontier tier ---
+  - model_name: claude-opus-4-6
+    litellm_params:
+      model: anthropic/claude-opus-4-6
+
+  - model_name: gpt-5.4
+    litellm_params:
+      model: openai/gpt-5.4
+
+  - model_name: gemini-3.1-pro-preview
+    litellm_params:
+      model: gemini/gemini-3.1-pro-preview
+
+  - model_name: together_ai/Qwen/Qwen3.5-397B-A17B
+    litellm_params:
+      model: together_ai/Qwen/Qwen3.5-397B-A17B
+
+litellm_settings:
+  drop_params: true

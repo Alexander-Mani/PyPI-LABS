@@ -158,10 +158,13 @@ sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -j DROP
 
 ### 7.1 Setup and Start LiteLLM Proxy
 ```bash
+sudo cp /home/pypi-runner/pypi-scada-repo/configs/litellm_config.yaml /home/proxy-runner/litellm_config.yaml
+sudo chown proxy-runner:proxy-runner /home/proxy-runner/litellm_config.yaml
+
 sudo -u proxy-runner bash -c "
   source /home/proxy-runner/.env
   source /home/proxy-runner/venv/bin/activate
-  nohup litellm --port 4000 > /home/proxy-runner/litellm.log 2>&1 &
+  nohup litellm --config /home/proxy-runner/litellm_config.yaml --port 4000 > /home/proxy-runner/litellm.log 2>&1 &
 "
 ```
 

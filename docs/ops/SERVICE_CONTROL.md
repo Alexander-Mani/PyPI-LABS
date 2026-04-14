@@ -6,7 +6,7 @@ Script:
 - `scripts/service_control.sh`
 
 Managed services:
-- LiteLLM proxy (`litellm --port 4000` by default)
+- LiteLLM proxy (`litellm --config /home/proxy-runner/litellm_config.yaml --port 4000` by default)
 - PyPI simulator (`python main.py` under `src/simulator`)
 
 ## Usage
@@ -53,7 +53,8 @@ scripts/service_control.sh start \
 scripts/service_control.sh status \
   --repo-root /custom/path \
   --sim-port 8080 \
-  --litellm-port 4000
+  --litellm-port 4000 \
+  --litellm-config /custom/litellm_config.yaml
 ```
 
 ## Notes

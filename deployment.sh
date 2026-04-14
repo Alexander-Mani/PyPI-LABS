@@ -155,6 +155,8 @@ sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -d api.together.xyz -p
 sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -j DROP || true
 
 echo "Step 7: Starting LiteLLM proxy"
+sudo cp /home/pypi-runner/pypi-scada-repo/configs/litellm_config.yaml /home/proxy-runner/litellm_config.yaml
+sudo chown proxy-runner:proxy-runner /home/proxy-runner/litellm_config.yaml
 sudo -u proxy-runner bash -c "
   source /home/proxy-runner/.env
   source /home/proxy-runner/venv/bin/activate
@@ -165,7 +167,7 @@ sudo -u proxy-runner bash -c "
     kill \$existing_litellm_pids 2>/dev/null || true
     sleep 1
   fi
-  nohup litellm --port 4000 > /home/proxy-runner/litellm.log 2>&1 &
+  nohup litellm --config /home/proxy-runner/litellm_config.yaml --port 4000 > /home/proxy-runner/litellm.log 2>&1 &
 "
 
 echo "Waiting for LiteLLM health check (up to 60 s)..."

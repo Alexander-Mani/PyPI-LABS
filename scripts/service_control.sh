@@ -21,6 +21,7 @@ SIM_PORT="8080"
 LITELLM_PORT="4000"
 SIM_LOG="/home/pypi-runner/simulator.log"
 LITELLM_LOG="/home/proxy-runner/litellm.log"
+LITELLM_CONFIG=""
 NO_SUDO=0
 
 usage() {
@@ -35,6 +36,7 @@ Options:
   --litellm-port <port>   LiteLLM port for status checks (default: 4000)
   --sim-log <path>        Simulator log file path
   --litellm-log <path>    LiteLLM log file path
+  --litellm-config <path> LiteLLM model routing config path
   --no-sudo               Run commands directly (for same-user local dev)
   -h, --help              Show this help
 
@@ -114,6 +116,10 @@ parse_args() {
         LITELLM_LOG="${2:-}"
         shift 2
         ;;
+      --litellm-config)
+        LITELLM_CONFIG="${2:-}"
+        shift 2
+        ;;
       --no-sudo)
         NO_SUDO=1
         shift
@@ -143,9 +149,39 @@ validate_env() {
   fi
 }
 
+resolve_litellm_config() {
+  if [[ -n "$LITELLM_CONFIG" ]]; then
+    return
+  fi
+
+  if [[ "$NO_SUDO" -eq 1 ]]; then
+    LITELLM_CONFIG="$REPO_ROOT/configs/litellm_config.yaml"
+  else
+    LITELLM_CONFIG="/home/$PROXY_USER/litellm_config.yaml"
+  fi
+}
+
+ensure_litellm_config() {
+  resolve_litellm_config
+
+  if [[ -f "$LITELLM_CONFIG" ]]; then
+    return
+  fi
+
+  local repo_config="$REPO_ROOT/configs/litellm_config.yaml"
+  if [[ "$NO_SUDO" -eq 0 && "$LITELLM_CONFIG" == "/home/$PROXY_USER/litellm_config.yaml" && -f "$repo_config" ]]; then
+    sudo cp "$repo_config" "$LITELLM_CONFIG"
+    sudo chown "$PROXY_USER:$PROXY_USER" "$LITELLM_CONFIG"
+    return
+  fi
+
+  log "ERROR: LiteLLM config not found: $LITELLM_CONFIG"
+  exit 1
+}
+
 stop_litellm() {
   log "Stopping LiteLLM (user: $PROXY_USER)..."
-  run_as "$PROXY_USER" "pkill -u $PROXY_USER -f 'litellm --port $LITELLM_PORT' || true"
+  run_as "$PROXY_USER" "pkill -u $PROXY_USER -f 'litellm .*--port $LITELLM_PORT' || true"
 }
 
 stop_simulator() {
@@ -155,12 +191,14 @@ stop_simulator() {
 
 start_litellm() {
   log "Starting LiteLLM on port $LITELLM_PORT (user: $PROXY_USER)..."
+  ensure_litellm_config
   run_as "$PROXY_USER" "
     test -f /home/$PROXY_USER/.env || { echo 'ERROR: missing /home/$PROXY_USER/.env'; exit 1; }
     test -f /home/$PROXY_USER/venv/bin/activate || { echo 'ERROR: missing /home/$PROXY_USER/venv'; exit 1; }
+    test -f '$LITELLM_CONFIG' || { echo 'ERROR: missing $LITELLM_CONFIG'; exit 1; }
     source /home/$PROXY_USER/.env
     source /home/$PROXY_USER/venv/bin/activate
-    nohup litellm --port $LITELLM_PORT > '$LITELLM_LOG' 2>&1 &
+    nohup litellm --config '$LITELLM_CONFIG' --port $LITELLM_PORT > '$LITELLM_LOG' 2>&1 &
   "
 }
 
@@ -176,15 +214,15 @@ start_simulator() {
 
 status_litellm() {
   log "LiteLLM process:"
-  if pgrep -a -u "$PROXY_USER" -f "litellm --port $LITELLM_PORT" >/dev/null 2>&1; then
-    pgrep -a -u "$PROXY_USER" -f "litellm --port $LITELLM_PORT"
+  if pgrep -a -u "$PROXY_USER" -f "litellm .*--port $LITELLM_PORT" >/dev/null 2>&1; then
+    pgrep -a -u "$PROXY_USER" -f "litellm .*--port $LITELLM_PORT"
   else
     log "  not running"
   fi
 
   log "LiteLLM health endpoint:"
-  if curl -s "http://127.0.0.1:$LITELLM_PORT/health" >/dev/null 2>&1; then
-    log "  up (127.0.0.1:$LITELLM_PORT/health)"
+  if curl -s "http://127.0.0.1:$LITELLM_PORT/health/readiness" >/dev/null 2>&1; then
+    log "  up (127.0.0.1:$LITELLM_PORT/health/readiness)"
   else
     log "  down/unreachable"
   fi

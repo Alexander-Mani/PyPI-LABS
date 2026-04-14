@@ -266,7 +266,9 @@ Log level and file path are controlled by `logging:` in each component's `config
 ## LiteLLM Proxy (LLM evaluation only)
 
 All LLM detector calls route through LiteLLM running as `proxy-runner` on
-`http://127.0.0.1:4000`. The analyzer process holds no API keys.
+`http://127.0.0.1:4000`. The analyzer process holds no API keys. The proxy
+configuration in `configs/litellm_config.yaml` maps analyzer model names to
+provider-specific LiteLLM routes.
 
 **Local dev:** Start LiteLLM manually with API keys in your environment:
 
@@ -274,7 +276,8 @@ All LLM detector calls route through LiteLLM running as `proxy-runner` on
 export ANTHROPIC_API_KEY=...
 export OPENAI_API_KEY=...
 export GEMINI_API_KEY=...
-litellm --port 4000
+export TOGETHER_API_KEY=...
+litellm --config configs/litellm_config.yaml --port 4000
 ```
 
 **VM deployment:** See `docs/ops/DEPLOYMENT_MANIFEST.md` Step 7 — LiteLLM runs as
