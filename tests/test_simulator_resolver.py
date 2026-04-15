@@ -28,7 +28,7 @@ class _FakeResponse:
         return self._body
 
 
-def test_resolver_uses_pep440_for_latest_previous(monkeypatch, tmp_path):
+def test_resolver_uses_pep440_for_latest_labelled_version(monkeypatch, tmp_path):
     html = b"""
     <a href="/packages/pkg/pkg-0.1.2.tar.gz">pkg-0.1.2.tar.gz</a>
     <a href="/packages/pkg/pkg-0.1.10.tar.gz">pkg-0.1.10.tar.gz</a>
@@ -46,9 +46,9 @@ def test_resolver_uses_pep440_for_latest_previous(monkeypatch, tmp_path):
     resolver = SimulatorResolver("http://127.0.0.1:8080", tmp_path)
 
     artifacts = resolver.list_project_artifacts("pkg")
-    selected = resolver.select_versions({a.version for a in artifacts}, count=2)
+    selected = resolver.select_versions({a.version for a in artifacts})
 
-    assert selected == ["0.1.10", "0.1.2"]
+    assert selected == ["0.1.10"]
 
 
 def test_resolver_selects_pip_like_wheel_plus_sdist(tmp_path):
@@ -68,6 +68,21 @@ def test_resolver_selects_pip_like_wheel_plus_sdist(tmp_path):
     ]
     assert [a.filename for a in resolver.select_artifacts(artifacts, policy="sdist")] == [
         "pkg-1.0.0.tar.gz"
+    ]
+
+
+def test_resolver_selects_all_artifacts_for_canonical_policy(tmp_path):
+    resolver = SimulatorResolver("http://127.0.0.1:8080", tmp_path)
+    artifacts = [
+        resolver_artifact("pkg", "1.0.0", "pkg-1.0.0-py3-none-any.whl", "wheel"),
+        resolver_artifact("pkg", "1.0.0", "pkg-1.0.0.tar.gz", "sdist"),
+        resolver_artifact("pkg", "1.0.0", "pkg-1.0.0-cp311-cp311-linux.whl", "wheel"),
+    ]
+
+    assert [a.filename for a in resolver.select_artifacts(artifacts, policy="all")] == [
+        "pkg-1.0.0.tar.gz",
+        "pkg-1.0.0-cp311-cp311-linux.whl",
+        "pkg-1.0.0-py3-none-any.whl",
     ]
 
 

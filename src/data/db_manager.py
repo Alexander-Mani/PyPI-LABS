@@ -174,6 +174,22 @@ class DBManager(DBCore):
         api_cost_usd: float = 0.0,
         details: dict | None = None,
     ) -> int | None:
+        if ground_truth is not None:
+            existing = self.cursor.execute(
+                """SELECT DISTINCT ground_truth
+                   FROM eval_result
+                   WHERE run_id=? AND package_name=? AND version=?
+                     AND ground_truth IS NOT NULL""",
+                (run_id, package_name, version),
+            ).fetchall()
+            existing_values = {int(row[0]) for row in existing}
+            new_value = int(ground_truth)
+            if existing_values and existing_values != {new_value}:
+                raise ValueError(
+                    "HALT: conflicting ground_truth for "
+                    f"{package_name}=={version} in run {run_id}: "
+                    f"existing={sorted(existing_values)} new={new_value}"
+                )
         return self.write_one(
             """INSERT OR REPLACE INTO eval_result
                (run_id, package_name, version, experiment_mode, prompt_strategy,

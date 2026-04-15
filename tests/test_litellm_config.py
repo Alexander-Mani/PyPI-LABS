@@ -109,3 +109,10 @@ def test_budget_no_gemini_profile_excludes_gemini_flash_lite():
 
     assert "gemini_flash_lite" in profiles["budget"]
     assert "gemini_flash_lite" not in profiles["budget_no_gemini"]
+
+
+def test_test_profiles_have_expected_gemini_split():
+    profiles = _profile_config_stems()
+
+    assert "gemini_flash_lite" in profiles["test"]
+    assert "gemini_flash_lite" not in profiles["test_no_gemini"]

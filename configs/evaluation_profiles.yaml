@@ -17,3 +17,32 @@ profiles:
       - gpt_nano
       - together_budget
       - claude_haiku_agentic
+
+  test:
+    tier: budget
+    configs:
+      - claude_haiku
+      - gpt_nano
+      - gemini_flash_lite
+      - together_budget
+      - claude_haiku_agentic
+    resolver:
+      include_controls: true
+      package_limits:
+        malicious: 2
+        control: 2
+        benign: 0
+
+  test_no_gemini:
+    tier: budget
+    configs:
+      - claude_haiku
+      - gpt_nano
+      - together_budget
+      - claude_haiku_agentic
+    resolver:
+      include_controls: true
+      package_limits:
+        malicious: 2
+        control: 2
+        benign: 0

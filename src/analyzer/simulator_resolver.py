@@ -207,11 +207,11 @@ class SimulatorResolver:
         self,
         versions: set[str],
         *,
-        count: int = 2,
+        count: int = 1,
         extra_versions: set[str] | None = None,
     ) -> list[str]:
         """
-        Select latest + previous stable PEP 440 versions by default.
+        Select the latest stable PEP 440 version(s).
         Pre-releases are ignored unless no stable release exists.
         """
         parsed: list[tuple[Version, str]] = []
@@ -243,10 +243,13 @@ class SimulatorResolver:
         self,
         artifacts: list[IndexArtifact],
         *,
-        policy: str = "pip+sdist",
+        policy: str = "all",
     ) -> list[IndexArtifact]:
         if not artifacts:
             return []
+
+        if policy == "all":
+            return sorted(artifacts, key=lambda a: (a.kind, a.filename))
 
         wheels = sorted((a for a in artifacts if a.kind == "wheel"), key=_wheel_score)
         sdists = sorted((a for a in artifacts if a.kind == "sdist"), key=_sdist_sort_key)

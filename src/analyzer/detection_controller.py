@@ -237,6 +237,7 @@ class EvalController:
                 results.append(res)
                 if on_result is not None:
                     on_result(res, strategy, intended_mode)
+                res.details.setdefault("intended_mode", intended_mode)
                 # Propagate extractor-level bad-password skips into the result details.
                 if pkg.bad_password_files:
                     res.details["skipped_bad_password"] = pkg.bad_password_files

@@ -28,7 +28,7 @@ import json
 import re
 import sys
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 # Ensure repo root and src/analyzer/ are on sys.path (mirrors existing main.py pattern).
@@ -84,7 +84,24 @@ class GroundTruthLabel:
     baseline_target: str | None = None
 
 
-def _load_evaluation_profile(profile_name: str) -> tuple[str, set[str]]:
+@dataclass(frozen=True)
+class EvaluationProfile:
+    name: str
+    tier: str
+    config_stems: set[str]
+    include_controls: bool | None = None
+    package_limits: dict[str, int] | None = None
+
+
+@dataclass(frozen=True)
+class ResolvedPackage:
+    project: str
+    version: str
+    label: GroundTruthLabel
+    artifacts: list[IndexArtifact]
+
+
+def _load_evaluation_profile(profile_name: str) -> EvaluationProfile:
     import yaml as _yaml
 
     with open(_PROFILES_PATH, encoding="utf-8") as f:
@@ -105,7 +122,50 @@ def _load_evaluation_profile(profile_name: str) -> tuple[str, set[str]]:
         )
     if not configs:
         raise SystemExit(f"HALT: evaluation profile '{profile_name}' selects no model configs.")
-    return tier, set(configs)
+
+    resolver_cfg = profile.get("resolver", {})
+    if not isinstance(resolver_cfg, dict):
+        raise SystemExit(
+            f"HALT: evaluation profile '{profile_name}' resolver section must be a mapping."
+        )
+
+    include_controls = resolver_cfg.get("include_controls")
+    if include_controls is not None and not isinstance(include_controls, bool):
+        raise SystemExit(
+            f"HALT: evaluation profile '{profile_name}' resolver.include_controls "
+            "must be true or false."
+        )
+
+    raw_limits = resolver_cfg.get("package_limits")
+    package_limits: dict[str, int] | None = None
+    if raw_limits is not None:
+        if not isinstance(raw_limits, dict):
+            raise SystemExit(
+                f"HALT: evaluation profile '{profile_name}' resolver.package_limits "
+                "must be a mapping."
+            )
+        valid_roles = {"malicious", "benign", "control"}
+        package_limits = {}
+        for role, limit in raw_limits.items():
+            if role not in valid_roles:
+                raise SystemExit(
+                    f"HALT: evaluation profile '{profile_name}' has unknown "
+                    f"package limit role '{role}'. Valid roles: {sorted(valid_roles)}"
+                )
+            if not isinstance(limit, int) or limit < 0:
+                raise SystemExit(
+                    f"HALT: evaluation profile '{profile_name}' package limit for "
+                    f"'{role}' must be a non-negative integer."
+                )
+            package_limits[role] = limit
+
+    return EvaluationProfile(
+        name=profile_name,
+        tier=tier,
+        config_stems=set(configs),
+        include_controls=include_controls,
+        package_limits=package_limits,
+    )
 
 
 def _collapse_error(details: dict, limit: int = 300) -> str:
@@ -114,6 +174,80 @@ def _collapse_error(details: dict, limit: int = 300) -> str:
     if len(collapsed) <= limit:
         return collapsed
     return collapsed[:limit] + "..."
+
+
+def _aggregate_package_version_metrics(
+    results: list[dict],
+) -> tuple[dict[str, dict[str, int]], int, int, set[str]]:
+    """
+    Collapse artifact-level rows into package-version metrics.
+    Any successful artifact verdict marks that package-version detector group
+    malicious; all-error groups are excluded.
+    """
+    stats: dict[str, dict[str, int]] = {}
+    unknown_pkgs: set[str] = set()
+    grouped: dict[tuple[str, str, str, str, str], dict] = {}
+    error_rows = 0
+
+    for r in results:
+        stored_gt = r.get("ground_truth")
+        if stored_gt is None:
+            unknown_pkgs.add(r["package_name"])
+            continue
+        true_label = bool(stored_gt)
+        mode = str(r.get("experiment_mode") or "unknown")
+        if mode == "error":
+            details = r.get("details") or {}
+            mode = str(details.get("intended_mode") or "error")
+
+        group_key = (
+            r["package_name"],
+            r["version"],
+            r["detector"],
+            mode,
+            r["prompt_strategy"],
+        )
+        group = grouped.setdefault(group_key, {
+            "ground_truth": true_label,
+            "verdict": False,
+            "success_rows": 0,
+            "error_rows": 0,
+        })
+        if group["ground_truth"] != true_label:
+            raise SystemExit(
+                "HALT: conflicting ground truth rows inside metric group: "
+                f"{group_key} existing={int(group['ground_truth'])} "
+                f"new={int(true_label)}"
+            )
+        if r.get("experiment_mode") == "error":
+            group["error_rows"] += 1
+            error_rows += 1
+            continue
+
+        group["success_rows"] += 1
+        group["verdict"] = group["verdict"] or bool(r["verdict"])
+
+    excluded_groups = 0
+    for (_pkg, _version, detector, mode, strategy), group in grouped.items():
+        if group["success_rows"] == 0:
+            excluded_groups += 1
+            continue
+        key = f"{detector}:{mode}:{strategy}"
+        if key not in stats:
+            stats[key] = {"TP": 0, "TN": 0, "FP": 0, "FN": 0}
+
+        predicted = bool(group["verdict"])
+        true_label = bool(group["ground_truth"])
+        if predicted and true_label:
+            stats[key]["TP"] += 1
+        elif not predicted and not true_label:
+            stats[key]["TN"] += 1
+        elif predicted and not true_label:
+            stats[key]["FP"] += 1
+        else:
+            stats[key]["FN"] += 1
+
+    return stats, error_rows, excluded_groups, unknown_pkgs
 
 
 # ---------------------------------------------------------------------------
@@ -128,20 +262,16 @@ class EvaluationRunner:
         tier: str = "budget",
         profile: str | None = None,
         model_config_stems: set[str] | None = None,
-        versions_per_project: int = 2,
-        artifact_policy: str = "pip+sdist",
         include_controls: bool = False,
+        package_limits: dict[str, int] | None = None,
         progress_enabled: bool = False,
     ):
         self._cfg  = config
         self._tier = tier
         self._profile = profile
         self._run_label = f"profile:{profile}" if profile else f"tier:{tier}"
-        if versions_per_project < 1:
-            raise ValueError("versions_per_project must be >= 1")
-        self._versions_per_project = versions_per_project
-        self._artifact_policy = artifact_policy
         self._include_controls = include_controls
+        self._package_limits = package_limits or {}
         self._progress_enabled = progress_enabled
         self._db   = DBManager()
         self._extractor = EntryPointExtractor()
@@ -378,11 +508,11 @@ class EvaluationRunner:
         if download and self._resolved_cache is not None:
             return self._resolved_cache
 
-        truth, lkgr_by_project = self._build_ground_truth_index()
+        truth, _lkgr_by_project = self._build_ground_truth_index()
         if not truth:
             raise SystemExit("HALT: no labelled dataset versions found under samples/.")
 
-        resolved: list[ResolvedSample] = []
+        packages: list[ResolvedPackage] = []
         projects = sorted({project for project, _ in truth})
         for project in projects:
             try:
@@ -397,8 +527,7 @@ class EvaluationRunner:
             selectable_versions = index_versions.intersection(labelled_versions)
             selected_versions = self._resolver.select_versions(
                 selectable_versions,
-                count=self._versions_per_project,
-                extra_versions=lkgr_by_project.get(project, set()),
+                count=1,
             )
             if not selected_versions:
                 log.warning(
@@ -407,43 +536,108 @@ class EvaluationRunner:
                 )
                 continue
 
-            for version in selected_versions:
-                label = truth.get((project, version))
-                if label is None:
-                    log.warning(f"Skipping unlabelled simulator version: {project}=={version}")
-                    continue
-                version_artifacts = [artifact for artifact in artifacts if artifact.version == version]
-                selected_artifacts = self._resolver.select_artifacts(
-                    version_artifacts,
-                    policy=self._artifact_policy,
-                )
-                for artifact in selected_artifacts:
-                    archive_path = (
-                        self._resolver.download_artifact(artifact)
-                        if download
-                        else self._resolver.cache_dir / artifact.project / artifact.version / artifact.filename
-                    )
-                    resolved.append(ResolvedSample(
-                        archive_path=archive_path,
-                        package_name=project,
-                        version=version,
-                        ground_truth=label.is_malicious,
-                        artifact_filename=artifact.filename,
-                        artifact_url=artifact.url,
-                        source_index_url=self._resolver.project_index_url(project),
-                        sample_role=label.sample_role,
-                        attack_vector=label.attack_vector,
-                        resolver_policy=json.dumps({
-                            "version_strategy": "latest_n_stable_plus_lkgr",
-                            "versions_per_project": self._versions_per_project,
-                            "artifact_policy": self._artifact_policy,
-                            "pre_release_policy": "ignore_unless_no_stable",
-                        }, sort_keys=True),
-                    ))
+            version = selected_versions[0]
+            label = truth.get((project, version))
+            if label is None:
+                log.warning(f"Skipping unlabelled simulator version: {project}=={version}")
+                continue
+            version_artifacts = [artifact for artifact in artifacts if artifact.version == version]
+            selected_artifacts = self._resolver.select_artifacts(
+                version_artifacts,
+                policy="all",
+            )
+            if not selected_artifacts:
+                log.warning(f"No artifacts selected for {project}=={version}")
+                continue
+            packages.append(ResolvedPackage(
+                project=project,
+                version=version,
+                label=label,
+                artifacts=selected_artifacts,
+            ))
+
+        packages = self._apply_package_limits(packages)
+        resolved: list[ResolvedSample] = []
+        for package in packages:
+            resolver_policy = json.dumps({
+                "version_strategy": "latest_labelled_stable",
+                "artifact_policy": "all",
+                "package_limits": self._package_limits,
+                "pre_release_policy": "ignore_unless_no_stable",
+                "metric_unit": "package_version",
+            }, sort_keys=True)
+            for artifact in package.artifacts:
+                resolved.append(ResolvedSample(
+                    archive_path=(
+                        self._resolver.cache_dir
+                        / artifact.project
+                        / artifact.version
+                        / artifact.filename
+                    ),
+                    package_name=package.project,
+                    version=package.version,
+                    ground_truth=package.label.is_malicious,
+                    artifact_filename=artifact.filename,
+                    artifact_url=artifact.url,
+                    source_index_url=self._resolver.project_index_url(package.project),
+                    sample_role=package.label.sample_role,
+                    attack_vector=package.label.attack_vector,
+                    resolver_policy=resolver_policy,
+                ))
 
         if download:
+            resolved = [
+                replace(sample, archive_path=self._download_sample(sample))
+                for sample in resolved
+            ]
             self._resolved_cache = resolved
         return resolved
+
+    def _package_limit_role(self, package: ResolvedPackage) -> str:
+        if package.label.is_malicious:
+            return "malicious"
+        return package.label.sample_role
+
+    def _apply_package_limits(self, packages: list[ResolvedPackage]) -> list[ResolvedPackage]:
+        """
+        Apply optional profile-level package caps before artifact expansion.
+        Limits count packages, while all artifacts for each kept latest version
+        are scanned.
+        """
+        if not self._package_limits:
+            return packages
+
+        kept: list[ResolvedPackage] = []
+        counts = {role: 0 for role in self._package_limits}
+        skipped = {role: 0 for role in self._package_limits}
+
+        for package in packages:
+            role = self._package_limit_role(package)
+            limit = self._package_limits.get(role)
+            if limit is not None and counts.get(role, 0) >= limit:
+                skipped[role] = skipped.get(role, 0) + 1
+                continue
+            kept.append(package)
+            if limit is not None:
+                counts[role] = counts.get(role, 0) + 1
+
+        summary = ", ".join(
+            f"{role}={counts.get(role, 0)}/{limit}"
+            for role, limit in sorted(self._package_limits.items())
+        )
+        skipped_total = sum(skipped.values())
+        log.info(
+            f"Profile package limits applied: {summary}; "
+            f"kept {len(kept)}/{len(packages)} package(s)"
+            + (f", skipped {skipped_total}" if skipped_total else "")
+        )
+        for role, limit in sorted(self._package_limits.items()):
+            if counts.get(role, 0) < limit:
+                log.warning(
+                    f"Profile package limit for {role} requested {limit} package(s) "
+                    f"but only {counts.get(role, 0)} were available after resolution."
+                )
+        return kept
 
     def _log_sample_plan(self, samples: list[ResolvedSample]) -> None:
         projects = {s.package_name for s in samples}
@@ -730,51 +924,27 @@ class EvaluationRunner:
             log.warning("No results stored — nothing to report.")
             return
 
-        # Ground truth is stored per-row at insert time (folder-based labelling).
-        # Rows with NULL ground_truth (legacy runs) are skipped and logged.
-        # Rows with experiment_mode="error" (API/proxy failures) are excluded from
-        # metrics — they are stored in the DB for debugging but are not real verdicts.
-        stats: dict[str, dict[str, int]] = {}
-        unknown_pkgs: set[str] = set()
-        error_rows: list[str] = []
-
-        for r in results:
-            if r.get("experiment_mode") == "error":
-                error_rows.append(
-                    f"{r['package_name']}=={r['version']}:"
-                    f"{r.get('artifact_filename', '')}:"
-                    f"{r['detector']}:{r['prompt_strategy']}"
-                )
-                continue
-            stored_gt = r.get("ground_truth")
-            if stored_gt is None:
-                unknown_pkgs.add(r["package_name"])
-                continue
-            true_label = bool(stored_gt)
-
-            key = f"{r['detector']}:{r['experiment_mode']}:{r['prompt_strategy']}"
-            if key not in stats:
-                stats[key] = {"TP": 0, "TN": 0, "FP": 0, "FN": 0}
-
-            predicted = bool(r["verdict"])
-            if predicted and true_label:
-                stats[key]["TP"] += 1
-            elif not predicted and not true_label:
-                stats[key]["TN"] += 1
-            elif predicted and not true_label:
-                stats[key]["FP"] += 1
-            else:
-                stats[key]["FN"] += 1
+        stats, error_rows, excluded_groups, unknown_pkgs = (
+            _aggregate_package_version_metrics(results)
+        )
 
         if error_rows:
             log.warning(
-                f"Excluded {len(error_rows)} error row(s) from metrics "
-                f"(API/proxy failures)."
+                f"Ignored {error_rows} artifact-level error row(s) while "
+                "aggregating package-version metrics."
+            )
+        if excluded_groups:
+            log.warning(
+                f"Excluded {excluded_groups} package-version detector group(s) "
+                "with no successful artifact rows."
             )
         if unknown_pkgs:
             log.warning(f"Ground truth missing for: {sorted(unknown_pkgs)}")
 
-        table = Table(title=f"Evaluation Results  |  run_id: {run_id}", show_lines=True)
+        table = Table(
+            title=f"Evaluation Results (package-version metrics)  |  run_id: {run_id}",
+            show_lines=True,
+        )
         table.add_column("Detector : Mode : Strategy", style="cyan", no_wrap=True)
         table.add_column("TP",  justify="right")
         table.add_column("TN",  justify="right")
@@ -839,18 +1009,6 @@ if __name__ == "__main__":
         help="Resolve simulator samples and print the selected artifacts without scanning",
     )
     parser.add_argument(
-        "--versions-per-project",
-        type=int,
-        default=2,
-        help="PEP 440 latest-N stable versions to evaluate per project (default: 2)",
-    )
-    parser.add_argument(
-        "--artifact-policy",
-        choices=["pip", "pip+sdist", "sdist"],
-        default="pip+sdist",
-        help="Artifact selection per selected version (default: pip+sdist)",
-    )
-    parser.add_argument(
         "--include-controls",
         action="store_true",
         help="Include high-volume controls in simulator-resolved evaluation",
@@ -872,17 +1030,26 @@ if __name__ == "__main__":
     profile_name = args.profile
     tier = args.tier
     model_config_stems: set[str] | None = None
+    profile_include_controls: bool | None = None
+    profile_package_limits: dict[str, int] | None = None
     if profile_name is not None:
-        profile_tier, model_config_stems = _load_evaluation_profile(profile_name)
-        if tier is not None and tier != profile_tier:
+        profile = _load_evaluation_profile(profile_name)
+        model_config_stems = profile.config_stems
+        profile_include_controls = profile.include_controls
+        profile_package_limits = profile.package_limits
+        if tier is not None and tier != profile.tier:
             raise SystemExit(
                 f"HALT: --tier {tier} conflicts with --profile {profile_name} "
-                f"(profile tier: {profile_tier})."
+                f"(profile tier: {profile.tier})."
             )
-        tier = profile_tier
+        tier = profile.tier
     elif tier is None:
         profile_name = "budget"
-        tier, model_config_stems = _load_evaluation_profile(profile_name)
+        profile = _load_evaluation_profile(profile_name)
+        tier = profile.tier
+        model_config_stems = profile.config_stems
+        profile_include_controls = profile.include_controls
+        profile_package_limits = profile.package_limits
 
     if args.verbose:
         # Preserve configured sinks; just raise their level before first setup.
@@ -900,9 +1067,8 @@ if __name__ == "__main__":
         tier=tier,
         profile=profile_name,
         model_config_stems=model_config_stems,
-        versions_per_project=args.versions_per_project,
-        artifact_policy=args.artifact_policy,
-        include_controls=args.include_controls,
+        include_controls=args.include_controls or bool(profile_include_controls),
+        package_limits=profile_package_limits,
         progress_enabled=progress_enabled,
     ).run(
         skip_validation=args.skip_validation,

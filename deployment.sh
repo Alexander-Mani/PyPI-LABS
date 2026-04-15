@@ -317,22 +317,6 @@ sudo -u pypi-runner bash -c "
 _VERBOSE_FLAG=""
 [[ "${VERBOSE:-0}" == "1" ]] && _VERBOSE_FLAG="--verbose"
 
-_ARTIFACT_POLICY="${ARTIFACT_POLICY:-pip+sdist}"
-case "$_ARTIFACT_POLICY" in
-  pip|pip+sdist|sdist) ;;
-  *)
-    echo "ERROR: invalid ARTIFACT_POLICY: $_ARTIFACT_POLICY" >&2
-    echo "Allowed values: pip, pip+sdist, sdist" >&2
-    exit 1
-    ;;
-esac
-
-_VERSIONS_PER_PROJECT="${VERSIONS_PER_PROJECT:-2}"
-if ! [[ "$_VERSIONS_PER_PROJECT" =~ ^[1-9][0-9]*$ ]]; then
-  echo "ERROR: VERSIONS_PER_PROJECT must be a positive integer" >&2
-  exit 1
-fi
-
 _INCLUDE_CONTROLS_FLAG=""
 [[ "${INCLUDE_CONTROLS:-0}" == "1" ]] && _INCLUDE_CONTROLS_FLAG="--include-controls"
 
@@ -352,12 +336,8 @@ sudo -u pypi-runner bash -c "
   cd /home/pypi-runner/pypi-scada-repo
   # Defaulting to the budget model profile for safety; reads configs/evaluation_profiles.yaml.
   python src/analyzer/evaluate.py --profile \"${_MODEL_PROFILE}\" --dry-run-resolution --skip-validation \
-    --versions-per-project \"${_VERSIONS_PER_PROJECT}\" \
-    --artifact-policy \"${_ARTIFACT_POLICY}\" \
     --progress \"${_EVAL_PROGRESS}\" ${_INCLUDE_CONTROLS_FLAG}
   python src/analyzer/evaluate.py --profile \"${_MODEL_PROFILE}\" ${_VERBOSE_FLAG} \
-    --versions-per-project \"${_VERSIONS_PER_PROJECT}\" \
-    --artifact-policy \"${_ARTIFACT_POLICY}\" \
     --progress \"${_EVAL_PROGRESS}\" ${_INCLUDE_CONTROLS_FLAG}
 "
 
