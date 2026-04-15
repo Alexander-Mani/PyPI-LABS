@@ -19,6 +19,7 @@ from adapters import (
     EvalDetectionResult,
     DetectorAdapter,
     StaticAdapter,
+    GuardDogAdapter,
     LLMAdapter,
     LLMRawAdapter,
     AgenticAdapter,
@@ -112,9 +113,10 @@ class EvalController:
         selected_stems = set(model_config_stems) if model_config_stems is not None else None
         loaded_stems: set[str] = set()
 
-        self._static: list[StaticAdapter] = [
+        self._static: list[DetectorAdapter] = [
             StaticAdapter("bandit"),
             StaticAdapter("semgrep"),
+            GuardDogAdapter(),
         ]
 
         self._llm: list[LLMAdapter] = []

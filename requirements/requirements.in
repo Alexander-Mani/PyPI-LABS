@@ -8,4 +8,5 @@ openai
 google-generativeai
 bandit
 semgrep
+guarddog==2.9.0
 pytest

@@ -12,6 +12,7 @@ detection:
   static_tools:
     - "bandit"
     - "semgrep"
+    - "guarddog"
   llm_providers:
     - "anthropic"   # set API key via env: ANTHROPIC_API_KEY
     # - "openai"    # OPENAI_API_KEY

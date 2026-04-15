@@ -2,7 +2,8 @@
 adapters.py — Detector adapter hierarchy for the entry-point evaluation pipeline.
 
 DetectorAdapter (ABC)
-  StaticAdapter     — SAST tools (bandit, semgrep); ignores prompt params
+  StaticAdapter     — generic SAST tools (bandit, semgrep); ignores prompt params
+  GuardDogAdapter   — PyPI-malware-specific static rules; source-only mode
   LLMAdapter        — Single-shot LLM call via YAML-configured model
   AgenticAdapter    — Multi-turn Anthropic tool_use loop
 
@@ -26,6 +27,25 @@ from src.utils.logger import get_logger
 from entry_extractor import PackageInfo
 
 log = get_logger()
+
+GUARDDOG_VERSION = "2.9.0"
+GUARDDOG_SOURCE_RULES = (
+    "api-obfuscation",
+    "shady-links",
+    "obfuscation",
+    "clipboard-access",
+    "exfiltrate-sensitive-data",
+    "download-executable",
+    "exec-base64",
+    "silent-process-execution",
+    "dll-hijacking",
+    "screenshot",
+    "steganography",
+    "code-execution",
+    "unicode",
+    "cmd-overwrite",
+    "suspicious_passwd_access_linux",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +90,40 @@ class DetectorAdapter(ABC):
         ...
 
 
+def _write_pkg_files(pkg: PackageInfo, target: Path) -> None:
+    for rel, content in pkg.files.items():
+        dest = target / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(content, encoding="utf-8")
+
+
+def _static_error_result(
+    detector: str,
+    error: str,
+    *,
+    stdout: str | None = None,
+    stderr: str | None = None,
+    returncode: int | None = None,
+) -> EvalDetectionResult:
+    details: dict = {"error": error}
+    if returncode is not None:
+        details["returncode"] = returncode
+    if stdout:
+        details["stdout"] = stdout[-2000:]
+    if stderr:
+        details["stderr"] = stderr[-2000:]
+    return EvalDetectionResult(
+        detector=detector,
+        experiment_mode="error",
+        verdict=False,
+        confidence=None,
+        heuristic_flags=[],
+        exec_time_ms=0,
+        api_cost_usd=0.0,
+        details=details,
+    )
+
+
 # ---------------------------------------------------------------------------
 # StaticAdapter — SAST tools
 # ---------------------------------------------------------------------------
@@ -103,10 +157,7 @@ class StaticAdapter(DetectorAdapter):
         t0 = _time.monotonic()
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            for rel, content in pkg.files.items():
-                dest = tmp / rel
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text(content, encoding="utf-8")
+            _write_pkg_files(pkg, tmp)
             result = self._invoke(tmp)
 
         result.exec_time_ms = int((_time.monotonic() - t0) * 1000)
@@ -126,6 +177,14 @@ class StaticAdapter(DetectorAdapter):
             )
             data = _json.loads(proc.stdout) if proc.stdout.strip() else {}
             issues = data.get("results", [])
+            if proc.returncode not in (0, 1) and not issues:
+                return _static_error_result(
+                    "bandit",
+                    "bandit exited without parseable findings",
+                    stdout=proc.stdout,
+                    stderr=proc.stderr,
+                    returncode=proc.returncode,
+                )
             return EvalDetectionResult(
                 detector="bandit", experiment_mode="static",
                 verdict=bool(issues), confidence=None,
@@ -134,12 +193,7 @@ class StaticAdapter(DetectorAdapter):
                 details={"issue_count": len(issues), "issues": issues[:10]},
             )
         except Exception as exc:
-            return EvalDetectionResult(
-                detector="bandit", experiment_mode="static",
-                verdict=False, confidence=None,
-                heuristic_flags=[], exec_time_ms=0, api_cost_usd=0.0,
-                details={"error": str(exc)},
-            )
+            return _static_error_result("bandit", str(exc))
 
     def _run_semgrep(self, target: Path) -> EvalDetectionResult:
         try:
@@ -149,6 +203,14 @@ class StaticAdapter(DetectorAdapter):
             )
             data = _json.loads(proc.stdout) if proc.stdout.strip() else {}
             findings = data.get("results", [])
+            if proc.returncode not in (0, 1) and not findings:
+                return _static_error_result(
+                    "semgrep",
+                    "semgrep exited without parseable findings",
+                    stdout=proc.stdout,
+                    stderr=proc.stderr,
+                    returncode=proc.returncode,
+                )
             return EvalDetectionResult(
                 detector="semgrep", experiment_mode="static",
                 verdict=bool(findings), confidence=None,
@@ -157,12 +219,187 @@ class StaticAdapter(DetectorAdapter):
                 details={"finding_count": len(findings), "findings": findings[:10]},
             )
         except Exception as exc:
+            return _static_error_result("semgrep", str(exc))
+
+
+# ---------------------------------------------------------------------------
+# GuardDogAdapter — PyPI-malware-specific static rules
+# ---------------------------------------------------------------------------
+
+class GuardDogAdapter(DetectorAdapter):
+    """
+    GuardDog source-only baseline.
+
+    It scans the same PackageInfo.files evidence set as Bandit, Semgrep, and the
+    LLM-hybrid prompt. Only explicit source-code rules are enabled; metadata
+    heuristics are intentionally excluded because they can query live package
+    registries and would give GuardDog evidence the other detectors do not see.
+    """
+
+    _detector_name = "guarddog"
+    _experiment_mode = "static"
+
+    def __init__(
+        self,
+        rules: tuple[str, ...] = GUARDDOG_SOURCE_RULES,
+        timeout: int = 180,
+    ):
+        self._rules = tuple(rules)
+        self._timeout = timeout
+
+    def run(
+        self,
+        pkg: PackageInfo,
+        prompt_strategy: str = "zero_shot",
+        system_prompt: str | None = None,
+        template_override: str | None = None,
+    ) -> EvalDetectionResult:
+        # Prompt params are unused — GuardDog is prompt-agnostic.
+        if not pkg.files:
             return EvalDetectionResult(
-                detector="semgrep", experiment_mode="static",
-                verdict=False, confidence=None,
-                heuristic_flags=[], exec_time_ms=0, api_cost_usd=0.0,
-                details={"error": str(exc)},
+                detector=self._detector_name,
+                experiment_mode="static",
+                verdict=False,
+                confidence=None,
+                heuristic_flags=list(pkg.heuristic_flags),
+                exec_time_ms=0,
+                api_cost_usd=0.0,
+                details={
+                    "note": "no files to scan",
+                    "guarddog_version": GUARDDOG_VERSION,
+                    "rules": list(self._rules),
+                },
             )
+
+        t0 = _time.monotonic()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            _write_pkg_files(pkg, tmp)
+            result = self._run_guarddog(tmp)
+
+        result.exec_time_ms = int((_time.monotonic() - t0) * 1000)
+        result.heuristic_flags = list(pkg.heuristic_flags)
+        return result
+
+    def _command(self, target: Path) -> list[str]:
+        cmd = [
+            "guarddog",
+            "pypi",
+            "scan",
+            str(target),
+            "--output-format=json",
+        ]
+        for rule in self._rules:
+            cmd.extend(["--rules", rule])
+        return cmd
+
+    def _run_guarddog(self, target: Path) -> EvalDetectionResult:
+        try:
+            proc = subprocess.run(
+                self._command(target),
+                capture_output=True,
+                text=True,
+                timeout=self._timeout,
+            )
+            data = None
+            if not proc.stdout.strip():
+                if proc.returncode == 0:
+                    findings: list[dict] = []
+                else:
+                    return _static_error_result(
+                        self._detector_name,
+                        "guarddog exited without JSON output",
+                        stdout=proc.stdout,
+                        stderr=proc.stderr,
+                        returncode=proc.returncode,
+                    )
+            else:
+                data = _json.loads(proc.stdout)
+                findings = self._extract_findings(data)
+                errors = self._extract_errors(data)
+                if errors and not findings:
+                    return _static_error_result(
+                        self._detector_name,
+                        "guarddog reported rule execution errors",
+                        stdout=proc.stdout,
+                        stderr=proc.stderr,
+                        returncode=proc.returncode,
+                    )
+                if proc.returncode != 0 and not findings:
+                    return _static_error_result(
+                        self._detector_name,
+                        "guarddog exited non-zero without findings",
+                        stdout=proc.stdout,
+                        stderr=proc.stderr,
+                        returncode=proc.returncode,
+                    )
+
+            details = {
+                "finding_count": len(findings),
+                "findings": findings[:10],
+                "guarddog_version": GUARDDOG_VERSION,
+                "rules": list(self._rules),
+            }
+            if data is not None:
+                errors = self._extract_errors(data)
+                if errors:
+                    details["errors"] = errors
+
+            return EvalDetectionResult(
+                detector=self._detector_name,
+                experiment_mode="static",
+                verdict=bool(findings),
+                confidence=None,
+                heuristic_flags=[],
+                exec_time_ms=0,
+                api_cost_usd=0.0,
+                details=details,
+            )
+        except Exception as exc:
+            return _static_error_result(self._detector_name, str(exc))
+
+    def _extract_errors(self, data) -> dict:
+        if not isinstance(data, dict):
+            return {}
+        errors = data.get("errors")
+        if isinstance(errors, dict):
+            return {str(k): v for k, v in errors.items() if v}
+        if isinstance(errors, list):
+            return {str(i): item for i, item in enumerate(errors) if item}
+        if errors:
+            return {"error": errors}
+        return {}
+
+    def _extract_findings(self, data) -> list[dict]:
+        if isinstance(data, list):
+            return self._normalize_findings(data)
+
+        if not isinstance(data, dict):
+            return [{"value": data}] if data else []
+
+        for key in ("results", "findings", "issues", "matches", "detections"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return self._normalize_findings(value)
+            if isinstance(value, dict):
+                return self._extract_findings(value)
+
+        combined: list[dict] = []
+        for value in data.values():
+            if isinstance(value, list):
+                combined.extend(self._normalize_findings(value))
+            elif isinstance(value, dict):
+                combined.extend(self._extract_findings(value))
+        return combined
+
+    def _normalize_findings(self, findings: list) -> list[dict]:
+        normalized: list[dict] = []
+        for item in findings:
+            if isinstance(item, dict):
+                normalized.append(item)
+            else:
+                normalized.append({"value": item})
+        return normalized
 
 
 # ---------------------------------------------------------------------------
