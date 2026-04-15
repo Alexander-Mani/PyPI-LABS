@@ -89,6 +89,7 @@ sudo -u pypi-runner bash -c "
   python3 -m venv venv
   source venv/bin/activate
   pip install --require-hashes --no-deps -r requirements/requirements.txt
+  guarddog --version
 "
 
 sudo cp /home/pypi-runner/pypi-scada-repo/requirements/proxy-requirements.txt /home/proxy-runner/
@@ -100,6 +101,11 @@ sudo -u proxy-runner bash -c "
   pip install --require-hashes --no-deps -r /home/proxy-runner/proxy-requirements.txt
 "
 ```
+
+Deployment also verifies the configured GuardDog source-rule allowlist with
+`guarddog pypi list-rules`, then runs a source-only smoke test after the
+`pypi-runner` egress firewall is active. This verifies the static malware-specific
+baseline can scan local source without live PyPI metadata access.
 
 ***
 

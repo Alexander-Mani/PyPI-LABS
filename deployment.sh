@@ -10,6 +10,28 @@ fi
 
 trap 'rc=$?; echo "ERROR: command failed (exit ${rc}) at line ${LINENO}: ${BASH_COMMAND}" >&2; exit ${rc}' ERR
 
+GUARDDOG_SOURCE_RULES=(
+  api-obfuscation
+  shady-links
+  obfuscation
+  clipboard-access
+  exfiltrate-sensitive-data
+  download-executable
+  exec-base64
+  silent-process-execution
+  dll-hijacking
+  screenshot
+  steganography
+  code-execution
+  unicode
+  cmd-overwrite
+  suspicious_passwd_access_linux
+)
+_GUARDDOG_RULE_ARGS=""
+for _guarddog_rule in "${GUARDDOG_SOURCE_RULES[@]}"; do
+  _GUARDDOG_RULE_ARGS+=" --rules ${_guarddog_rule}"
+done
+
 # PyPI-SCADA Deployment Script (VM-Targeted)
 # This script automates the setup of the entry-point scanning pipeline.
 # It assumes a clean Ubuntu 22.04 LTS environment.
@@ -90,6 +112,18 @@ sudo -u pypi-runner bash -c "
   python3 -m venv venv
   source venv/bin/activate
   pip install --require-hashes --no-deps --quiet -r requirements/requirements.txt
+  guarddog --version >/dev/null
+  guarddog_rules_output=\$(mktemp)
+  guarddog pypi list-rules > \"\$guarddog_rules_output\"
+  GUARDDOG_EXPECTED_RULES=\"${GUARDDOG_SOURCE_RULES[*]}\" python -c 'import os, pathlib, sys; text = pathlib.Path(sys.argv[1]).read_text(); found = set();
+for line in text.splitlines():
+    cols = [col.strip() for col in line.split(\"|\")]
+    if len(cols) >= 4 and cols[1].lower() == \"source code\":
+        found.add(cols[2])
+expected = set(os.environ[\"GUARDDOG_EXPECTED_RULES\"].split()); missing = sorted(expected - found)
+print(f\"GuardDog source rules OK ({len(expected)} rules)\" if not missing else f\"ERROR: GuardDog source rules missing: {missing}\")
+sys.exit(1 if missing else 0)' \"\$guarddog_rules_output\"
+  rm -f \"\$guarddog_rules_output\"
   # injector/upload_samples.py shells out to python -m twine from this venv.
   pip install --require-hashes --no-deps --quiet -r requirements/injector-requirements.txt
 "
@@ -168,6 +202,17 @@ for _vendor_host in "${LLM_VENDOR_HOSTS[@]}"; do
   done
 done
 sudo iptables -A OUTPUT -m owner --uid-owner proxy-runner -j DROP || true
+
+echo "Running GuardDog source-only offline smoke test"
+sudo -u pypi-runner bash -c "
+  set -euo pipefail
+  source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
+  tmpdir=\$(mktemp -d)
+  trap 'rm -rf \"\$tmpdir\"' EXIT
+  printf '%s\n' 'from setuptools import setup' 'setup(name=\"guarddog-smoke\")' > \"\$tmpdir/setup.py\"
+  timeout 180 guarddog pypi scan \"\$tmpdir\" --output-format=json ${_GUARDDOG_RULE_ARGS} >/tmp/pypi-scada-guarddog-smoke.json
+  python -c 'import json, pathlib, sys; data=json.loads(pathlib.Path(\"/tmp/pypi-scada-guarddog-smoke.json\").read_text()); errors=data.get(\"errors\") or {}; print(\"GuardDog offline source-only smoke OK\" if not errors else f\"ERROR: GuardDog offline smoke reported rule errors: {errors}\"); sys.exit(1 if errors else 0)'
+"
 
 echo "Step 7: Starting LiteLLM proxy"
 sudo cp /home/pypi-runner/pypi-scada-repo/configs/litellm_config.yaml /home/proxy-runner/litellm_config.yaml
