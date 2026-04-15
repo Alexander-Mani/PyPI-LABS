@@ -119,7 +119,7 @@ python samples/download_controls.py
 # 3. Start the simulator and upload the dataset
 cd src/simulator && python main.py
 cd ../..
-python src/injector/upload_samples.py --samples-dir samples --simulator-url http://127.0.0.1:8080
+PYTHONPATH=$PWD python -m src.injector.upload_samples --samples-dir samples --simulator-url http://127.0.0.1:8080
 
 # 4. Verify simulator-resolved evaluation scope
 python src/analyzer/evaluate.py --dry-run-resolution --skip-validation
@@ -166,7 +166,7 @@ evaluation, and tmpfs extraction of malicious archives — are documented in
 Use `upload_samples.py` on the VM:
 
 ```bash
-python src/injector/upload_samples.py \
+PYTHONPATH=$PWD python -m src.injector.upload_samples \
   --samples-dir /home/pypi-runner/samples-extracted \
   --simulator-url http://127.0.0.1:8080
 ```

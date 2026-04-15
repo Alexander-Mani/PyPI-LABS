@@ -124,8 +124,10 @@ expected = set(os.environ[\"GUARDDOG_EXPECTED_RULES\"].split()); missing = sorte
 print(f\"GuardDog source rules OK ({len(expected)} rules)\" if not missing else f\"ERROR: GuardDog source rules missing: {missing}\")
 sys.exit(1 if missing else 0)' \"\$guarddog_rules_output\"
   rm -f \"\$guarddog_rules_output\"
-  # injector/upload_samples.py shells out to python -m twine from this venv.
+  # src.injector.upload_samples shells out to python -m twine from this venv.
   pip install --require-hashes --no-deps --quiet -r requirements/injector-requirements.txt
+  echo 'Validating PyPi-SCADA package imports...'
+  PYTHONPATH=/home/pypi-runner/pypi-scada-repo python -c 'import src.utils.logger; import src.injector.upload_samples'
 "
 
 # Copy the proxy lockfile over from pypi-runner's repo clone
@@ -306,7 +308,7 @@ sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo
   for _cat in ${_UPLOAD_CATS}; do
-    python src/injector/upload_samples.py \
+    PYTHONPATH=/home/pypi-runner/pypi-scada-repo python -m src.injector.upload_samples \
       --samples-dir /home/pypi-runner/pypi-scada-repo/samples \
       --simulator-url http://127.0.0.1:8080 \
       --only \"\$_cat\"

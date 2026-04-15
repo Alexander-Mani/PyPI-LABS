@@ -98,7 +98,7 @@ The Injector uploads `.tar.gz` / `.whl` packages to the running Simulator via `t
 ### Run
 
 ```bash
-python src/injector/upload_samples.py \
+PYTHONPATH=$PWD python -m src.injector.upload_samples \
   --samples-dir samples \
   --simulator-url http://127.0.0.1:8080
 ```
@@ -151,30 +151,30 @@ cd ~/pypi-scada-repo
 source venv/bin/activate
 
 # Upload all categories (benign → controls → malicious)
-python src/injector/upload_samples.py \
+PYTHONPATH=$PWD python -m src.injector.upload_samples \
   --samples-dir /home/pypi-runner/samples-extracted \
   --simulator-url http://127.0.0.1:8080
 
 # Upload a single category
-python src/injector/upload_samples.py \
+PYTHONPATH=$PWD python -m src.injector.upload_samples \
   --samples-dir /home/pypi-runner/samples-extracted \
   --only benign
 
-python src/injector/upload_samples.py \
+PYTHONPATH=$PWD python -m src.injector.upload_samples \
   --samples-dir /home/pypi-runner/samples-extracted \
   --only controls
 
-python src/injector/upload_samples.py \
+PYTHONPATH=$PWD python -m src.injector.upload_samples \
   --samples-dir /home/pypi-runner/samples-extracted \
   --only malicious
 
 # Dry run — prints archive list, calls no twine
-python src/injector/upload_samples.py \
+PYTHONPATH=$PWD python -m src.injector.upload_samples \
   --samples-dir /home/pypi-runner/samples-extracted \
   --dry-run
 
 # Force progress UI even when stdout/stderr is not detected as a TTY
-python src/injector/upload_samples.py \
+PYTHONPATH=$PWD python -m src.injector.upload_samples \
   --samples-dir /home/pypi-runner/samples-extracted \
   --progress always
 ```
@@ -283,7 +283,7 @@ detector-by-detector details are written to `src/analyzer/logs/analyzer-*.log`.
 ```
 1. Start simulator      →  cd src/simulator && python main.py
 2. Place packages       →  drop .tar.gz/.whl into samples/benign/ or samples/malware_backstabbers_knife/
-3. Run injector         →  python src/injector/upload_samples.py --samples-dir samples --simulator-url http://127.0.0.1:8080
+3. Run injector         →  PYTHONPATH=$PWD python -m src.injector.upload_samples --samples-dir samples --simulator-url http://127.0.0.1:8080
 4. Confirm uploads      →  curl http://127.0.0.1:8080/simple/
 5. Dry-run resolver     →  python src/analyzer/evaluate.py --dry-run-resolution --skip-validation
 6. Run evaluation       →  python src/analyzer/evaluate.py  (downloads from simulator, then scans)

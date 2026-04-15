@@ -220,9 +220,9 @@ sudo -u pypi-runner bash -c "
 sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo
-  python src/injector/upload_samples.py --samples-dir samples --only benign
-  python src/injector/upload_samples.py --samples-dir samples --only controls
-  python src/injector/upload_samples.py --samples-dir samples --only malicious
+  PYTHONPATH=/home/pypi-runner/pypi-scada-repo python -m src.injector.upload_samples --samples-dir samples --only benign
+  PYTHONPATH=/home/pypi-runner/pypi-scada-repo python -m src.injector.upload_samples --samples-dir samples --only controls
+  PYTHONPATH=/home/pypi-runner/pypi-scada-repo python -m src.injector.upload_samples --samples-dir samples --only malicious
 "
 
 # Run Research Pipeline (Phased Execution)

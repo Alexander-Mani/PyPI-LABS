@@ -7,6 +7,7 @@ therefore skip already-uploaded local simulator versions before calling twine.
 
 from __future__ import annotations
 
+import importlib
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,12 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
 from src.injector import upload_samples  # noqa: E402
+
+
+def test_uploader_imports_as_package_module():
+    """Deployment runs the uploader with python -m from the repo root."""
+    assert importlib.import_module("src.injector.upload_samples") is upload_samples
+    assert importlib.import_module("src.utils.logger")
 
 
 class _FakeResponse:
