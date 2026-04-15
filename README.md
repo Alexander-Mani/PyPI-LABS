@@ -131,6 +131,9 @@ python src/analyzer/evaluate.py --sast-only
 #    Full pipeline — start LiteLLM proxy first (see docs/ops/DEPLOYMENT_MANIFEST.md Step 7)
 #    Default model profile is 'budget'; results stored in src/data/eval_results.db
 python src/analyzer/evaluate.py --profile budget
+#    Cheap test profiles — latest version of 2 malicious packages + 2 control packages.
+python src/analyzer/evaluate.py --profile test
+python src/analyzer/evaluate.py --profile test_no_gemini
 #    SSH/tmux dashboard; detailed detector logs are still per-run.
 python src/analyzer/evaluate.py --profile budget --progress always
 

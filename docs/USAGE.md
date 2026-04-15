@@ -222,10 +222,11 @@ not used.
 
 Default selection policy:
 
-- Versions: latest and previous stable PEP 440 version per labelled project.
-- Extra baseline: dataset-declared LKGR versions are included when present.
-- Artifacts: pip-like preferred wheel plus the sdist when a distinct sdist exists.
-- Controls: skipped unless `--include-controls` is passed.
+- Versions: latest stable labelled PEP 440 version per package.
+- Artifacts: all simulator artifacts for the selected package version.
+- Metrics: package-version level; artifact rows remain in SQLite for audit.
+- Controls: skipped unless `--include-controls` is passed or the selected
+  evaluation profile enables controls.
 
 ```bash
 # Confirm what would be evaluated, without downloading/scanning.
@@ -240,6 +241,10 @@ python src/analyzer/evaluate.py --profile budget
 # If Gemini has a temporary provider outage, use the explicit reduced profile.
 python src/analyzer/evaluate.py --profile budget_no_gemini
 
+# Cheap smoke profiles: latest version of 2 malicious packages + 2 control packages.
+python src/analyzer/evaluate.py --profile test
+python src/analyzer/evaluate.py --profile test_no_gemini
+
 # Force the live evaluation dashboard in an SSH/tmux session.
 python src/analyzer/evaluate.py --profile budget_no_gemini --progress always
 ```
@@ -248,13 +253,22 @@ Useful flags:
 
 | Flag | Default | Description |
 |---|---|---|
-| `--versions-per-project` | `2` | Select latest-N stable versions per project |
-| `--artifact-policy` | `pip+sdist` | `pip`, `pip+sdist`, or `sdist` |
-| `--include-controls` | off | Include high-volume benign controls |
+| `--include-controls` | off | Include high-volume benign controls; some profiles enable this automatically |
 | `--dry-run-resolution` | off | Print selected simulator artifacts without scanning |
 | `--profile` | `budget` | Model profile from `configs/evaluation_profiles.yaml` |
 | `--tier` | off | Legacy tier filter; use profiles for reproducible runs |
 | `--progress` | `auto` | Live evaluation dashboard: `auto`, `always`, or `never` |
+
+Profiles can also carry resolver settings. The `test` and `test_no_gemini`
+profiles enable controls and cap package selection to 2 malicious packages and
+2 control packages. The evaluator then scans all artifacts for each selected
+package's latest labelled version.
+
+LKGR samples remain part of the dataset for provenance and baseline context, but
+canonical scoring uses only the latest labelled stable version per package. Old
+database rows may contain `sample_limits` in `resolver_policy`; canonical runs
+after this methodology change use `package_limits`, so final thesis metrics
+should be regenerated from fresh runs.
 
 Interactive evaluation runs use a compact dashboard for artifact progress,
 in-flight detector status, remaining artifacts, and accumulated API cost by
@@ -298,7 +312,8 @@ All LLM detector calls route through LiteLLM running as `proxy-runner` on
 configuration in `configs/litellm_config.yaml` maps analyzer model names to
 provider-specific LiteLLM routes. Evaluation model sets are selected through
 `configs/evaluation_profiles.yaml`; `budget_no_gemini` exists for explicitly
-documented temporary Gemini outages.
+documented temporary Gemini outages, while `test` and `test_no_gemini` are
+bounded smoke profiles for cheap iteration.
 
 **Local dev:** Start LiteLLM manually with API keys in your environment:
 

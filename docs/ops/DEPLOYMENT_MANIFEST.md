@@ -238,11 +238,11 @@ The evaluation stage resolves packages from the simulator. It does not install o
 execute package code. Optional overrides:
 
 ```bash
-ARTIFACT_POLICY=pip        # pip, pip+sdist, or sdist
-VERSIONS_PER_PROJECT=2     # latest-N stable versions per labelled project
 UPLOAD_CATEGORIES=malicious # benign, controls, malicious, all; space-separated
 INCLUDE_CONTROLS=1         # include high-volume benign controls
 MODEL_PROFILE=budget_no_gemini # explicit reduced profile for temporary Gemini outages
+# MODEL_PROFILE=test       # cheap smoke: 2 malicious + 2 control packages, includes Gemini
+# MODEL_PROFILE=test_no_gemini # same smoke scope, excludes Gemini
 EVAL_PROGRESS=always      # auto, always, never; live analyzer dashboard control
 VERBOSE=1                  # DEBUG logs
 ```

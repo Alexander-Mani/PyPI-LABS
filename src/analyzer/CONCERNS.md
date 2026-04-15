@@ -83,24 +83,27 @@ and medium tier alternatives are listed in `configs/models.json`.
 
 ---
 
-## 4. Bounded Version And Artifact Selection
+## 4. Latest-Version Package Selection
 
 **Affected component:** simulator resolver in `evaluate.py`
 
 Each package can have many versions and multiple artifacts per version. The
-evaluation runner therefore resolves a bounded candidate set from the simulator:
-latest and previous stable PEP 440 versions, plus dataset-declared LKGR versions
-when available. Per selected version it uses the configured artifact policy
-(`pip+sdist` by default) rather than scanning every wheel/platform/sdist artifact.
+canonical evaluation runner resolves the latest stable labelled version of each
+package from the simulator and scans all artifacts for that selected version.
+This keeps the package selection rule consistent between full runs and test
+profiles while preserving wheel-vs-sdist evidence.
 
-**Consequence:** Metrics describe the bounded simulator-resolved candidate set,
-not the entire historical package universe. If both a wheel and sdist are scanned
-for a selected version, reports should distinguish artifact count from package
-version count.
+**Consequence:** Metrics describe latest labelled package versions, not the
+entire historical package universe. Packages with many wheels can produce many
+artifact-level DB rows, so thesis metrics are aggregated at package-version
+level to prevent artifact-heavy packages from dominating results.
 
 **Mitigation path:** Use `--dry-run-resolution --skip-validation` before any paid
-run. Adjust `--versions-per-project` and `--artifact-policy` deliberately, and
-document the chosen policy in the final thesis results.
+run. Report both artifact counts and package-version counts, and document that
+test profiles cap package selection rather than artifact rows. LKGR samples
+remain dataset/provenance context, but canonical scoring uses the latest
+labelled stable package version. Regenerate canonical metrics after this change;
+old DB rows may record the previous `sample_limits` resolver policy.
 
 ---
 
