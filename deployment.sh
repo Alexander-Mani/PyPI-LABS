@@ -128,6 +128,9 @@ sys.exit(1 if missing else 0)' \"\$guarddog_rules_output\"
   pip install --require-hashes --no-deps --quiet -r requirements/injector-requirements.txt
   echo 'Validating PyPi-SCADA package imports...'
   PYTHONPATH=/home/pypi-runner/pypi-scada-repo python -c 'import src.utils.logger; import src.injector.upload_samples'
+  echo 'Validating Twine upload runtime imports...'
+  python -c 'import twine.commands.upload; from backports import tarfile'
+  python -m twine upload --help >/dev/null
 "
 
 # Copy the proxy lockfile over from pypi-runner's repo clone

@@ -1,3 +1,4 @@
+backports.tarfile==1.2.0
 twine
 packaging
 requests
