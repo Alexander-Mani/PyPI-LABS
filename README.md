@@ -54,7 +54,7 @@ The primary detection pipeline is the **entry-point scanning evaluation pipeline
 - `entry_extractor.py` -- `EntryPointExtractor`, `PackageInfo` (unpacks `.tar.gz`/`.whl`/`.zip`, extracts `setup.py`, `__init__.py`, `pyproject.toml` and their imports up to **3 levels deep** via BFS)
 - `heuristic_filter.py` -- `HeuristicFilter` (flags `base64_or_hex`, `network_in_install_hook`, `shell_execution`, `bundled_binary` before LLM evaluation)
 - `detection_controller.py` -- `EvalController` (orchestration layer)
-- `adapters.py` -- `StaticAdapter` (SAST), `LLMAdapter` (Single-shot), `LLMRawAdapter` (raw), `AgenticAdapter` (Multi-turn); all LLM calls route through LiteLLM on `http://127.0.0.1:4000`
+- `adapters.py` -- static baselines (`bandit`, `semgrep`, source-only `guarddog`), `LLMAdapter` (Single-shot), `LLMRawAdapter` (raw), `AgenticAdapter` (Multi-turn); all LLM calls route through LiteLLM on `http://127.0.0.1:4000`
 - `configs/` -- per-model YAML configs and the `models.json` pricing/tier registry.
 - `TODO.md` -- Phase III & IV task tracking
 - `CONCERNS.md` -- documented design decisions and data interpretation caveats
@@ -125,7 +125,7 @@ python src/injector/upload_samples.py --samples-dir samples --simulator-url http
 python src/analyzer/evaluate.py --dry-run-resolution --skip-validation
 
 # 5. Run the evaluation pipeline against simulator-fetched artifacts
-#    SAST only — no LiteLLM required
+#    Static baselines only — Bandit, Semgrep, and source-only GuardDog; no LiteLLM required
 python src/analyzer/evaluate.py --sast-only
 
 #    Full pipeline — start LiteLLM proxy first (see docs/ops/DEPLOYMENT_MANIFEST.md Step 7)

@@ -223,3 +223,60 @@ incorrectly labeled as malicious. This leads to:
 reports for `num2words 0.5.15` during its training, it may flag the package
 based on memory rather than code analysis. This is documented as a limitation
 in the final thesis and addressed via the "Reasoning" analysis in the rubric.
+
+---
+
+## Decision 7 — GuardDog source-only baseline
+
+**Decision:**
+GuardDog is added as a third static baseline detector alongside Bandit and Semgrep.
+The pinned version is `guarddog==2.9.0` (pinned on 2026-04-14). GuardDog scans only
+the local extracted source files in `PackageInfo.files`, matching the evidence set
+seen by Bandit, Semgrep, and the LLM-hybrid prompt.
+
+**Rules enabled:**
+Only source-code rules are passed via an explicit `--rules` allowlist:
+`api-obfuscation`, `shady-links`, `obfuscation`, `clipboard-access`,
+`exfiltrate-sensitive-data`, `download-executable`, `exec-base64`,
+`silent-process-execution`, `dll-hijacking`, `screenshot`, `steganography`,
+`code-execution`, `unicode`, `cmd-overwrite`, and
+`suspicious_passwd_access_linux`.
+
+**Rules excluded:**
+All GuardDog package-metadata heuristics are excluded, including typosquatting,
+release-recency, repository-integrity, maintainer/email-domain, bundled-binary,
+single-file, deceptive-author, and empty-information metadata checks.
+
+**Threat addressed (methodological fairness):**
+GuardDog is purpose-built for malicious package detection, so it is a stronger
+rule-based baseline than generic Bandit/Semgrep alone. However, GuardDog's metadata
+heuristics can query live package registry metadata. Allowing those heuristics would:
+- Violate the `pypi-runner` egress firewall model.
+- Give GuardDog live PyPI evidence that the LLMs and generic SAST baselines do not
+  receive.
+- Undermine the simulator-resolved methodology by mixing local simulator evidence
+  with real registry evidence.
+
+**Controls applied:**
+- GuardDog is invoked against a temporary local directory populated from
+  `PackageInfo.files`; package names are never passed as remote scan targets.
+- The command uses an explicit source-rule allowlist rather than `--exclude-rules`,
+  so future GuardDog metadata rules cannot silently enter the benchmark.
+- Deployment runs `guarddog --version` after dependency installation and a
+  source-only local smoke test after `pypi-runner` outbound egress is blocked.
+- Static scanner runtime failures are recorded as `experiment_mode="error"` rather
+  than benign `static` verdicts, preventing broken tools from improving false-negative
+  metrics.
+
+**Residual risk:**
+Dataset contamination. GuardDog rules may have been tuned on historical PyPI malware
+families overlapping with Backstabber's Knife samples. GuardDog outperformance on
+known patterns should be interpreted as "malware-specific rule baseline performance,"
+not as an unbiased oracle. This caveat must be carried into the thesis discussion.
+
+**Metric compatibility note:**
+The GuardDog integration also changes Bandit/Semgrep failure semantics: scanner
+runtime failures that previously appeared as benign `static` rows are now stored as
+`experiment_mode="error"`. Historical evaluation databases from before this change
+must not be mixed with canonical post-GuardDog metrics; rerun the static baselines
+before final thesis comparisons.

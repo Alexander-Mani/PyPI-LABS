@@ -215,6 +215,11 @@ python src/injector/upload_samples.py \
 downloads selected artifacts, and statically scans the downloaded archive without
 installing or executing it.
 
+Static baselines are `bandit`, `semgrep`, and `guarddog`. GuardDog is constrained
+to source-code rules against the same extracted `PackageInfo.files` evidence set
+used by the other detectors; its live PyPI metadata heuristics are intentionally
+not used.
+
 Default selection policy:
 
 - Versions: latest and previous stable PEP 440 version per labelled project.
@@ -226,7 +231,7 @@ Default selection policy:
 # Confirm what would be evaluated, without downloading/scanning.
 python src/analyzer/evaluate.py --dry-run-resolution --skip-validation
 
-# SAST-only simulator-resolved run.
+# Static-baseline simulator-resolved run; no LiteLLM required.
 python src/analyzer/evaluate.py --sast-only
 
 # Budget profile LLM run; frontier-tier configs should be reserved for final verified execution.
