@@ -215,10 +215,12 @@ PYTHONPATH=$PWD python -m src.injector.upload_samples \
 downloads selected artifacts, and statically scans the downloaded archive without
 installing or executing it.
 
-Static baselines are `bandit`, `semgrep`, and `guarddog`. GuardDog is constrained
-to source-code rules against the same extracted `PackageInfo.files` evidence set
-used by the other detectors; its live PyPI metadata heuristics are intentionally
-not used.
+Static baselines are `bandit`, `semgrep`, and `guarddog`. Semgrep uses the
+checked-in custom offline ruleset under `src/analyzer/static_rules/` rather than
+a Semgrep Registry config; this is a curated syntax-pattern baseline, not the
+hosted Registry Python pack. GuardDog is constrained to source-code rules
+against the same extracted `PackageInfo.files` evidence set used by the other
+detectors; its live PyPI metadata heuristics are intentionally not used.
 
 Default selection policy:
 
@@ -237,6 +239,9 @@ python src/analyzer/evaluate.py --sast-only
 
 # Budget profile LLM run; frontier-tier configs should be reserved for final verified execution.
 python src/analyzer/evaluate.py --profile budget
+
+# Canonical post-custom-Semgrep runs should use a filterable run_id prefix.
+python src/analyzer/evaluate.py --profile budget --run-id-prefix canonical-v2
 
 # If Gemini has a temporary provider outage, use the explicit reduced profile.
 python src/analyzer/evaluate.py --profile budget_no_gemini
@@ -258,6 +263,7 @@ Useful flags:
 | `--profile` | `budget` | Model profile from `configs/evaluation_profiles.yaml` |
 | `--tier` | off | Legacy tier filter; use profiles for reproducible runs |
 | `--progress` | `auto` | Live evaluation dashboard: `auto`, `always`, or `never` |
+| `--run-id-prefix` | off | Prefix generated run IDs, e.g. `canonical-v2-*`, so old methodology rows can be filtered out |
 
 Profiles can also carry resolver settings. The `test` and `test_no_gemini`
 profiles enable controls and cap package selection to 2 malicious packages and

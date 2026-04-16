@@ -280,3 +280,42 @@ runtime failures that previously appeared as benign `static` rows are now stored
 `experiment_mode="error"`. Historical evaluation databases from before this change
 must not be mixed with canonical post-GuardDog metrics; rerun the static baselines
 before final thesis comparisons.
+
+---
+
+## Decision 8 — Offline Semgrep ruleset
+
+**Decision:**
+Semgrep is invoked with the checked-in local ruleset
+`src/analyzer/static_rules/semgrep_python.yml`, plus `--metrics off` and
+`--disable-version-check`. Registry configs such as `p/python` are not used.
+The checked-in rules are custom, Semgrep CE-compatible rules focused on
+package-install abuse, encoded execution, shell execution, dynamic imports,
+native library loading, persistence writes, and credential exfiltration.
+
+**Threat addressed:**
+The deployment firewall intentionally blocks `pypi-runner` outbound egress during
+evaluation. Semgrep Registry configs require network access, causing static
+baseline rows to fail and be excluded from package-version metrics.
+
+**Residual risk:**
+The local ruleset is smaller than Semgrep's hosted Python registry pack, and
+custom rule selection can bias Semgrep results. Semgrep results should therefore
+be interpreted as a curated offline syntax-pattern baseline, while GuardDog
+remains the malware-specific rule baseline. Download-and-execute and
+credential-exfiltration rules use same-function co-occurrence approximations
+because Semgrep CE does not provide the Semgrep Pro data-flow engine. The
+credential-exfiltration rule uses a closed vocabulary of high-value environment
+variable names and direct HTTP sink patterns, so it may miss broader environment
+enumeration or `.env` file theft. The persistence rule is syntax-based and
+primarily catches literal path arguments; paths assembled through helper
+functions may be missed. The install-command-network rule intentionally flags
+all network access inside install/develop/build command classes, including
+benign-looking metadata fetches, because install-time network access is itself
+the suspicious behavior for this threat model.
+
+**Metric compatibility note:**
+Prior Semgrep rows from Registry-based runs are invalid under the VM firewall and
+must be excluded from final thesis metrics. Canonical post-custom-ruleset runs
+should use `--run-id-prefix canonical-v2` so final queries can select
+`run_id LIKE 'canonical-v2-%'` rather than relying on memory.

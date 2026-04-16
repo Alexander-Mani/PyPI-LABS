@@ -210,6 +210,8 @@ __marimo__/
 samples/
 src/simulator/data/
 *.db
+*.db-shm
+*.db-wal
 .codex
 
 logs/
