@@ -358,3 +358,18 @@ outside the `pypi-runner` account:
 sqlite3 'file:src/data/eval_results.db?mode=ro&immutable=1' \
   'select id, detector, experiment_mode, details from eval_result order by id desc limit 20;'
 ```
+
+**Start a clean evaluation database between runs**
+Archive the current evaluation DB and SQLite sidecars by UTC timestamp, then
+initialize a fresh empty schema:
+
+```bash
+python scripts/archive_eval_db.py
+```
+
+Useful safety options:
+
+```bash
+python scripts/archive_eval_db.py --dry-run
+python scripts/archive_eval_db.py --no-init
+```
