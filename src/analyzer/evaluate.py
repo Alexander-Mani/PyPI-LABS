@@ -15,6 +15,7 @@ Usage:
                                     [--skip-validation] [--sast-only]
                                     [--dry-run-resolution]
                                     [--progress auto|always|never]
+                                    [--run-id-prefix PREFIX]
                                     [--verbose]
 
 See CONCERNS.md for known limitations before interpreting results.
@@ -73,6 +74,7 @@ _TOKEN_PRICES: dict[str, tuple[float, float]] = {
 _BUDGET_HARD_CAP_USD = 10.00
 _COST_DIVERGENCE_WARN_THRESHOLD = 0.20
 _STEM_RE = re.compile(r"^(.+?)-(\d[^-]*)(?:-.*)?$")
+_RUN_ID_PREFIX_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _PROFILES_PATH = _REPO_ROOT / "configs" / "evaluation_profiles.yaml"
 
 
@@ -99,6 +101,20 @@ class ResolvedPackage:
     version: str
     label: GroundTruthLabel
     artifacts: list[IndexArtifact]
+
+
+def _make_run_id(prefix: str | None = None, *, validation: bool = False) -> str:
+    suffix = str(uuid.uuid4())
+    if validation:
+        suffix = f"airgap-{suffix}"
+    if prefix:
+        if not _RUN_ID_PREFIX_RE.fullmatch(prefix):
+            raise SystemExit(
+                "HALT: --run-id-prefix must start with an alphanumeric character "
+                "and contain only letters, digits, '.', '_' or '-' (max 64 chars)."
+            )
+        return f"{prefix}-{suffix}"
+    return suffix
 
 
 def _load_evaluation_profile(profile_name: str) -> EvaluationProfile:
@@ -265,6 +281,7 @@ class EvaluationRunner:
         include_controls: bool = False,
         package_limits: dict[str, int] | None = None,
         progress_enabled: bool = False,
+        run_id_prefix: str | None = None,
     ):
         self._cfg  = config
         self._tier = tier
@@ -273,6 +290,7 @@ class EvaluationRunner:
         self._include_controls = include_controls
         self._package_limits = package_limits or {}
         self._progress_enabled = progress_enabled
+        self._run_id_prefix = run_id_prefix
         self._db   = DBManager()
         self._extractor = EntryPointExtractor()
         self._filter    = HeuristicFilter()
@@ -678,7 +696,7 @@ class EvaluationRunner:
         sast_only: bool = False,
         dry_run_resolution: bool = False,
     ) -> None:
-        run_id = str(uuid.uuid4())
+        run_id = _make_run_id(getattr(self, "_run_id_prefix", None))
         log.info(
             f"EvaluationRunner start — run_id={run_id}  "
             f"profile={self._profile or 'tier-filter'}  tier={self._tier}  "
@@ -791,7 +809,7 @@ class EvaluationRunner:
             f"{benign_sample.version} on {self._run_label}"
         )
 
-        val_id = f"airgap-{uuid.uuid4()}"
+        val_id = _make_run_id(getattr(self, "_run_id_prefix", None), validation=True)
         self._db.create_eval_run(val_id, tier=f"{self._run_label}-validation")
         validation_archive = self._download_sample(benign_sample)
         pkg = self._extractor.extract(validation_archive)
@@ -1023,6 +1041,11 @@ if __name__ == "__main__":
         "--verbose", action="store_true",
         help="Enable DEBUG-level logging (raw prompts, responses, per-file extraction)",
     )
+    parser.add_argument(
+        "--run-id-prefix",
+        default=None,
+        help="Optional prefix for generated run_id values, e.g. canonical-v2",
+    )
     args = parser.parse_args()
     with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
@@ -1070,6 +1093,7 @@ if __name__ == "__main__":
         include_controls=args.include_controls or bool(profile_include_controls),
         package_limits=profile_package_limits,
         progress_enabled=progress_enabled,
+        run_id_prefix=args.run_id_prefix,
     ).run(
         skip_validation=args.skip_validation,
         sast_only=args.sast_only,

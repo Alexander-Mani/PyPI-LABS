@@ -16,6 +16,7 @@ from evaluate import (  # noqa: E402
     ResolvedPackage,
     _aggregate_package_version_metrics,
     _load_evaluation_profile,
+    _make_run_id,
 )
 from simulator_resolver import IndexArtifact  # noqa: E402
 
@@ -144,6 +145,23 @@ def test_profile_loader_rejects_invalid_package_limits(monkeypatch):
             assert case["message"] in str(exc)
         else:  # pragma: no cover - defensive failure path
             raise AssertionError(f"invalid profile should halt: {case}")
+
+
+def test_make_run_id_prefixes_main_and_validation_runs():
+    run_id = _make_run_id("canonical-v2")
+    validation_id = _make_run_id("canonical-v2", validation=True)
+
+    assert run_id.startswith("canonical-v2-")
+    assert validation_id.startswith("canonical-v2-airgap-")
+
+
+def test_make_run_id_rejects_invalid_prefix():
+    try:
+        _make_run_id("../bad")
+    except SystemExit as exc:
+        assert "--run-id-prefix" in str(exc)
+    else:  # pragma: no cover - defensive failure path
+        raise AssertionError("invalid run id prefix should halt")
 
 
 def test_metrics_aggregate_multiple_artifacts_to_one_package_version():
