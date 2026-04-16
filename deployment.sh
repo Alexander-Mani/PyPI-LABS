@@ -113,6 +113,22 @@ sudo -u pypi-runner bash -c "
   source venv/bin/activate
   pip install --require-hashes --no-deps --quiet -r requirements/requirements.txt
   guarddog --version >/dev/null
+  semgrep_smoke_dir=\$(mktemp -d)
+  semgrep_state_dir=\$(mktemp -d)
+  semgrep_output=\$(mktemp)
+  cat > \"\$semgrep_smoke_dir/smoke.py\" <<'PYEOF'
+import subprocess
+subprocess.run("id", shell=True)
+PYEOF
+  SEMGREP_SETTINGS_FILE=\"\$semgrep_state_dir/settings.yml\" \
+  SEMGREP_LOG_FILE=\"\$semgrep_state_dir/semgrep.log\" \
+  SEMGREP_SEND_METRICS=off \
+  semgrep scan \
+    --config /home/pypi-runner/pypi-scada-repo/src/analyzer/static_rules/semgrep_python.yml \
+    --json --metrics off --disable-version-check --no-git-ignore --quiet \
+    \"\$semgrep_smoke_dir\" > \"\$semgrep_output\"
+  python -c 'import json, pathlib, sys; data = json.loads(pathlib.Path(sys.argv[1]).read_text()); ids = {item.get(\"check_id\", \"\").split(\".\")[-1] for item in data.get(\"results\", [])}; expected = \"pypi-scada-python-subprocess-shell-true\"; print(\"Semgrep offline rules OK\" if expected in ids else f\"ERROR: Semgrep smoke missing {expected}; got {sorted(ids)}\"); sys.exit(0 if expected in ids else 1)' \"\$semgrep_output\"
+  rm -rf \"\$semgrep_smoke_dir\" \"\$semgrep_state_dir\" \"\$semgrep_output\"
   guarddog_rules_output=\$(mktemp)
   guarddog pypi list-rules > \"\$guarddog_rules_output\"
   GUARDDOG_EXPECTED_RULES=\"${GUARDDOG_SOURCE_RULES[*]}\" python -c 'import os, pathlib, sys; text = pathlib.Path(sys.argv[1]).read_text(); found = set();

@@ -14,6 +14,7 @@ sys.path.insert(0, str(_REPO_ROOT / "src" / "analyzer"))
 import adapters  # noqa: E402
 from adapters import (  # noqa: E402
     GUARDDOG_SOURCE_RULES,
+    SEMGREP_RULES_PATH,
     GuardDogAdapter,
     StaticAdapter,
 )
@@ -140,8 +141,41 @@ def test_guarddog_reported_rule_errors_are_errors(monkeypatch):
     assert "unable to find semgrep binary" in result.details["stdout"]
 
 
+def test_semgrep_uses_checked_in_offline_rules(monkeypatch):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, capture_output, text, timeout, **kwargs):
+        calls.append(cmd)
+        env = kwargs.get("env") or {}
+        assert env["SEMGREP_SETTINGS_FILE"].endswith("settings.yml")
+        assert env["SEMGREP_LOG_FILE"].endswith("semgrep.log")
+        assert env["SEMGREP_SEND_METRICS"] == "off"
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=json.dumps({"results": []}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(adapters.subprocess, "run", fake_run)
+
+    result = StaticAdapter("semgrep").run(_pkg())
+
+    cmd = calls[0]
+    assert cmd[:4] == ["semgrep", "scan", "--config", str(SEMGREP_RULES_PATH)]
+    assert SEMGREP_RULES_PATH.is_file()
+    assert "p/python" not in cmd
+    assert "--metrics" in cmd
+    assert cmd[cmd.index("--metrics") + 1] == "off"
+    assert "--disable-version-check" in cmd
+    assert "--no-git-ignore" in cmd
+    assert result.detector == "semgrep"
+    assert result.experiment_mode == "static"
+    assert result.verdict is False
+
+
 def test_static_tool_subprocess_exceptions_are_errors(monkeypatch):
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, capture_output, text, timeout, **kwargs):
         raise FileNotFoundError(f"{cmd[0]} missing")
 
     monkeypatch.setattr(adapters.subprocess, "run", fake_run)

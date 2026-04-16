@@ -1,0 +1,1 @@
+pypi-scada-python-subprocess-shell-true

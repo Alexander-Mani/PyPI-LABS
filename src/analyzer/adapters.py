@@ -46,6 +46,7 @@ GUARDDOG_SOURCE_RULES = (
     "cmd-overwrite",
     "suspicious_passwd_access_linux",
 )
+SEMGREP_RULES_PATH = Path(__file__).resolve().parent / "static_rules" / "semgrep_python.yml"
 
 
 # ---------------------------------------------------------------------------
@@ -197,9 +198,29 @@ class StaticAdapter(DetectorAdapter):
 
     def _run_semgrep(self, target: Path) -> EvalDetectionResult:
         try:
+            semgrep_state = target / ".semgrep-state"
+            semgrep_state.mkdir(exist_ok=True)
+            semgrep_env = {
+                **_os.environ,
+                "SEMGREP_SETTINGS_FILE": str(semgrep_state / "settings.yml"),
+                "SEMGREP_LOG_FILE": str(semgrep_state / "semgrep.log"),
+                "SEMGREP_SEND_METRICS": "off",
+            }
             proc = subprocess.run(
-                ["semgrep", "--config", "p/python", "--json", str(target)],
-                capture_output=True, text=True, timeout=120,
+                [
+                    "semgrep",
+                    "scan",
+                    "--config",
+                    str(SEMGREP_RULES_PATH),
+                    "--json",
+                    "--metrics",
+                    "off",
+                    "--disable-version-check",
+                    "--no-git-ignore",
+                    "--quiet",
+                    str(target),
+                ],
+                capture_output=True, text=True, timeout=120, env=semgrep_env,
             )
             data = _json.loads(proc.stdout) if proc.stdout.strip() else {}
             findings = data.get("results", [])

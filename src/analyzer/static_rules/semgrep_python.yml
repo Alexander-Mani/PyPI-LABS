@@ -1,0 +1,252 @@
+rules:
+  - id: pypi-scada-python-exec-base64-decode
+    languages: [python]
+    severity: WARNING
+    message: Executing base64-decoded content is a common malware obfuscation pattern.
+    pattern-either:
+      - pattern: exec(base64.b64decode(...))
+      - pattern: eval(base64.b64decode(...))
+      - pattern: exec(b64decode(...))
+      - pattern: eval(b64decode(...))
+      - pattern: exec($B64.b64decode(...))
+      - pattern: eval($B64.b64decode(...))
+
+  - id: pypi-scada-python-exec-bytes-fromhex
+    languages: [python]
+    severity: WARNING
+    message: Executing bytes decoded from hex is a suspicious obfuscation pattern.
+    pattern-either:
+      - pattern: exec(bytes.fromhex(...))
+      - pattern: eval(bytes.fromhex(...))
+      - pattern: exec(bytearray.fromhex(...))
+      - pattern: eval(bytearray.fromhex(...))
+
+  - id: pypi-scada-python-exec-codecs-decode
+    languages: [python]
+    severity: WARNING
+    message: Executing content produced by codecs.decode can hide package malware.
+    pattern-either:
+      - pattern: exec(codecs.decode(...))
+      - pattern: eval(codecs.decode(...))
+      - pattern: exec($CODECS.decode(...))
+      - pattern: eval($CODECS.decode(...))
+
+  - id: pypi-scada-python-exec-zlib-decompress
+    languages: [python]
+    severity: WARNING
+    message: Executing decompressed content is a suspicious payload-loading pattern.
+    pattern-either:
+      - pattern: exec(zlib.decompress(...))
+      - pattern: eval(zlib.decompress(...))
+      - pattern: exec($ZLIB.decompress(...))
+      - pattern: eval($ZLIB.decompress(...))
+
+  - id: pypi-scada-python-exec-marshal-loads
+    languages: [python]
+    severity: WARNING
+    message: Executing marshalled code objects is a high-risk obfuscation pattern.
+    pattern-either:
+      - pattern: exec(marshal.loads(...))
+      - pattern: eval(marshal.loads(...))
+      - pattern: exec($MARSHAL.loads(...))
+      - pattern: eval($MARSHAL.loads(...))
+
+  - id: pypi-scada-python-exec-compile-result
+    languages: [python]
+    severity: WARNING
+    message: Executing dynamically compiled source can hide generated malware code.
+    pattern-either:
+      - pattern: exec(compile(...))
+      - pattern: eval(compile(...))
+
+  - id: pypi-scada-python-subprocess-shell-true
+    languages: [python]
+    severity: WARNING
+    message: Running subprocesses with shell=True is high risk in package code.
+    pattern-either:
+      - pattern: subprocess.run(..., shell=True, ...)
+      - pattern: subprocess.call(..., shell=True, ...)
+      - pattern: subprocess.Popen(..., shell=True, ...)
+      - pattern: subprocess.check_call(..., shell=True, ...)
+      - pattern: subprocess.check_output(..., shell=True, ...)
+      - pattern: run(..., shell=True, ...)
+      - pattern: Popen(..., shell=True, ...)
+
+  - id: pypi-scada-python-os-popen-shell
+    languages: [python]
+    severity: WARNING
+    message: os.popen executes shell commands and is suspicious in package code.
+    pattern-either:
+      - pattern: os.popen(...)
+      - pattern: $OS.popen(...)
+
+  - id: pypi-scada-python-dynamic-import-nonliteral
+    languages: [python]
+    severity: WARNING
+    message: Dynamic non-literal imports can hide payload loading.
+    patterns:
+      - pattern-either:
+          - pattern: __import__($NAME)
+          - pattern: importlib.import_module($NAME)
+          - pattern: $IMPORTLIB.import_module($NAME)
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: ^[A-Za-z_].*
+
+  - id: pypi-scada-python-builtins-exec-getattr
+    languages: [python]
+    severity: WARNING
+    message: Resolving exec/eval through builtins getattr is an obfuscation pattern.
+    pattern-either:
+      - pattern: getattr(__builtins__, "exec")(...)
+      - pattern: getattr(__builtins__, "eval")(...)
+      - pattern: getattr(builtins, "exec")(...)
+      - pattern: getattr(builtins, "eval")(...)
+      - pattern: getattr($BUILTINS, "exec")(...)
+      - pattern: getattr($BUILTINS, "eval")(...)
+
+  - id: pypi-scada-python-native-library-load
+    languages: [python]
+    severity: WARNING
+    message: Loading native libraries from package code can indicate binary payload execution.
+    pattern-either:
+      - pattern: ctypes.CDLL(...)
+      - pattern: ctypes.cdll.LoadLibrary(...)
+      - pattern: ctypes.windll.LoadLibrary(...)
+      - pattern: cdll.LoadLibrary(...)
+      - pattern: windll.LoadLibrary(...)
+      - pattern: cffi.FFI().dlopen(...)
+      - pattern: ffi.dlopen(...)
+
+  - id: pypi-scada-python-download-execute-function
+    languages: [python]
+    severity: WARNING
+    message: Downloading content and executing or chmodding it in one function is suspicious.
+    pattern-either:
+      - pattern: |
+          def $FUNC(...):
+            ...
+            urllib.request.urlretrieve(...)
+            ...
+            os.chmod(...)
+      - pattern: |
+          def $FUNC(...):
+            ...
+            urlretrieve(...)
+            ...
+            os.chmod(...)
+      - pattern: |
+          def $FUNC(...):
+            ...
+            urllib.request.urlopen(...)
+            ...
+            exec(...)
+      - pattern: |
+          def $FUNC(...):
+            ...
+            requests.get(..., stream=True, ...)
+            ...
+            subprocess.run(..., shell=True, ...)
+
+  - id: pypi-scada-python-install-command-shell
+    languages: [python]
+    severity: WARNING
+    message: Install/develop/build command classes should not execute shell commands.
+    patterns:
+      - pattern-inside: |
+          class $CMD($BASE):
+            ...
+      - metavariable-regex:
+          metavariable: $BASE
+          regex: ^(install|develop|build_py|build_ext)$
+      - pattern-inside: |
+          def run(...):
+            ...
+      - pattern-either:
+          - pattern: os.system(...)
+          - pattern: os.popen(...)
+          - pattern: subprocess.run(..., shell=True, ...)
+          - pattern: subprocess.Popen(..., shell=True, ...)
+
+  - id: pypi-scada-python-install-command-network
+    languages: [python]
+    severity: WARNING
+    message: Install/develop/build command classes should not fetch remote content.
+    patterns:
+      - pattern-inside: |
+          class $CMD($BASE):
+            ...
+      - metavariable-regex:
+          metavariable: $BASE
+          regex: ^(install|develop|build_py|build_ext)$
+      - pattern-inside: |
+          def run(...):
+            ...
+      - pattern-either:
+          - pattern: requests.get(...)
+          - pattern: requests.post(...)
+          - pattern: urllib.request.urlopen(...)
+          - pattern: urllib.request.urlretrieve(...)
+          - pattern: urlopen(...)
+          - pattern: urlretrieve(...)
+
+  - id: pypi-scada-python-persistence-file-write
+    languages: [python]
+    severity: WARNING
+    message: Writing shell, cron, SSH, systemd, or pip config files suggests persistence or host tampering.
+    patterns:
+      - pattern-either:
+          - pattern: open($PATH, ...)
+          - pattern: Path($PATH).write_text(...)
+          - pattern: pathlib.Path($PATH).write_text(...)
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: ^.*(\.bashrc|\.profile|authorized_keys|/cron\.|/crontab|systemd|pip\.conf|pip\.ini).*$
+
+  - id: pypi-scada-python-credential-exfiltration
+    languages: [python]
+    severity: WARNING
+    message: Reading common secret variables and making HTTP requests in one function suggests exfiltration.
+    pattern-either:
+      - pattern: |
+          def $FUNC(...):
+            ...
+            $SECRET = os.environ.get("AWS_SECRET_ACCESS_KEY")
+            ...
+            requests.post(...)
+      - pattern: |
+          def $FUNC(...):
+            ...
+            $SECRET = os.environ.get("GITHUB_TOKEN")
+            ...
+            requests.post(...)
+      - pattern: |
+          def $FUNC(...):
+            ...
+            $SECRET = os.environ.get("TWINE_PASSWORD")
+            ...
+            requests.post(...)
+      - pattern: |
+          def $FUNC(...):
+            ...
+            $SECRET = os.environ.get("ANTHROPIC_API_KEY")
+            ...
+            requests.post(...)
+      - pattern: |
+          def $FUNC(...):
+            ...
+            $SECRET = os.environ.get("OPENAI_API_KEY")
+            ...
+            requests.post(...)
+      - pattern: |
+          def $FUNC(...):
+            ...
+            $SECRET = os.getenv("GITHUB_TOKEN")
+            ...
+            requests.post(...)
+      - pattern: |
+          def $FUNC(...):
+            ...
+            $SECRET = os.environ["GITHUB_TOKEN"]
+            ...
+            urllib.request.urlopen(...)

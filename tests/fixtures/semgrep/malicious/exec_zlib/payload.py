@@ -1,0 +1,2 @@
+import zlib
+exec(zlib.decompress(b"x\x9c+H\xcd\xc9\xc9\x07\x00\x06,\x02\x15"))
