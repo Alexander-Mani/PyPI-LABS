@@ -20,7 +20,7 @@ def test_provider_for_model_known_prefixes():
     assert provider_for_model("anthropic/claude-haiku-4-5") == "anthropic"
     assert provider_for_model("gpt-5.4-nano") == "openai"
     assert provider_for_model("openai/gpt-5.4-nano") == "openai"
-    assert provider_for_model("gemini-3.1-flash-lite-preview") == "google"
+    assert provider_for_model("gemini-2.0-flash-lite") == "google"
     assert provider_for_model("together_ai/Qwen/Qwen3.5-9B") == "together"
 
 
