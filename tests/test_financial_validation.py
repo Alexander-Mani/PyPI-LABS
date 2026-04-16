@@ -129,7 +129,7 @@ def test_financial_validation_halts_when_selected_detector_all_errors():
                     exec_time_ms=1,
                     api_cost_usd=0.0,
                     details={
-                        "model": "gemini-2.0-flash-lite",
+                        "model": "gemini-2.5-flash-lite",
                         "error": "503 high demand",
                     },
                 )
@@ -143,6 +143,6 @@ def test_financial_validation_halts_when_selected_detector_all_errors():
         raise AssertionError("financial validation should halt")
 
     assert "gemini_flash_lite" in message
-    assert "gemini-2.0-flash-lite" in message
+    assert "gemini-2.5-flash-lite" in message
     assert "503 high demand" in message
     assert "--profile budget_no_gemini" in message

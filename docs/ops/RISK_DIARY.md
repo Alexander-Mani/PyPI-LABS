@@ -322,11 +322,11 @@ should use `--run-id-prefix canonical-v2` so final queries can select
 
 ---
 
-## Decision 9 — Replace `gemini-3.1-flash-lite-preview` with `gemini-2.0-flash-lite`
+## Decision 9 — Replace `gemini-3.1-flash-lite-preview` with `gemini-2.5-flash-lite`
 
 **Decision:**
 The budget-tier Google model is changed from `gemini-3.1-flash-lite-preview` to
-`gemini-2.0-flash-lite` across all config files, the LiteLLM proxy routing, the
+`gemini-2.5-flash-lite` across all config files, the LiteLLM proxy routing, the
 analyzer detector config, and test fixtures.
 
 **Threat addressed (availability):**
@@ -338,13 +338,13 @@ pattern occurred across multiple run attempts over several days. Google's status
 page showed no declared incident; the throttling is inherent to preview-tier
 capacity allocation.
 
-**Why `gemini-2.0-flash-lite`:**
-It is a GA (generally available) model, not a preview endpoint. GA models receive
-higher capacity quotas and are subject to Google's SLA commitments. The pricing
-($0.075/$0.30 per 1M input/output tokens) is comparable to the preview model and
-remains firmly in the budget tier. Choosing `gemini-2.0-flash-lite` over a newer
-preview preserves experiment stability: a model swap mid-dataset would mix results
-from two different models under the same detector name, invalidating the comparison.
+**Why `gemini-2.5-flash-lite`:**
+It is the current stable (non-preview) budget-tier Gemini model.
+`gemini-2.0-flash-lite` was considered first but returns HTTP 404 ("no longer
+available to new users") — Google sunset it between generations. The 2.5 variant
+is the newest GA flash-lite release. Its pricing ($0.075/$0.30 per 1M
+input/output tokens) is comparable to the preview model and remains firmly in the
+budget tier.
 
 **Controls applied:**
 - Updated `configs/models.json` (token prices and budget-tier model entry).
@@ -352,18 +352,17 @@ from two different models under the same detector name, invalidating the compari
 - Updated `src/analyzer/configs/gemini_flash_lite.yaml` (detector model name).
 - Updated all test references (`test_analyzer_progress.py`,
   `test_litellm_smoke.py`, `test_financial_validation.py`).
-- Verified zero remaining references to `gemini-3.1-flash-lite-preview` in the
-  repository.
+- Verified zero remaining references to `gemini-3.1-flash-lite-preview` or
+  `gemini-2.0-flash-lite` in the repository.
 
 **Residual risk:**
-`gemini-2.0-flash-lite` is an older-generation model with potentially lower
-capability than `gemini-3.1-flash-lite-preview`. Budget-tier LLM detection
-accuracy may be lower than what the newer model could have achieved under stable
-conditions. This is an acceptable trade-off: an unreliable model that produces
-`experiment_mode="error"` rows is worse for the thesis than a slightly less
-capable model that completes its runs.
+`gemini-2.5-flash-lite` is an older-generation model than the 3.1 preview.
+Budget-tier LLM detection accuracy may be lower than what the newer model could
+have achieved under stable conditions. This is an acceptable trade-off: an
+unreliable model that produces `experiment_mode="error"` rows is worse for the
+thesis than a slightly less capable model that completes its runs.
 
 **Metric compatibility note:**
 Any prior evaluation rows produced by `gemini-3.1-flash-lite-preview` are not
-comparable with `gemini-2.0-flash-lite` results. Canonical runs must be re-run
+comparable with `gemini-2.5-flash-lite` results. Canonical runs must be re-run
 from scratch with the new model under `--run-id-prefix canonical-v2`.

@@ -98,7 +98,7 @@ def test_smoke_model_retries_transient_http_failure(monkeypatch, capsys):
 
     ok, message = litellm_smoke.smoke_model(
         base_url="http://127.0.0.1:4000",
-        model="gemini-2.0-flash-lite",
+        model="gemini-2.5-flash-lite",
         timeout=1.0,
         max_tokens=4,
         retries=1,
@@ -107,8 +107,8 @@ def test_smoke_model_retries_transient_http_failure(monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert ok is True
-    assert "OK gemini-2.0-flash-lite" in message
-    assert "RETRY gemini-2.0-flash-lite" in captured.err
+    assert "OK gemini-2.5-flash-lite" in message
+    assert "RETRY gemini-2.5-flash-lite" in captured.err
     assert len(calls) == 2
 
 
