@@ -302,6 +302,9 @@ if ! sudo -u pypi-runner bash -c "
   exit 1
 fi
 
+echo " Basic deployment updat done, Press Enter to continue..."
+read
+
 echo "Step 8: Starting the PyPI simulator (background)"
 sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
