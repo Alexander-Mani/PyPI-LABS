@@ -11,16 +11,17 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-import yaml
-
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _PROFILE_FILE = _REPO_ROOT / "configs" / "evaluation_profiles.yaml"
+_LITELLM_CONFIG_FILE = _REPO_ROOT / "configs" / "litellm_config.yaml"
 _ANALYZER_CONFIGS = _REPO_ROOT / "src" / "analyzer" / "configs"
 TRANSIENT_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 def _load_profile_models(profile_name: str) -> list[str]:
+    import yaml
+
     with open(_PROFILE_FILE, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
 
@@ -42,6 +43,23 @@ def _load_profile_models(profile_name: str) -> list[str]:
             raise SystemExit(f"config '{cfg_path}' has no model_name")
         if model_name not in models:
             models.append(str(model_name))
+    return models
+
+
+def _load_all_litellm_models() -> list[str]:
+    # Keep the all-model dry-run usable even in minimal Python environments
+    # where PyYAML is not installed. The LiteLLM config shape we need is
+    # deliberately simple: repeated "- model_name: <name>" lines.
+    models: list[str] = []
+    for raw_line in _LITELLM_CONFIG_FILE.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line.startswith("- model_name:"):
+            continue
+        model_name = line.split(":", 1)[1].strip().strip("'\"")
+        if model_name and model_name not in models:
+            models.append(model_name)
+    if not models:
+        raise SystemExit(f"no models found in {_LITELLM_CONFIG_FILE}")
     return models
 
 
@@ -111,14 +129,43 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:4000")
     parser.add_argument("--profile", default="budget")
+    parser.add_argument(
+        "--all-models",
+        action="store_true",
+        help="Smoke-test every model listed in configs/litellm_config.yaml",
+    )
     parser.add_argument("--models", nargs="+", default=None)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print selected models and request settings without calling LiteLLM",
+    )
     parser.add_argument("--timeout", type=float, default=45.0)
     parser.add_argument("--max-tokens", type=int, default=8)
     parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--retry-delay", type=float, default=15.0)
     args = parser.parse_args(argv)
 
-    models = args.models if args.models is not None else _load_profile_models(args.profile)
+    if args.models is not None and args.all_models:
+        raise SystemExit("HALT: use either --models or --all-models, not both")
+    if args.models is not None:
+        models = args.models
+        source = "explicit --models"
+    elif args.all_models:
+        models = _load_all_litellm_models()
+        source = str(_LITELLM_CONFIG_FILE.relative_to(_REPO_ROOT))
+    else:
+        models = _load_profile_models(args.profile)
+        source = f"profile:{args.profile}"
+
+    if args.dry_run:
+        print(f"LiteLLM smoke dry-run: {len(models)} model(s) from {source}")
+        print(f"base_url={args.base_url.rstrip('/')}")
+        print(f"max_tokens={args.max_tokens} timeout={args.timeout:g}s retries={args.retries}")
+        for model in models:
+            print(f"DRY-RUN {model}")
+        return 0
+
     failed = False
     for model in models:
         ok, message = smoke_model(

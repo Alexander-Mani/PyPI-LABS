@@ -162,3 +162,30 @@ def test_smoke_main_uses_profile_when_models_not_supplied(monkeypatch, capsys):
     assert rc == 0
     assert captured_profile["name"] == "budget_no_gemini"
     assert "OK gpt-5.4-nano" in captured.out
+
+
+def test_smoke_main_dry_run_all_models_reads_litellm_config(monkeypatch, capsys):
+    def fail_urlopen(req, timeout):  # pragma: no cover - should never be called
+        raise AssertionError("dry-run should not call LiteLLM")
+
+    monkeypatch.setattr(litellm_smoke.urllib.request, "urlopen", fail_urlopen)
+
+    rc = litellm_smoke.main(["--all-models", "--dry-run", "--timeout", "1"])
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "LiteLLM smoke dry-run" in captured.out
+    assert "configs/litellm_config.yaml" in captured.out
+    assert "DRY-RUN claude-haiku-4-5" in captured.out
+    assert "DRY-RUN gpt-5.4-nano" in captured.out
+    assert "DRY-RUN together_ai/Qwen/Qwen3.5-397B-A17B" in captured.out
+    assert captured.err == ""
+
+
+def test_smoke_main_rejects_all_models_with_explicit_models():
+    try:
+        litellm_smoke.main(["--all-models", "--models", "gpt-5.4-nano"])
+    except SystemExit as exc:
+        assert "either --models or --all-models" in str(exc)
+    else:  # pragma: no cover - defensive failure path
+        raise AssertionError("conflicting model selectors should halt")

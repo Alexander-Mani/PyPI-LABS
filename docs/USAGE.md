@@ -331,6 +331,18 @@ export TOGETHER_API_KEY=...
 litellm --config configs/litellm_config.yaml --port 4000
 ```
 
+Preview every configured LiteLLM model without making API calls:
+
+```bash
+python scripts/litellm_smoke.py --all-models --dry-run
+```
+
+Send the minimal `Reply with OK.` smoke request to every configured model:
+
+```bash
+python scripts/litellm_smoke.py --all-models --retries 3 --retry-delay 20
+```
+
 **VM deployment:** See `docs/ops/DEPLOYMENT_MANIFEST.md` Step 7 — LiteLLM runs as
 `proxy-runner` with keys in `~proxy-runner/.env` and egress restricted to
 deployment-time resolved vendor API IPs via iptables owner rules.
