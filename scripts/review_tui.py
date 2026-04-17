@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+_DEFAULT_CONFIG = _REPO_ROOT / "configs" / "review_tui.yaml"
 
 SECTION_EXPERIMENT = "experiment"
 SECTION_DATABASE = "database"
@@ -64,6 +65,170 @@ class ReviewAction:
     requires_clean_db: bool = False
 
 
+@dataclass(frozen=True)
+class ReviewContext:
+    name: str
+    repo_root: Path
+    python_executable: str
+    runner_user: str | None = None
+    litellm_log: Path = Path("/home/proxy-runner/litellm.log")
+    deployment_cwd: Path = _REPO_ROOT
+    deployment_script: Path = _REPO_ROOT / "deployment.sh"
+
+    @property
+    def db_path(self) -> Path:
+        return self.repo_root / "src" / "data" / "eval_results.db"
+
+    @property
+    def deployed(self) -> bool:
+        return self.runner_user is not None
+
+
+def _default_local_context(repo_root: Path = _REPO_ROOT, python_executable: str = sys.executable) -> ReviewContext:
+    repo_root = Path(repo_root).resolve()
+    return ReviewContext(
+        name="local",
+        repo_root=repo_root,
+        python_executable=str(python_executable),
+        runner_user=None,
+        litellm_log=Path("/home/proxy-runner/litellm.log"),
+        deployment_cwd=repo_root,
+        deployment_script=repo_root / "deployment.sh",
+    )
+
+
+def _clean_config_value(value: str) -> str | None:
+    value = value.strip().strip('"\'')
+    if value in {"", "null", "None", "~"}:
+        return None
+    return value
+
+
+def _parse_review_tui_config(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    data: dict = {"contexts": {}}
+    current_context: str | None = None
+    in_contexts = False
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        if line == "contexts:":
+            in_contexts = True
+            current_context = None
+            continue
+        if not raw_line.startswith(" ") and ":" in line:
+            key, value = line.split(":", 1)
+            data[key.strip()] = _clean_config_value(value)
+            in_contexts = False
+            current_context = None
+            continue
+        if in_contexts and raw_line.startswith("  ") and not raw_line.startswith("    ") and line.endswith(":"):
+            current_context = line.strip()[:-1]
+            data["contexts"][current_context] = {}
+            continue
+        if in_contexts and current_context and raw_line.startswith("    ") and ":" in line:
+            key, value = line.strip().split(":", 1)
+            data["contexts"][current_context][key.strip()] = _clean_config_value(value)
+    return data
+
+
+def _resolve_path(value: str | None, *, base: Path, default: Path | None = None) -> Path:
+    if value is None:
+        if default is None:
+            raise ValueError("missing required path value")
+        return default.resolve()
+    path = Path(value)
+    if not path.is_absolute():
+        path = base / path
+    return path.resolve()
+
+
+def _context_from_config(name: str, config: dict, *, base: Path, python_fallback: str) -> ReviewContext:
+    contexts = config.get("contexts", {})
+    raw = contexts.get(name)
+    if raw is None:
+        if name == "local":
+            return _default_local_context(_REPO_ROOT, python_fallback)
+        raise SystemExit(f"HALT: unknown review TUI context '{name}'")
+    repo_root = _resolve_path(raw.get("repo_root"), base=base, default=_REPO_ROOT)
+    python_value = raw.get("python") or python_fallback
+    python_path = str(_resolve_path(python_value, base=base)) if python_value != python_fallback else python_fallback
+    return ReviewContext(
+        name=name,
+        repo_root=repo_root,
+        python_executable=python_path,
+        runner_user=raw.get("runner_user"),
+        litellm_log=_resolve_path(raw.get("litellm_log"), base=base, default=Path("/home/proxy-runner/litellm.log")),
+        deployment_cwd=_resolve_path(raw.get("deployment_cwd"), base=base, default=_REPO_ROOT),
+        deployment_script=_resolve_path(raw.get("deployment_script"), base=base, default=_REPO_ROOT / "deployment.sh"),
+    )
+
+
+def _context_ready(context: ReviewContext) -> bool:
+    return context.repo_root.exists() and Path(context.python_executable).exists()
+
+
+def resolve_review_context(
+    requested: str = "auto",
+    *,
+    config_path: Path = _DEFAULT_CONFIG,
+    repo_root_override: Path | None = None,
+    python_override: str | None = None,
+) -> ReviewContext:
+    config_path = Path(config_path)
+    config = _parse_review_tui_config(config_path)
+    base = _REPO_ROOT
+    fallback_python = python_override or sys.executable
+    if requested == "auto":
+        requested = str(config.get("default_context") or "auto")
+    if requested == "auto":
+        deployed = _context_from_config("deployed", config, base=base, python_fallback=fallback_python)
+        requested = "deployed" if _context_ready(deployed) else "local"
+        context = deployed if requested == "deployed" else _context_from_config("local", config, base=base, python_fallback=fallback_python)
+    else:
+        context = _context_from_config(requested, config, base=base, python_fallback=fallback_python)
+        if requested == "deployed" and not _context_ready(context):
+            raise SystemExit(
+                "HALT: deployed context selected but repo root or Python is missing: "
+                f"{context.repo_root} / {context.python_executable}"
+            )
+    if repo_root_override is not None or python_override is not None:
+        context = ReviewContext(
+            name=context.name,
+            repo_root=Path(repo_root_override).resolve() if repo_root_override is not None else context.repo_root,
+            python_executable=str(python_override) if python_override is not None else context.python_executable,
+            runner_user=context.runner_user,
+            litellm_log=context.litellm_log,
+            deployment_cwd=context.deployment_cwd,
+            deployment_script=context.deployment_script,
+        )
+    return context
+
+
+def context_summary(context: ReviewContext) -> str:
+    return (
+        f"context={context.name} repo={context.repo_root} "
+        f"python={context.python_executable} db={context.db_path}"
+    )
+
+
+def context_warnings(context: ReviewContext) -> list[str]:
+    warnings: list[str] = []
+    python_path = Path(context.python_executable)
+    try:
+        python_path.relative_to(context.repo_root)
+    except ValueError:
+        warnings.append(
+            "Python executable is outside the selected repo root; verify this is intentional: "
+            f"{python_path}"
+        )
+    if context.name == "deployed" and not context.deployed:
+        warnings.append("Deployed context has no runner_user configured.")
+    return warnings
+
+
 def build_sections() -> tuple[Section, ...]:
     return (
         Section(
@@ -96,10 +261,6 @@ def build_sections() -> tuple[Section, ...]:
 
 def _eval_db_path(repo_root: Path) -> Path:
     return repo_root / "src" / "data" / "eval_results.db"
-
-
-def _sqlite_uri(repo_root: Path) -> str:
-    return f"file:{_eval_db_path(repo_root)}?mode=ro&immutable=1"
 
 
 def _sqlite_recent_query() -> str:
@@ -166,8 +327,90 @@ def _shell(command: str) -> tuple[str, ...]:
     return ("bash", "-lc", command)
 
 
-def _py(py: str, repo_root: Path, *parts: str) -> tuple[str, ...]:
-    return (py, str(repo_root.joinpath(*parts)))
+def _shell_in_context(context: ReviewContext, command: str, *, user: str | None = None, cwd: Path | None = None) -> tuple[str, ...]:
+    cwd = cwd or context.repo_root
+    wrapped = f"cd {shlex.quote(str(cwd))} && {command}"
+    if user:
+        return ("sudo", "-u", user, "bash", "-lc", wrapped)
+    return ("bash", "-lc", wrapped)
+
+
+def _context_script(context: ReviewContext, *parts_and_args: str) -> tuple[str, ...]:
+    if not parts_and_args:
+        raise ValueError("missing script path")
+    script = context.repo_root.joinpath(parts_and_args[0])
+    args = parts_and_args[1:]
+    if context.runner_user:
+        return _shell_in_context(
+            context,
+            shlex.join([context.python_executable, str(script), *args]),
+            user=context.runner_user,
+        )
+    return (context.python_executable, str(script), *args)
+
+
+def _context_python_module(context: ReviewContext, *args: str) -> tuple[str, ...]:
+    if context.runner_user:
+        return _shell_in_context(
+            context,
+            shlex.join([context.python_executable, "-m", *args]),
+            user=context.runner_user,
+        )
+    return (context.python_executable, "-m", *args)
+
+
+def _context_sqlite(context: ReviewContext, query: str) -> tuple[str, ...]:
+    uri = f"file:{context.db_path}?mode=ro&immutable=1"
+    cmd = ("sqlite3", "-header", "-column", uri, query)
+    if context.runner_user:
+        return ("sudo", "-u", context.runner_user, *cmd)
+    return cmd
+
+
+def _context_db_shell(context: ReviewContext, command: str) -> tuple[str, ...]:
+    if context.runner_user:
+        return _shell_in_context(context, command, user=context.runner_user)
+    return _shell_in_context(context, command)
+
+
+def _db_status_command(context: ReviewContext) -> tuple[str, ...]:
+    query = (
+        "select "
+        "(select count(*) from eval_run) as eval_runs, "
+        "(select count(*) from eval_result) as eval_results, "
+        "(select run_id from eval_run order by id desc limit 1) as latest_run_id, "
+        "(select created_at from eval_run order by id desc limit 1) as latest_created_at;"
+    )
+    db = shlex.quote(str(context.db_path))
+    sqlite = shlex.join(["sqlite3", "-header", "-column", f"file:{context.db_path}?mode=ro&immutable=1", query])
+    return _context_db_shell(
+        context,
+        f"echo 'DB path: {context.db_path}'; "
+        f"if [ ! -f {db} ]; then echo 'DB missing'; exit 0; fi; "
+        f"{sqlite}",
+    )
+
+
+def _litellm_tail_command(context: ReviewContext) -> tuple[str, ...]:
+    path = str(context.litellm_log)
+    if context.name == "deployed":
+        return ("sudo", "-u", "proxy-runner", "tail", "-n", "80", path)
+    return _shell(f"tail -n 80 {shlex.quote(path)} 2>/dev/null || echo 'LiteLLM VM log unavailable'")
+
+
+def _deployment_command(context: ReviewContext, profile: str, gemini: str, *, upload_categories: str | None = None) -> tuple[str, ...]:
+    env_parts = [f"MODEL_PROFILE={profile}", f"GEMINI={gemini}", "EVAL_PROGRESS=always"]
+    if upload_categories:
+        env_parts.append(f"UPLOAD_CATEGORIES={shlex.quote(upload_categories)}")
+    command = " ".join(env_parts + ["bash", shlex.quote(str(context.deployment_script))])
+    return _shell_in_context(context, command, cwd=context.deployment_cwd)
+
+
+def _command_mentions_mixed_roots(command: Sequence[str], context: ReviewContext) -> bool:
+    preview = command_preview(command)
+    active_root = str(context.repo_root)
+    launch_root = str(_REPO_ROOT)
+    return active_root in preview and launch_root in preview and active_root != launch_root
 
 
 def _profile_slug(profile: str) -> str:
@@ -187,16 +430,15 @@ def build_actions(
     *,
     python_executable: str = sys.executable,
     gemini_enabled: bool = True,
+    context: ReviewContext | None = None,
 ) -> tuple[ReviewAction, ...]:
-    py = python_executable
-    repo_root = repo_root.resolve()
-    sqlite_uri = _sqlite_uri(repo_root)
+    context = context or _default_local_context(repo_root, python_executable)
     gemini = _gemini_value(gemini_enabled)
 
     def evaluate(profile: str, *args: str) -> tuple[str, ...]:
-        return (
-            py,
-            str(repo_root / "src" / "analyzer" / "evaluate.py"),
+        return _context_script(
+            context,
+            "src/analyzer/evaluate.py",
             "--profile",
             profile,
             "--gemini",
@@ -205,15 +447,31 @@ def build_actions(
         )
 
     def smoke(*args: str) -> tuple[str, ...]:
-        return (*_py(py, repo_root, "scripts", "litellm_smoke.py"), *args, "--gemini", gemini)
+        return _context_script(context, "scripts/litellm_smoke.py", *args, "--gemini", gemini)
 
     def deploy(profile: str, *, upload_categories: str | None = None) -> tuple[str, ...]:
-        env_parts = [f"MODEL_PROFILE={profile}", f"GEMINI={gemini}", "EVAL_PROGRESS=always"]
-        if upload_categories:
-            env_parts.append(f"UPLOAD_CATEGORIES={shlex.quote(upload_categories)}")
-        return _shell(" ".join(env_parts) + " bash deployment.sh")
+        return _deployment_command(context, profile, gemini, upload_categories=upload_categories)
 
     actions: list[ReviewAction] = [
+        ReviewAction(
+            id="context-status",
+            section=SECTION_DATABASE,
+            title="Show active TUI context",
+            description="Show target repo, Python, DB, runner user, and LiteLLM log paths.",
+            command=_shell(
+                "printf '%s\n' "
+                + shlex.join([
+                    f"Context: {context.name}",
+                    f"Repo root: {context.repo_root}",
+                    f"Python: {context.python_executable}",
+                    f"Runner user: {context.runner_user or 'current user'}",
+                    f"DB: {context.db_path}",
+                    f"LiteLLM log: {context.litellm_log}",
+                    f"Deployment cwd: {context.deployment_cwd}",
+                    f"Deployment script: {context.deployment_script}",
+                ])
+            ),
+        ),
         ReviewAction(
             id="models-preview-all",
             section=SECTION_EXPERIMENT,
@@ -308,31 +566,21 @@ def build_actions(
             section=SECTION_DATABASE,
             title="DB status",
             description="Show DB path, counts, and latest run metadata.",
-            command=_shell(
-                "db='src/data/eval_results.db'; "
-                "echo \"DB path: $PWD/$db\"; "
-                "if [ ! -f \"$db\" ]; then echo 'DB missing'; exit 0; fi; "
-                "sqlite3 -header -column \"file:$db?mode=ro&immutable=1\" \""
-                "select "
-                "(select count(*) from eval_run) as eval_runs, "
-                "(select count(*) from eval_result) as eval_results, "
-                "(select run_id from eval_run order by id desc limit 1) as latest_run_id, "
-                "(select created_at from eval_run order by id desc limit 1) as latest_created_at;\""
-            ),
+            command=_db_status_command(context),
         ),
         ReviewAction(
             id="archive-db-dry-run",
             section=SECTION_DATABASE,
             title="Preview DB archive",
             description="Show how eval_results.db would be archived without changing files.",
-            command=(*_py(py, repo_root, "scripts", "archive_eval_db.py"), "--dry-run"),
+            command=(*_context_script(context, "scripts/archive_eval_db.py"), "--dry-run"),
         ),
         ReviewAction(
             id="archive-db",
             section=SECTION_DATABASE,
             title="Archive DB and create clean DB",
             description="Move eval_results.db plus sidecars into timestamped archive and initialize a fresh schema.",
-            command=_py(py, repo_root, "scripts", "archive_eval_db.py"),
+            command=_context_script(context, "scripts/archive_eval_db.py"),
             safety=SAFETY_MUTATES_DB,
             confirm=True,
         ),
@@ -341,7 +589,7 @@ def build_actions(
             section=SECTION_DATABASE,
             title="Archive DB only",
             description="Archive eval_results.db without creating a fresh replacement.",
-            command=(*_py(py, repo_root, "scripts", "archive_eval_db.py"), "--no-init"),
+            command=(*_context_script(context, "scripts/archive_eval_db.py"), "--no-init"),
             safety=SAFETY_MUTATES_DB,
             confirm=True,
         ),
@@ -350,79 +598,78 @@ def build_actions(
             section=SECTION_DATABASE,
             title="List recent eval runs",
             description="Show latest eval_run rows.",
-            command=("sqlite3", "-header", "-column", sqlite_uri, _sqlite_runs_query()),
+            command=_context_sqlite(context, _sqlite_runs_query()),
         ),
         ReviewAction(
             id="db-recent",
             section=SECTION_DATABASE,
             title="Show recent DB rows",
             description="Inspect latest eval_result rows using read-only immutable SQLite.",
-            command=("sqlite3", "-header", "-column", sqlite_uri, _sqlite_recent_query()),
+            command=_context_sqlite(context, _sqlite_recent_query()),
         ),
         ReviewAction(
             id="db-errors",
             section=SECTION_DATABASE,
             title="Show DB error rows",
             description="Inspect eval_result rows where experiment_mode='error'.",
-            command=("sqlite3", "-header", "-column", sqlite_uri, _sqlite_error_query()),
+            command=_context_sqlite(context, _sqlite_error_query()),
         ),
         ReviewAction(
             id="db-detector-summary",
             section=SECTION_DATABASE,
             title="Show detector summary",
             description="Group persisted rows by run, detector, mode, and strategy.",
-            command=("sqlite3", "-header", "-column", sqlite_uri, _sqlite_detector_summary_query()),
+            command=_context_sqlite(context, _sqlite_detector_summary_query()),
         ),
         ReviewAction(
             id="logs-list",
             section=SECTION_LOGS,
             title="List newest logs",
             description="List known log directories sorted by modification time.",
-            command=_shell("ls -lt logs src/injector/logs src/analyzer/logs src/simulator/logs 2>/dev/null || true"),
+            command=_context_db_shell(context, "ls -lt logs src/injector/logs src/analyzer/logs src/simulator/logs 2>/dev/null || true"),
         ),
         ReviewAction(
             id="logs-tail-analyzer",
             section=SECTION_LOGS,
             title="Tail latest analyzer log",
             description="Show last 80 lines from newest analyzer log.",
-            command=_shell("f=$(ls -t src/analyzer/logs/*.log 2>/dev/null | head -1); [ -n \"$f\" ] && tail -n 80 \"$f\" || echo 'No analyzer logs found'"),
+            command=_context_db_shell(context, "f=$(ls -t src/analyzer/logs/*.log 2>/dev/null | head -1); [ -n \"$f\" ] && tail -n 80 \"$f\" || echo 'No analyzer logs found'"),
         ),
         ReviewAction(
             id="logs-tail-injector",
             section=SECTION_LOGS,
             title="Tail latest injector log",
             description="Show last 80 lines from newest injector log.",
-            command=_shell("f=$(ls -t src/injector/logs/*.log 2>/dev/null | head -1); [ -n \"$f\" ] && tail -n 80 \"$f\" || echo 'No injector logs found'"),
+            command=_context_db_shell(context, "f=$(ls -t src/injector/logs/*.log 2>/dev/null | head -1); [ -n \"$f\" ] && tail -n 80 \"$f\" || echo 'No injector logs found'"),
         ),
         ReviewAction(
             id="logs-tail-simulator",
             section=SECTION_LOGS,
             title="Tail simulator log",
             description="Show last 80 lines from simulator logs.",
-            command=_shell("f=$(ls -t src/simulator/logs/*.log 2>/dev/null | head -1); [ -n \"$f\" ] && tail -n 80 \"$f\" || echo 'No simulator logs found'"),
+            command=_context_db_shell(context, "f=$(ls -t src/simulator/logs/*.log 2>/dev/null | head -1); [ -n \"$f\" ] && tail -n 80 \"$f\" || echo 'No simulator logs found'"),
         ),
         ReviewAction(
             id="logs-tail-litellm",
             section=SECTION_LOGS,
             title="Tail LiteLLM VM log",
             description="Show /home/proxy-runner/litellm.log if available.",
-            command=_shell("tail -n 80 /home/proxy-runner/litellm.log 2>/dev/null || echo 'LiteLLM VM log unavailable'"),
+            command=_litellm_tail_command(context),
         ),
         ReviewAction(
             id="logs-search-errors",
             section=SECTION_LOGS,
             title="Search recent log errors",
             description="Search known logs for ERROR/HALT/Traceback/Exception/FAIL.",
-            command=_shell("rg -n 'ERROR|HALT|Traceback|Exception|FAIL' logs src/*/logs /home/proxy-runner/litellm.log 2>/dev/null || true"),
+            command=_context_db_shell(context, f"rg -n 'ERROR|HALT|Traceback|Exception|FAIL' logs src/*/logs {shlex.quote(str(context.litellm_log))} 2>/dev/null || true"),
         ),
         ReviewAction(
             id="tests-review",
             section=SECTION_TESTS,
             title="Run targeted review tests",
             description="Run resolver/profile/DB/static/model-smoke/TUI tests.",
-            command=(
-                py,
-                "-m",
+            command=_context_python_module(
+                context,
                 "pytest",
                 "tests/test_simulator_resolver.py",
                 "tests/test_evaluation_profiles.py",
@@ -442,7 +689,7 @@ def build_actions(
             section=SECTION_TESTS,
             title="Run static detector tests",
             description="Run GuardDog adapter and Semgrep rule tests.",
-            command=(py, "-m", "pytest", "tests/test_guarddog_adapter.py", "tests/test_semgrep_rules.py", "-q"),
+            command=_context_python_module(context, "pytest", "tests/test_guarddog_adapter.py", "tests/test_semgrep_rules.py", "-q"),
             safety=SAFETY_LONG_RUNNING,
             confirm=True,
         ),
@@ -451,21 +698,21 @@ def build_actions(
             section=SECTION_TESTS,
             title="Run DB/archive tests",
             description="Run DB schema and archive helper tests.",
-            command=(py, "-m", "pytest", "tests/test_eval_db_schema.py", "tests/test_archive_eval_db.py", "-q"),
+            command=_context_python_module(context, "pytest", "tests/test_eval_db_schema.py", "tests/test_archive_eval_db.py", "-q"),
         ),
         ReviewAction(
             id="tests-litellm-smoke",
             section=SECTION_TESTS,
             title="Run LiteLLM smoke tests",
             description="Run unit tests for LiteLLM smoke helper.",
-            command=(py, "-m", "pytest", "tests/test_litellm_smoke.py", "-q"),
+            command=_context_python_module(context, "pytest", "tests/test_litellm_smoke.py", "-q"),
         ),
         ReviewAction(
             id="tests-all",
             section=SECTION_TESTS,
             title="Run full test suite",
             description="Run all pytest tests.",
-            command=(py, "-m", "pytest", "tests/", "-q"),
+            command=_context_python_module(context, "pytest", "tests/", "-q"),
             safety=SAFETY_LONG_RUNNING,
             confirm=True,
         ),
@@ -474,10 +721,10 @@ def build_actions(
             section=SECTION_TESTS,
             title="Run syntax checks",
             description="Check deployment shell syntax and compile helper scripts.",
-            command=(
-                "bash",
-                "-lc",
-                f"bash -n deployment.sh && {shlex.quote(py)} -m py_compile "
+            command=_context_db_shell(
+                context,
+                "bash -n deployment.sh && "
+                f"{shlex.quote(context.python_executable)} -m py_compile "
                 "scripts/review_tui.py scripts/litellm_smoke.py scripts/archive_eval_db.py src/analyzer/evaluate.py",
             ),
         ),
@@ -509,8 +756,7 @@ def command_preview(command: Sequence[str]) -> str:
     return shlex.join(command)
 
 
-def db_result_count(repo_root: Path = _REPO_ROOT) -> int:
-    db_path = _eval_db_path(repo_root)
+def _db_result_count_path(db_path: Path) -> int:
     if not db_path.exists():
         return 0
     try:
@@ -521,7 +767,38 @@ def db_result_count(repo_root: Path = _REPO_ROOT) -> int:
         return 0
 
 
-def db_needs_archive_warning(repo_root: Path = _REPO_ROOT) -> bool:
+def db_result_count(repo_root: Path = _REPO_ROOT) -> int:
+    return _db_result_count_path(_eval_db_path(repo_root))
+
+
+def db_result_count_for_context(context: ReviewContext) -> int:
+    if not context.runner_user:
+        return _db_result_count_path(context.db_path)
+    if not context.db_path.exists():
+        return 0
+    query = "select count(*) from eval_result"
+    uri = f"file:{context.db_path}?mode=ro&immutable=1"
+    try:
+        result = subprocess.run(
+            ("sudo", "-n", "-u", context.runner_user, "sqlite3", uri, query),
+            cwd=context.repo_root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return 0
+    if result.returncode != 0:
+        return 0
+    try:
+        return int(result.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        return 0
+
+
+def db_needs_archive_warning(repo_root: Path = _REPO_ROOT, *, context: ReviewContext | None = None) -> bool:
+    if context is not None:
+        return db_result_count_for_context(context) > 0
     return db_result_count(repo_root) > 0
 
 
@@ -529,9 +806,11 @@ def execute_action(
     action: ReviewAction,
     *,
     repo_root: Path = _REPO_ROOT,
+    context: ReviewContext | None = None,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> int:
-    result = runner(action.command, cwd=repo_root)
+    cwd = context.repo_root if context is not None else repo_root
+    result = runner(action.command, cwd=cwd)
     return int(result.returncode)
 
 
@@ -666,8 +945,8 @@ def _resolve_choice(choice: str, items: Sequence[Section] | Sequence[ReviewActio
     raise KeyError(f"unknown choice {choice!r}; known: {known}")
 
 
-def _experiment_preflight(ui, repo_root: Path, actions: Sequence[ReviewAction]) -> bool:
-    if not db_needs_archive_warning(repo_root):
+def _experiment_preflight(ui, context: ReviewContext, actions: Sequence[ReviewAction]) -> bool:
+    if not db_needs_archive_warning(context=context):
         return True
 
     ui.print("[yellow]Active eval DB contains previous rows.[/yellow]")
@@ -680,10 +959,10 @@ def _experiment_preflight(ui, repo_root: Path, actions: Sequence[ReviewAction]) 
         if choice in {"a", "archive"}:
             ui.print(command_preview(archive.command))
             if ui.confirm("Archive DB now?", default=False):
-                return execute_action(archive, repo_root=repo_root) == 0
+                return execute_action(archive, context=context) == 0
         elif choice in {"p", "preview"}:
             ui.print(command_preview(preview.command))
-            execute_action(preview, repo_root=repo_root)
+            execute_action(preview, context=context)
         elif choice in {"c", "continue"}:
             return True
         elif choice in {"b", "back"}:
@@ -703,13 +982,22 @@ def _confirm_action(ui, action: ReviewAction) -> bool:
     return True
 
 
-def run_menu(*, no_rich: bool = False, repo_root: Path = _REPO_ROOT) -> int:
+def run_menu(
+    *,
+    no_rich: bool = False,
+    repo_root: Path = _REPO_ROOT,
+    context: ReviewContext | None = None,
+) -> int:
+    context = context or _default_local_context(repo_root, sys.executable)
     sections = build_sections()
     gemini_enabled = True
     ui = _make_ui(no_rich)
+    ui.print(f"[cyan]Active context:[/cyan] {context_summary(context)}")
+    for warning in context_warnings(context):
+        ui.print(f"[yellow]Context warning:[/yellow] {warning}")
 
     while True:
-        actions = build_actions(repo_root, gemini_enabled=gemini_enabled)
+        actions = build_actions(context=context, gemini_enabled=gemini_enabled)
         ui.print()
         try:
             section = _resolve_choice(ui.choose_section(sections), sections)
@@ -721,11 +1009,11 @@ def run_menu(*, no_rich: bool = False, repo_root: Path = _REPO_ROOT) -> int:
         if section == "back":
             continue
 
-        if section.preflight == "clean-db" and not _experiment_preflight(ui, repo_root, actions):
+        if section.preflight == "clean-db" and not _experiment_preflight(ui, context, actions):
             continue
 
         while True:
-            actions = build_actions(repo_root, gemini_enabled=gemini_enabled)
+            actions = build_actions(context=context, gemini_enabled=gemini_enabled)
             section_actions = actions_for_section(section.id, actions)
             raw_choice = ui.choose_action(
                 section,
@@ -750,15 +1038,17 @@ def run_menu(*, no_rich: bool = False, repo_root: Path = _REPO_ROOT) -> int:
             ui.print(f"Safety: {action.safety}")
             if section.id == SECTION_EXPERIMENT:
                 ui.print(f"Gemini: {_gemini_label(gemini_enabled)}")
-            if action.requires_clean_db and db_needs_archive_warning(repo_root):
+            if action.requires_clean_db and db_needs_archive_warning(context=context):
                 ui.print("[yellow]Warning: active DB contains previous result rows.[/yellow]")
             ui.print("Command:")
             ui.print(command_preview(action.command))
+            if action.id != "context-status" and _command_mentions_mixed_roots(action.command, context):
+                ui.print("[yellow]Warning: command mentions both local and active repo roots; inspect before running.[/yellow]")
             if not _confirm_action(ui, action):
                 ui.print("Skipped.")
                 continue
 
-            rc = execute_action(action, repo_root=repo_root)
+            rc = execute_action(action, context=context)
             ui.print(f"Exit code: {rc}")
             if not ui.confirm("Return to this section?", default=True):
                 return rc
@@ -767,12 +1057,27 @@ def run_menu(*, no_rich: bool = False, repo_root: Path = _REPO_ROOT) -> int:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--no-rich", action="store_true", help="Use plain prompts instead of Rich UI")
+    parser.add_argument(
+        "--context",
+        choices=("auto", "deployed", "local"),
+        default="auto",
+        help="Target context. auto prefers the deployed VM checkout when available.",
+    )
+    parser.add_argument("--config", type=Path, default=_DEFAULT_CONFIG, help="Review TUI context config path")
+    parser.add_argument("--repo-root", type=Path, help="Override selected context repo root")
+    parser.add_argument("--python", dest="python_executable", help="Override selected context Python executable")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    return run_menu(no_rich=args.no_rich)
+    context = resolve_review_context(
+        args.context,
+        config_path=args.config,
+        repo_root_override=args.repo_root,
+        python_override=args.python_executable,
+    )
+    return run_menu(no_rich=args.no_rich, context=context)
 
 
 if __name__ == "__main__":

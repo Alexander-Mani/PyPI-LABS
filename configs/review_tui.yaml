@@ -1,0 +1,20 @@
+# Review runner target contexts.
+# `auto` prefers the deployed VM checkout when it exists, otherwise local.
+default_context: auto
+
+contexts:
+  deployed:
+    repo_root: /home/pypi-runner/pypi-scada-repo
+    python: /home/pypi-runner/pypi-scada-repo/venv/bin/python
+    runner_user: pypi-runner
+    litellm_log: /home/proxy-runner/litellm.log
+    deployment_cwd: .
+    deployment_script: deployment.sh
+
+  local:
+    repo_root: .
+    python: null
+    runner_user: null
+    litellm_log: /home/proxy-runner/litellm.log
+    deployment_cwd: .
+    deployment_script: deployment.sh

@@ -179,10 +179,16 @@ script and flag manually:
 python scripts/review_tui.py
 ```
 
+The TUI reads `configs/review_tui.yaml` and prints the active target context on
+startup. `--context auto` prefers `/home/pypi-runner/pypi-scada-repo` when the
+deployed repo and venv exist, so smoke/model/database actions run against the VM
+checkout instead of accidentally mixing deployed Python with local scripts. Use
+`--context local` when you intentionally want the current checkout.
+
 The TUI is a thin wrapper over existing scripts. It is grouped into four
 sections: Run Experiment Suite, Database, Logs, and Tests. The experiment section
-checks whether `src/data/eval_results.db` already contains result rows and offers
-to archive it before you start a debug or canonical run.
+checks whether the active context's `src/data/eval_results.db` already contains
+result rows and offers to archive it before you start a debug or canonical run.
 
 Use the TUI for routine review loops:
 

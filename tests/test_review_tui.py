@@ -225,3 +225,96 @@ def test_numeric_id_back_and_quit_choice_resolution(tmp_path):
     assert review_tui._resolve_choice("models-preview-all", actions).id == "models-preview-all"
     assert review_tui._resolve_choice("b", actions) == "back"
     assert review_tui._resolve_choice("q", actions) is None
+
+
+def test_context_status_action_registered(tmp_path):
+    actions = review_tui.build_actions(tmp_path, python_executable="/py")
+    action = review_tui.action_by_id("context-status", actions)
+
+    assert action.section == review_tui.SECTION_DATABASE
+    assert "Context:" in review_tui.command_preview(action.command)
+
+
+def test_auto_context_prefers_deployed_when_available(tmp_path):
+    deployed = tmp_path / "deployed"
+    deployed_python = deployed / "venv" / "bin" / "python"
+    deployed_python.parent.mkdir(parents=True)
+    deployed_python.write_text("", encoding="utf-8")
+    deployed.mkdir(exist_ok=True)
+    local = tmp_path / "local"
+    local.mkdir()
+    config = tmp_path / "review_tui.yaml"
+    config.write_text(
+        f"""
+default_context: auto
+contexts:
+  deployed:
+    repo_root: {deployed}
+    python: {deployed_python}
+    runner_user: pypi-runner
+    litellm_log: /tmp/litellm.log
+    deployment_cwd: {local}
+    deployment_script: {local / 'deployment.sh'}
+  local:
+    repo_root: {local}
+    python: {sys.executable}
+    runner_user: null
+    litellm_log: /tmp/litellm.log
+    deployment_cwd: {local}
+    deployment_script: {local / 'deployment.sh'}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    context = review_tui.resolve_review_context("auto", config_path=config)
+
+    assert context.name == "deployed"
+    assert context.repo_root == deployed.resolve()
+    assert context.python_executable == str(deployed_python.resolve())
+    assert context.runner_user == "pypi-runner"
+
+
+def test_deployed_context_commands_use_deployed_repo_and_python(tmp_path):
+    deployed = tmp_path / "deployed"
+    deployed.mkdir()
+    deployed_python = deployed / "venv" / "bin" / "python"
+    context = review_tui.ReviewContext(
+        name="deployed",
+        repo_root=deployed,
+        python_executable=str(deployed_python),
+        runner_user="pypi-runner",
+        litellm_log=tmp_path / "litellm.log",
+        deployment_cwd=tmp_path,
+        deployment_script=tmp_path / "deployment.sh",
+    )
+
+    actions = review_tui.build_actions(context=context)
+    smoke = review_tui.action_by_id("models-preview-all", actions)
+    analyzer = review_tui.action_by_id("analyzer-dry-run-test", actions)
+    db_status = review_tui.action_by_id("db-status", actions)
+
+    for action in (smoke, analyzer, db_status):
+        preview = review_tui.command_preview(action.command)
+        assert action.command[:3] == ("sudo", "-u", "pypi-runner")
+        assert str(deployed) in preview
+        assert str(deployed_python) in preview or action.id == "db-status"
+        assert str(review_tui._REPO_ROOT) not in preview
+
+
+def test_mixed_root_warning_detects_local_script_with_deployed_python(tmp_path):
+    deployed = tmp_path / "deployed"
+    context = review_tui.ReviewContext(
+        name="deployed",
+        repo_root=deployed,
+        python_executable=str(deployed / "venv" / "bin" / "python"),
+        runner_user="pypi-runner",
+    )
+    mixed = (
+        str(deployed / "venv" / "bin" / "python"),
+        str(review_tui._REPO_ROOT / "scripts" / "litellm_smoke.py"),
+    )
+    actions = review_tui.build_actions(context=context)
+    clean = review_tui.action_by_id("models-preview-all", actions).command
+
+    assert review_tui._command_mentions_mixed_roots(mixed, context) is True
+    assert review_tui._command_mentions_mixed_roots(clean, context) is False

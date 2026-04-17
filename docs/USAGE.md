@@ -313,12 +313,18 @@ script and flag:
 python scripts/review_tui.py
 ```
 
+The TUI reads `configs/review_tui.yaml`. By default `--context auto` prefers the
+deployed VM checkout at `/home/pypi-runner/pypi-scada-repo` when that repo and
+venv exist; otherwise it falls back to the local checkout. Use `--context local`
+for local-only review, or `--context deployed` to fail fast if the deployed
+target is missing.
+
 The menu is split into `Run Experiment Suite`, `Database`, `Logs`, and `Tests`.
-`Run Experiment Suite` warns when `src/data/eval_results.db` already contains
-result rows and offers to archive it before debug or canonical runs. The section
-also includes all-model LiteLLM dry-run/smoke checks, tiny test-profile runs,
-full budget/medium/frontier/all-model runs, deployment smoke/full runs, and a
-Gemini ON/OFF toggle that rewrites the generated commands.
+`Run Experiment Suite` warns when the active context's `src/data/eval_results.db`
+already contains result rows and offers to archive it before debug or canonical
+runs. The section also includes all-model LiteLLM dry-run/smoke checks, tiny
+test-profile runs, full budget/medium/frontier/all-model runs, deployment
+smoke/full runs, and a Gemini ON/OFF toggle that rewrites the generated commands.
 
 The TUI prints the exact command before running each action and asks for
 confirmation before actions that mutate the local DB, change deployment state,
