@@ -45,7 +45,7 @@ q      # quit
 For understanding the real analyzer pipeline:
 
 ```bash
-python -m pdb src/analyzer/evaluate.py --profile test_no_gemini --dry-run-resolution --skip-validation
+python -m pdb src/analyzer/evaluate.py --profile test --gemini off --dry-run-resolution --skip-validation
 ```
 
 Good breakpoint locations:
@@ -88,13 +88,13 @@ The most important analyzer questions are:
 Do not debug using the full budget profile first. Use the small test profile:
 
 ```bash
-python src/analyzer/evaluate.py --profile test_no_gemini --run-id-prefix debug --progress never
+python src/analyzer/evaluate.py --profile test --gemini off --run-id-prefix debug --progress never
 ```
 
 To debug it interactively:
 
 ```bash
-python -m pdb src/analyzer/evaluate.py --profile test_no_gemini --run-id-prefix debug --progress never
+python -m pdb src/analyzer/evaluate.py --profile test --gemini off --run-id-prefix debug --progress never
 ```
 
 This keeps the run small enough to reason about without burning unnecessary API budget.
@@ -165,10 +165,39 @@ ls -lt logs src/injector/logs src/analyzer/logs 2>/dev/null
 Run small deployment-style checks first:
 
 ```bash
-MODEL_PROFILE=test_no_gemini UPLOAD_CATEGORIES="controls malicious" bash deployment.sh
+MODEL_PROFILE=test GEMINI=off UPLOAD_CATEGORIES="controls malicious" bash deployment.sh
 ```
 
 Use full deployment only after the resolver, DB, and detector slices make sense.
+
+## Review Runner TUI
+
+For day-to-day manual review, start with the review runner instead of typing every
+script and flag manually:
+
+```bash
+python scripts/review_tui.py
+```
+
+The TUI is a thin wrapper over existing scripts. It is grouped into four
+sections: Run Experiment Suite, Database, Logs, and Tests. The experiment section
+checks whether `src/data/eval_results.db` already contains result rows and offers
+to archive it before you start a debug or canonical run.
+
+Use the TUI for routine review loops:
+
+- Run Experiment Suite: LiteLLM dry-run/smoke checks, analyzer dry-runs, tiny
+  four-package experiments, full budget/medium/frontier/all-model runs,
+  deployment-style runs, and a Gemini ON/OFF toggle.
+- Database: archive the active DB, preview archive paths, inspect recent runs,
+  show error rows, and summarize detector rows.
+- Logs: list, tail, and grep known analyzer/injector/simulator/LiteLLM logs.
+- Tests: run focused detector/DB/model/TUI tests or the full pytest suite.
+
+It prints the exact command before execution and asks for confirmation before
+DB-mutating, long-running, deployment, or API-cost actions. Use the explicit
+commands below when you need debugger control or want to paste commands into
+notes.
 
 ## Recommended Review Session
 
@@ -178,9 +207,9 @@ A practical review session should look like this:
 git status --short
 python scripts/archive_eval_db.py --dry-run
 python scripts/archive_eval_db.py
-python src/analyzer/evaluate.py --profile test_no_gemini --dry-run-resolution --skip-validation
-python -m pdb src/analyzer/evaluate.py --profile test_no_gemini --dry-run-resolution --skip-validation
-python src/analyzer/evaluate.py --profile test_no_gemini --run-id-prefix debug --progress never
+python src/analyzer/evaluate.py --profile test --gemini off --dry-run-resolution --skip-validation
+python -m pdb src/analyzer/evaluate.py --profile test --gemini off --dry-run-resolution --skip-validation
+python src/analyzer/evaluate.py --profile test --gemini off --run-id-prefix debug --progress never
 ```
 
 Then inspect SQLite rows:
@@ -202,7 +231,7 @@ Do not:
 
 - Read `evaluate.py` top-to-bottom as the first step.
 - Debug the full deployment with `pdb`.
-- Run the full budget/frontier profile just to understand control flow.
+- Run the full budget/medium/frontier/all-model profile just to understand control flow.
 - Mix old run IDs with canonical runs when reviewing metrics.
 - Refactor while reviewing unless the review has already identified a specific bug.
 

@@ -240,9 +240,9 @@ execute package code. Optional overrides:
 ```bash
 UPLOAD_CATEGORIES=malicious # benign, controls, malicious, all; space-separated
 INCLUDE_CONTROLS=1         # include high-volume benign controls
-MODEL_PROFILE=budget_no_gemini # explicit reduced profile for temporary Gemini outages
-# MODEL_PROFILE=test       # cheap smoke: 2 malicious + 2 control packages, includes Gemini
-# MODEL_PROFILE=test_no_gemini # same smoke scope, excludes Gemini
-EVAL_PROGRESS=always      # auto, always, never; live analyzer dashboard control
+MODEL_PROFILE=budget    # budget, medium, frontier, all_models, or test
+GEMINI=off              # on, off; disables Gemini key requirement/model calls when off
+# MODEL_PROFILE=test     # cheap smoke: 2 malicious + 2 control packages
+EVAL_PROGRESS=always    # auto, always, never; live analyzer dashboard control
 VERBOSE=1                  # DEBUG logs
 ```

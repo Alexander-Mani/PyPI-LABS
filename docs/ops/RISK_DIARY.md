@@ -366,3 +366,37 @@ thesis than a slightly less capable model that completes its runs.
 Any prior evaluation rows produced by `gemini-3.1-flash-lite-preview` are not
 comparable with `gemini-2.5-flash-lite` results. Canonical runs must be re-run
 from scratch with the new model under `--run-id-prefix canonical-v2`.
+
+---
+
+## Decision 10 — Agentic workflow framing and safety boundary
+
+**Decision:**
+For the agentic condition, PyPI-SCADA implements an automated, safety-bounded
+RAG workflow inspired by modern coding agents such as Codex and Claude Code. The
+model is required to plan its investigation, retrieve package evidence through
+read-only tools, and produce a structured malicious/benign verdict. This design
+preserves the key agentic behaviors relevant to package triage while avoiding
+unsafe capabilities such as dependency installation, package execution,
+arbitrary shell access, or unrestricted network access.
+
+This is not a direct evaluation of Codex or Claude Code as products. Instead, it
+evaluates a reproducible agentic detector architecture: planning, tool-mediated
+evidence retrieval, iterative inspection, and structured verdict generation over
+the same simulator-resolved package evidence used by the other modes.
+
+**Controls applied:**
+- Agentic model calls route through LiteLLM on `127.0.0.1:4000`; the analyzer
+  process remains keyless.
+- Agent tools are read-only over extracted package evidence (`list_files`,
+  `read_file`, `search_files`, and `file_info`).
+- The adapter does not expose shell execution, package installation, package
+  imports, or arbitrary network access.
+- Raw experiment logs record the plan phase, tool calls, model responses, and
+  final detector row for audit.
+
+**Residual risk:**
+The bounded adapter is intentionally less capable than full coding-agent products
+because it cannot run arbitrary commands or execute tests. This reduces ecological
+validity relative to unrestricted coding agents, but it is required for safe,
+reproducible malware evaluation.

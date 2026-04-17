@@ -237,21 +237,26 @@ python src/analyzer/evaluate.py --dry-run-resolution --skip-validation
 # Static-baseline simulator-resolved run; no LiteLLM required.
 python src/analyzer/evaluate.py --sast-only
 
-# Budget profile LLM run; frontier-tier configs should be reserved for final verified execution.
+# Budget profile LLM run; frontier/all-model profiles should be reserved for verified execution.
 python src/analyzer/evaluate.py --profile budget
+
+# Run only the medium, frontier, or exhaustive all-model suite.
+python src/analyzer/evaluate.py --profile medium
+python src/analyzer/evaluate.py --profile frontier
+python src/analyzer/evaluate.py --profile all_models
 
 # Canonical post-custom-Semgrep runs should use a filterable run_id prefix.
 python src/analyzer/evaluate.py --profile budget --run-id-prefix canonical-v2
 
-# If Gemini has a temporary provider outage, use the explicit reduced profile.
-python src/analyzer/evaluate.py --profile budget_no_gemini
+# If Gemini has a temporary provider outage, keep the same profile and toggle it off.
+python src/analyzer/evaluate.py --profile budget --gemini off
 
-# Cheap smoke profiles: latest version of 2 malicious packages + 2 control packages.
+# Cheap smoke profile: latest version of 2 malicious packages + 2 control packages.
 python src/analyzer/evaluate.py --profile test
-python src/analyzer/evaluate.py --profile test_no_gemini
+python src/analyzer/evaluate.py --profile test --gemini off
 
 # Force the live evaluation dashboard in an SSH/tmux session.
-python src/analyzer/evaluate.py --profile budget_no_gemini --progress always
+python src/analyzer/evaluate.py --profile budget --gemini off --progress always
 ```
 
 Useful flags:
@@ -261,14 +266,25 @@ Useful flags:
 | `--include-controls` | off | Include high-volume benign controls; some profiles enable this automatically |
 | `--dry-run-resolution` | off | Print selected simulator artifacts without scanning |
 | `--profile` | `budget` | Model profile from `configs/evaluation_profiles.yaml` |
+| `--gemini` | `on` | Include Gemini/Google model configs: `on` or `off` |
 | `--tier` | off | Legacy tier filter; use profiles for reproducible runs |
 | `--progress` | `auto` | Live evaluation dashboard: `auto`, `always`, or `never` |
+| `--raw-experiment-log` | `on` | Write raw JSONL flight recorder under `logs/experiments/`; use `off` only for throwaway runs |
 | `--run-id-prefix` | off | Prefix generated run IDs, e.g. `canonical-v2-*`, so old methodology rows can be filtered out |
 
-Profiles can also carry resolver settings. The `test` and `test_no_gemini`
-profiles enable controls and cap package selection to 2 malicious packages and
-2 control packages. The evaluator then scans all artifacts for each selected
-package's latest labelled version.
+Profiles can also carry resolver settings. The full `budget`, `medium`,
+`frontier`, and `all_models` profiles scan all selected latest labelled package
+versions and all artifacts for those versions. The `test` profile enables
+controls and caps package selection to 2 malicious packages and 2 control
+packages; use `--gemini off` to run the same smoke scope without Google models.
+Legacy `*_no_gemini` profiles remain for compatibility but the preferred path is
+the `--gemini` toggle.
+
+Agentic mode is a LiteLLM-backed, read-only RAG workflow inspired by
+coding-agent workflows such as Codex and Claude Code. It plans an
+investigation, inspects extracted package evidence through constrained tools,
+and returns a structured verdict. It does not install packages, execute package
+code, run shell commands, or evaluate Codex/Claude Code directly.
 
 LKGR samples remain part of the dataset for provenance and baseline context, but
 canonical scoring uses only the latest labelled stable version per package. Old
@@ -281,8 +297,32 @@ in-flight detector status, remaining artifacts, and accumulated API cost by
 provider. Dry-run resolution always stays plain text, even with
 `--progress always`, so the planned artifact list remains readable. Full
 detector-by-detector details are written to `src/analyzer/logs/analyzer-*.log`.
+Real evaluation runs also write a raw machine-readable flight recorder to
+`logs/experiments/<run_id>.jsonl` plus content blobs in
+`logs/experiments/<run_id>.blobs/`. Use this with `jq` or Python to verify exact
+simulator endpoints, extracted files, detector inputs, raw outputs, and DB writes.
 
 ---
+
+## Review Runner TUI
+
+For manual review sessions, use the wrapper TUI instead of remembering every
+script and flag:
+
+```bash
+python scripts/review_tui.py
+```
+
+The menu is split into `Run Experiment Suite`, `Database`, `Logs`, and `Tests`.
+`Run Experiment Suite` warns when `src/data/eval_results.db` already contains
+result rows and offers to archive it before debug or canonical runs. The section
+also includes all-model LiteLLM dry-run/smoke checks, tiny test-profile runs,
+full budget/medium/frontier/all-model runs, deployment smoke/full runs, and a
+Gemini ON/OFF toggle that rewrites the generated commands.
+
+The TUI prints the exact command before running each action and asks for
+confirmation before actions that mutate the local DB, change deployment state,
+run long tests, or may spend API money.
 
 ## Typical Workflow
 
@@ -317,9 +357,8 @@ All LLM detector calls route through LiteLLM running as `proxy-runner` on
 `http://127.0.0.1:4000`. The analyzer process holds no API keys. The proxy
 configuration in `configs/litellm_config.yaml` maps analyzer model names to
 provider-specific LiteLLM routes. Evaluation model sets are selected through
-`configs/evaluation_profiles.yaml`; `budget_no_gemini` exists for explicitly
-documented temporary Gemini outages, while `test` and `test_no_gemini` are
-bounded smoke profiles for cheap iteration.
+`configs/evaluation_profiles.yaml`; use `--gemini off` for temporary Gemini
+outages. `test` is the bounded smoke profile for cheap iteration.
 
 **Local dev:** Start LiteLLM manually with API keys in your environment:
 

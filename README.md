@@ -54,7 +54,7 @@ The primary detection pipeline is the **entry-point scanning evaluation pipeline
 - `entry_extractor.py` -- `EntryPointExtractor`, `PackageInfo` (unpacks `.tar.gz`/`.whl`/`.zip`, extracts `setup.py`, `__init__.py`, `pyproject.toml` and their imports up to **3 levels deep** via BFS)
 - `heuristic_filter.py` -- `HeuristicFilter` (flags `base64_or_hex`, `network_in_install_hook`, `shell_execution`, `bundled_binary` before LLM evaluation)
 - `detection_controller.py` -- `EvalController` (orchestration layer)
-- `adapters.py` -- static baselines (`bandit`, custom offline-rule `semgrep`, source-only `guarddog`), `LLMAdapter` (Single-shot), `LLMRawAdapter` (raw), `AgenticAdapter` (Multi-turn); all LLM calls route through LiteLLM on `http://127.0.0.1:4000`
+- `adapters.py` -- static baselines (`bandit`, custom offline-rule `semgrep`, source-only `guarddog`), `LLMAdapter` (single-shot), `LLMRawAdapter` (raw), and `AgenticAdapter` (plan-and-tool-use RAG workflow); all LLM calls route through LiteLLM on `http://127.0.0.1:4000`
 - `configs/` -- per-model YAML configs and the `models.json` pricing/tier registry.
 - `TODO.md` -- Phase III & IV task tracking
 - `CONCERNS.md` -- documented design decisions and data interpretation caveats
@@ -135,8 +135,9 @@ python src/analyzer/evaluate.py --profile budget
 python src/analyzer/evaluate.py --profile budget --run-id-prefix canonical-v2
 #    Cheap test profiles — latest version of 2 malicious packages + 2 control packages.
 python src/analyzer/evaluate.py --profile test
-python src/analyzer/evaluate.py --profile test_no_gemini
+python src/analyzer/evaluate.py --profile test --gemini off
 #    SSH/tmux dashboard; detailed detector logs are still per-run.
+#    Real runs also write raw JSONL traces under logs/experiments/<run_id>.jsonl.
 python src/analyzer/evaluate.py --profile budget --progress always
 
 # 6. Run the test suite
