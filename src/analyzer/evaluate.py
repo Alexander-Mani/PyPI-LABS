@@ -12,6 +12,7 @@ labels are stored at insert time and never passed to extractors or adapters.
 Usage:
     python src/analyzer/evaluate.py [--config PATH] [--profile budget]
                                     [--tier budget|medium|frontier]
+                                    [--gemini on|off]
                                     [--skip-validation] [--sast-only]
                                     [--dry-run-resolution]
                                     [--progress auto|always|never]
@@ -45,6 +46,7 @@ from entry_extractor import EntryPointExtractor
 from heuristic_filter import HeuristicFilter
 from detection_controller import EvalController
 from progress_ui import AnalyzerProgress, should_use_progress
+from raw_experiment_log import RawExperimentLog
 from simulator_resolver import (
     IndexArtifact,
     ResolvedSample,
@@ -184,6 +186,45 @@ def _load_evaluation_profile(profile_name: str) -> EvaluationProfile:
     )
 
 
+def _load_model_config(stem: str) -> dict:
+    import yaml as _yaml
+
+    cfg_path = _ANALYZER_DIR / "configs" / f"{stem}.yaml"
+    if not cfg_path.exists():
+        raise SystemExit(f"HALT: analyzer config does not exist: {stem}")
+    with cfg_path.open(encoding="utf-8") as f:
+        cfg = _yaml.safe_load(f) or {}
+    return cfg
+
+
+def _is_gemini_config(stem: str) -> bool:
+    cfg = _load_model_config(stem)
+    model_name = str(cfg.get("model_name", "")).lower()
+    return stem.lower().startswith("gemini") or model_name.startswith(("gemini-", "gemini/"))
+
+
+def _config_stems_for_tier(tier: str) -> set[str]:
+    stems: set[str] = set()
+    for cfg_path in sorted((_ANALYZER_DIR / "configs").glob("*.yaml")):
+        if cfg_path.stem == "prompts":
+            continue
+        cfg = _load_model_config(cfg_path.stem)
+        if str(cfg.get("tier", "frontier")) == tier:
+            stems.add(cfg_path.stem)
+    if not stems:
+        raise SystemExit(f"HALT: no analyzer configs found for tier '{tier}'.")
+    return stems
+
+
+def _apply_gemini_toggle(stems: set[str], *, gemini_enabled: bool) -> set[str]:
+    if gemini_enabled:
+        return set(stems)
+    filtered = {stem for stem in stems if not _is_gemini_config(stem)}
+    if not filtered:
+        raise SystemExit("HALT: --gemini off removed every selected analyzer config.")
+    return filtered
+
+
 def _collapse_error(details: dict, limit: int = 300) -> str:
     message = str(details.get("error") or details)
     collapsed = " ".join(message.split())
@@ -282,15 +323,24 @@ class EvaluationRunner:
         package_limits: dict[str, int] | None = None,
         progress_enabled: bool = False,
         run_id_prefix: str | None = None,
+        gemini_enabled: bool = True,
+        raw_experiment_log: bool = True,
+        cli_args: dict | None = None,
     ):
         self._cfg  = config
         self._tier = tier
         self._profile = profile
-        self._run_label = f"profile:{profile}" if profile else f"tier:{tier}"
+        self._gemini_enabled = gemini_enabled
+        base_run_label = f"profile:{profile}" if profile else f"tier:{tier}"
+        self._run_label = base_run_label if gemini_enabled else f"{base_run_label}:gemini-off"
         self._include_controls = include_controls
         self._package_limits = package_limits or {}
         self._progress_enabled = progress_enabled
         self._run_id_prefix = run_id_prefix
+        self._raw_experiment_log = raw_experiment_log
+        self._raw_log = None
+        self._cli_args = cli_args or {}
+        self._model_config_stems = sorted(model_config_stems) if model_config_stems is not None else None
         self._db   = DBManager()
         self._extractor = EntryPointExtractor()
         self._filter    = HeuristicFilter()
@@ -564,6 +614,24 @@ class EvaluationRunner:
                 version_artifacts,
                 policy="all",
             )
+            if self._raw_log is not None:
+                self._raw_log.emit(
+                    "resolver.artifacts.selected",
+                    package=project,
+                    version=version,
+                    payload={
+                        "labelled_versions": sorted(labelled_versions),
+                        "simulator_versions": sorted(index_versions),
+                        "selectable_versions": sorted(selectable_versions),
+                        "selected_version": version,
+                        "artifact_policy": "all",
+                        "all_version_artifacts": [a.__dict__ for a in version_artifacts],
+                        "selected_artifacts": [a.__dict__ for a in selected_artifacts],
+                        "ground_truth": label.is_malicious,
+                        "sample_role": label.sample_role,
+                        "attack_vector": label.attack_vector,
+                    },
+                )
             if not selected_artifacts:
                 log.warning(f"No artifacts selected for {project}=={version}")
                 continue
@@ -583,6 +651,7 @@ class EvaluationRunner:
                 "package_limits": self._package_limits,
                 "pre_release_policy": "ignore_unless_no_stable",
                 "metric_unit": "package_version",
+                "gemini": "on" if self._gemini_enabled else "off",
             }, sort_keys=True)
             for artifact in package.artifacts:
                 resolved.append(ResolvedSample(
@@ -698,7 +767,7 @@ class EvaluationRunner:
     ) -> None:
         run_id = _make_run_id(getattr(self, "_run_id_prefix", None))
         log.info(
-            f"EvaluationRunner start — run_id={run_id}  "
+            f"EvaluationRunner start - run_id={run_id}  "
             f"profile={self._profile or 'tier-filter'}  tier={self._tier}  "
             f"sast_only={sast_only}"
         )
@@ -707,84 +776,178 @@ class EvaluationRunner:
         if not skip_validation and not sast_only and not dry_run_resolution:
             self._validate_financial_airgap()
 
-        samples = self._resolve_simulator_samples(download=not dry_run_resolution)
-        self._log_sample_plan(samples)
-
-        if not any(sample.ground_truth for sample in samples) and not sast_only:
-            raise SystemExit(
-                "HALT: no labelled malicious versions were resolved from the simulator. "
-                "Cannot compute Recall or F1 without malware samples. Stage and upload "
-                "the dataset first. Use --sast-only for a false-positive benchmark."
+        raw_log = None
+        package_failures = 0
+        if self._raw_experiment_log and not dry_run_resolution:
+            raw_log = RawExperimentLog(run_id, _REPO_ROOT / "logs" / "experiments")
+            self._raw_log = raw_log
+            self._resolver.raw_log = raw_log
+            log.info(f"Raw experiment log: {raw_log.path}")
+            raw_log.emit(
+                "run.start",
+                payload={
+                    "cli_args": self._cli_args,
+                    "profile": self._profile,
+                    "tier": self._tier,
+                    "run_label": self._run_label if not sast_only else "sast-only",
+                    "sast_only": sast_only,
+                    "gemini": "on" if self._gemini_enabled else "off",
+                    "model_config_stems": self._model_config_stems,
+                    "simulator_base_url": self._simulator_url,
+                    "samples_root": self._samples_root,
+                    "db_path": DBManager.DB_PATH,
+                    "human_log_path": get_active_log_path(),
+                    "package_limits": self._package_limits,
+                    "include_controls": self._include_controls,
+                },
             )
 
-        if dry_run_resolution:
-            for sample in samples:
-                label = "malicious" if sample.ground_truth else sample.sample_role
-                log.info(
-                    f"  would fetch {sample.package_name}=={sample.version} "
-                    f"{sample.artifact_filename} [{label}]"
-                )
-            return
+        try:
+            samples = self._resolve_simulator_samples(download=not dry_run_resolution)
+            self._log_sample_plan(samples)
 
-        with AnalyzerProgress(
-            enabled=self._progress_enabled,
-            total_samples=len(samples),
-            run_id=run_id,
-            run_label=self._run_label if not sast_only else "sast-only",
-        ) as progress:
-            run_log = log.bind(file_only=True) if progress.active else log
-            for index, sample in enumerate(samples, start=1):
-                progress.start_package(index, sample)
-                run_log.info(
-                    f"  Processing {sample.package_name} {sample.version} "
-                    f"({sample.artifact_filename})"
+            if not any(sample.ground_truth for sample in samples) and not sast_only:
+                raise SystemExit(
+                    "HALT: no labelled malicious versions were resolved from the simulator. "
+                    "Cannot compute Recall or F1 without malware samples. Stage and upload "
+                    "the dataset first. Use --sast-only for a false-positive benchmark."
                 )
-                try:
-                    pkg = self._extractor.extract(sample.archive_path)
-                    # Override name/version with simulator-resolved values.
-                    pkg.name    = sample.package_name
-                    pkg.version = sample.version
-                    progress.record_extraction(
-                        decoded_files=len(pkg.files),
-                        entry_points=len(pkg.files_raw),
-                        bad_password_files=pkg.bad_password_files,
+
+            if dry_run_resolution:
+                for sample in samples:
+                    label = "malicious" if sample.ground_truth else sample.sample_role
+                    log.info(
+                        f"  would fetch {sample.package_name}=={sample.version} "
+                        f"{sample.artifact_filename} [{label}]"
                     )
+                return
+
+            with AnalyzerProgress(
+                enabled=self._progress_enabled,
+                total_samples=len(samples),
+                run_id=run_id,
+                run_label=self._run_label if not sast_only else "sast-only",
+            ) as progress:
+                run_log = log.bind(file_only=True) if progress.active else log
+                for index, sample in enumerate(samples, start=1):
+                    progress.start_package(index, sample)
+                    sample_ctx = {
+                        "package": sample.package_name,
+                        "version": sample.version,
+                        "artifact_filename": sample.artifact_filename,
+                    }
+                    if raw_log is not None:
+                        raw_log.emit(
+                            "package.start",
+                            **sample_ctx,
+                            payload={
+                                "index": index,
+                                "total": len(samples),
+                                "artifact_url": sample.artifact_url,
+                                "source_index_url": sample.source_index_url,
+                                "ground_truth": sample.ground_truth,
+                                "sample_role": sample.sample_role,
+                                "attack_vector": sample.attack_vector,
+                                "resolver_policy": sample.resolver_policy,
+                                "archive_path": sample.archive_path,
+                            },
+                        )
                     run_log.info(
-                        f"    Decoded {len(pkg.files)} file(s) "
-                        f"({len(pkg.files_raw)} entry point(s))"
-                        + (f"  [bad-password: {pkg.bad_password_files}]"
-                           if pkg.bad_password_files else "")
+                        f"  Processing {sample.package_name} {sample.version} "
+                        f"({sample.artifact_filename})"
                     )
-                    pkg = self._filter.scan(pkg)
-                    progress.record_heuristics(pkg.heuristic_flags)
-                    if pkg.heuristic_flags:
-                        run_log.info(f"    Heuristic flags: {', '.join(pkg.heuristic_flags)}")
-                    results = self._controller.run(
-                        run_id=run_id, pkg=pkg,
-                        ground_truth=sample.ground_truth, sast_only=sast_only,
-                        artifact_filename=sample.artifact_filename,
-                        artifact_url=sample.artifact_url,
-                        source_index_url=sample.source_index_url,
-                        sample_role=sample.sample_role,
-                        attack_vector=sample.attack_vector,
-                        resolver_policy=sample.resolver_policy,
-                        on_tasks_prepared=(
-                            progress.set_detector_tasks if progress.active else None
-                        ),
-                        on_result=(
-                            progress.record_result if progress.active else None
-                        ),
-                        quiet_console=progress.active,
-                    )
-                    n_valid   = sum(1 for r in results if r.experiment_mode != "error")
-                    n_flagged = sum(1 for r in results if r.verdict and r.experiment_mode != "error")
-                    progress.complete_package(valid_results=n_valid, flagged_results=n_flagged)
-                    run_log.info(f"    Verdict: {n_flagged}/{n_valid} detector(s) flagged malicious")
-                except Exception as exc:
-                    progress.fail_package(sample.artifact_filename, exc)
-                    run_log.error(f"  Failed {sample.artifact_filename}: {exc}")
+                    try:
+                        pkg = self._extractor.extract(
+                            sample.archive_path,
+                            raw_log=raw_log,
+                            trace_context=sample_ctx,
+                        )
+                        # Override name/version with simulator-resolved values.
+                        pkg.name    = sample.package_name
+                        pkg.version = sample.version
+                        progress.record_extraction(
+                            decoded_files=len(pkg.files),
+                            entry_points=len(pkg.files_raw),
+                            bad_password_files=pkg.bad_password_files,
+                        )
+                        run_log.info(
+                            f"    Decoded {len(pkg.files)} file(s) "
+                            f"({len(pkg.files_raw)} entry point(s))"
+                            + (f"  [bad-password: {pkg.bad_password_files}]"
+                               if pkg.bad_password_files else "")
+                        )
+                        pkg = self._filter.scan(pkg)
+                        progress.record_heuristics(pkg.heuristic_flags)
+                        if raw_log is not None:
+                            raw_log.emit(
+                                "heuristic.scan",
+                                **sample_ctx,
+                                payload={
+                                    "files": sorted(pkg.files),
+                                    "heuristic_flags": list(pkg.heuristic_flags),
+                                },
+                            )
+                        if pkg.heuristic_flags:
+                            run_log.info(f"    Heuristic flags: {', '.join(pkg.heuristic_flags)}")
+                        results = self._controller.run(
+                            run_id=run_id, pkg=pkg,
+                            ground_truth=sample.ground_truth, sast_only=sast_only,
+                            artifact_filename=sample.artifact_filename,
+                            artifact_url=sample.artifact_url,
+                            source_index_url=sample.source_index_url,
+                            sample_role=sample.sample_role,
+                            attack_vector=sample.attack_vector,
+                            resolver_policy=sample.resolver_policy,
+                            on_tasks_prepared=(
+                                progress.set_detector_tasks if progress.active else None
+                            ),
+                            on_result=(
+                                progress.record_result if progress.active else None
+                            ),
+                            quiet_console=progress.active,
+                            raw_log=raw_log,
+                        )
+                        n_valid   = sum(1 for r in results if r.experiment_mode != "error")
+                        n_flagged = sum(1 for r in results if r.verdict and r.experiment_mode != "error")
+                        progress.complete_package(valid_results=n_valid, flagged_results=n_flagged)
+                        if raw_log is not None:
+                            raw_log.emit(
+                                "package.done",
+                                **sample_ctx,
+                                payload={
+                                    "valid_results": n_valid,
+                                    "flagged_results": n_flagged,
+                                    "error_results": sum(1 for r in results if r.experiment_mode == "error"),
+                                    "result_count": len(results),
+                                },
+                            )
+                        run_log.info(f"    Verdict: {n_flagged}/{n_valid} detector(s) flagged malicious")
+                    except Exception as exc:
+                        package_failures += 1
+                        progress.fail_package(sample.artifact_filename, exc)
+                        if raw_log is not None:
+                            raw_log.emit("package.error", **sample_ctx, payload={"error": str(exc)})
+                        run_log.error(f"  Failed {sample.artifact_filename}: {exc}")
 
-        self._print_metrics(run_id)
+            self._print_metrics(run_id)
+        except Exception as exc:
+            if raw_log is not None:
+                raw_log.emit("run.error", payload={"error": str(exc), "error_type": type(exc).__name__})
+                raw_log.close("failed")
+            raise
+        else:
+            if raw_log is not None:
+                try:
+                    row_count = len(self._db.get_eval_results_for_run(run_id))
+                except Exception:  # pragma: no cover - best-effort trace summary
+                    row_count = None
+                raw_log.close(
+                    "completed_with_errors" if package_failures else "completed",
+                    payload={"package_failures": package_failures, "db_result_rows": row_count},
+                )
+        finally:
+            self._raw_log = None
+            self._resolver.raw_log = None
 
     # ------------------------------------------------------------------
     # Financial air-gap validation
@@ -863,8 +1026,8 @@ class EvaluationRunner:
                 "HALT: financial validation failed for selected model profile "
                 f"{self._run_label}: "
                 + " | ".join(details)
-                + ". If this is a temporary provider outage, rerun with an explicit "
-                "reduced profile such as --profile budget_no_gemini."
+                + ". If this is a temporary provider outage, rerun with "
+                "--gemini off or a reduced profile such as --profile budget_no_gemini."
             )
         if not tokenized_llm_results:
             raise SystemExit(
@@ -1014,6 +1177,12 @@ if __name__ == "__main__":
         help="Legacy model-tier filter; ignored when --profile is set unless matching profile tier",
     )
     parser.add_argument(
+        "--gemini",
+        choices=["on", "off"],
+        default="on",
+        help="Include Gemini/Google model configs in selected profile or tier (default: on)",
+    )
+    parser.add_argument(
         "--skip-validation", action="store_true",
         help="Skip the financial air-gap validation run",
     )
@@ -1046,6 +1215,12 @@ if __name__ == "__main__":
         default=None,
         help="Optional prefix for generated run_id values, e.g. canonical-v2",
     )
+    parser.add_argument(
+        "--raw-experiment-log",
+        choices=["on", "off"],
+        default="on",
+        help="Write raw JSONL experiment flight recorder for real runs (default: on)",
+    )
     args = parser.parse_args()
     with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
@@ -1074,6 +1249,12 @@ if __name__ == "__main__":
         profile_include_controls = profile.include_controls
         profile_package_limits = profile.package_limits
 
+    gemini_enabled = args.gemini == "on"
+    if not gemini_enabled:
+        if model_config_stems is None:
+            model_config_stems = _config_stems_for_tier(tier)
+        model_config_stems = _apply_gemini_toggle(model_config_stems, gemini_enabled=False)
+
     if args.verbose:
         # Preserve configured sinks; just raise their level before first setup.
         cfg.setdefault("logging", {})["level"] = "DEBUG"
@@ -1094,6 +1275,9 @@ if __name__ == "__main__":
         package_limits=profile_package_limits,
         progress_enabled=progress_enabled,
         run_id_prefix=args.run_id_prefix,
+        gemini_enabled=gemini_enabled,
+        raw_experiment_log=args.raw_experiment_log == "on",
+        cli_args=vars(args),
     ).run(
         skip_validation=args.skip_validation,
         sast_only=args.sast_only,

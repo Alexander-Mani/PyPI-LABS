@@ -12,6 +12,7 @@ adapters in detection_controller.py.
 from __future__ import annotations
 
 import ast
+import hashlib
 import re
 import tarfile
 import zipfile
@@ -49,7 +50,7 @@ class PackageInfo:
 
 class EntryPointExtractor:
 
-    def extract(self, archive_path: Path) -> PackageInfo:
+    def extract(self, archive_path: Path, raw_log=None, trace_context: dict | None = None) -> PackageInfo:
         """
         Unpack *archive_path* and return a PackageInfo containing only the
         entry-point files and their 3-level-deep within-package imports.
@@ -58,21 +59,132 @@ class EntryPointExtractor:
         """
         name, version = self._parse_name_version(archive_path)
         self._bad_password_files: list[str] = []
+        self._trace_members: list[dict] = []
+        self._trace_import_edges: list[dict] = []
+        ctx = trace_context or {}
+        if raw_log is not None:
+            try:
+                archive_bytes = archive_path.read_bytes()
+                archive_sha = hashlib.sha256(archive_bytes).hexdigest()
+                archive_size = len(archive_bytes)
+            except Exception as exc:  # pragma: no cover - defensive trace path
+                archive_sha = None
+                archive_size = None
+                raw_log.emit(
+                    "extract.archive.hash_error",
+                    package=ctx.get("package", name),
+                    version=ctx.get("version", version),
+                    artifact_filename=ctx.get("artifact_filename", archive_path.name),
+                    payload={"path": archive_path, "error": str(exc)},
+                )
+            raw_log.emit(
+                "extract.archive.open",
+                package=ctx.get("package", name),
+                version=ctx.get("version", version),
+                artifact_filename=ctx.get("artifact_filename", archive_path.name),
+                payload={
+                    "path": archive_path,
+                    "archive_type": self._archive_type(archive_path),
+                    "bytes": archive_size,
+                    "sha256": archive_sha,
+                },
+            )
         try:
             raw       = self._read_archive(archive_path)
+            if raw_log is not None:
+                raw_log.emit(
+                    "extract.archive.members",
+                    package=ctx.get("package", name),
+                    version=ctx.get("version", version),
+                    artifact_filename=ctx.get("artifact_filename", archive_path.name),
+                    payload={"members": list(self._trace_members)},
+                )
+                raw_log.emit(
+                    "extract.archive.candidates",
+                    package=ctx.get("package", name),
+                    version=ctx.get("version", version),
+                    artifact_filename=ctx.get("artifact_filename", archive_path.name),
+                    payload={
+                        "candidate_count": len(raw),
+                        "candidates": [
+                            {
+                                "path": rel,
+                                "bytes": len(content),
+                                "raw_ref": raw_log.blob_bytes(
+                                    "archive_member_candidate", content, suffix=".raw"
+                                ),
+                            }
+                            for rel, content in sorted(raw.items())
+                        ],
+                    },
+                )
             files     = self._filter_entry_points(raw)
             files_raw = self._raw_entry_points(raw)
+            if raw_log is not None:
+                merged_paths = sorted(set(files) | set(files_raw))
+                for rel in merged_paths:
+                    text = files.get(rel, files_raw.get(rel, ""))
+                    raw_log.emit(
+                        "extract.file.decoded",
+                        package=ctx.get("package", name),
+                        version=ctx.get("version", version),
+                        artifact_filename=ctx.get("artifact_filename", archive_path.name),
+                        payload={
+                            "path": rel,
+                            "in_files": rel in files,
+                            "in_files_raw": rel in files_raw,
+                            "text_ref": raw_log.blob_text(
+                                "decoded_extracted_file", text, suffix=".txt"
+                            ),
+                        },
+                    )
+                raw_log.emit(
+                    "extract.entrypoint.selection",
+                    package=ctx.get("package", name),
+                    version=ctx.get("version", version),
+                    artifact_filename=ctx.get("artifact_filename", archive_path.name),
+                    payload={
+                        "files_raw": sorted(files_raw),
+                        "files": sorted(files),
+                        "import_edges": list(self._trace_import_edges),
+                        "bad_password_files": list(self._bad_password_files),
+                    },
+                )
             return PackageInfo(
                 name=name, version=version, files=files, files_raw=files_raw,
                 bad_password_files=list(self._bad_password_files),
             )
         except Exception as exc:
+            if raw_log is not None:
+                raw_log.emit(
+                    "extract.error",
+                    package=ctx.get("package", name),
+                    version=ctx.get("version", version),
+                    artifact_filename=ctx.get("artifact_filename", archive_path.name),
+                    payload={"path": archive_path, "error": str(exc)},
+                )
             log.error(f"EntryPointExtractor: failed on {archive_path.name}: {exc}")
             return PackageInfo(name=name, version=version, files={}, files_raw={})
 
     # ------------------------------------------------------------------
     # Name / version inference
     # ------------------------------------------------------------------
+
+    def _archive_type(self, path: Path) -> str:
+        name = path.name.lower()
+        if name.endswith((".tar.gz", ".tar.bz2", ".tar.xz")):
+            return "sdist-tar"
+        if name.endswith(".whl"):
+            return "wheel"
+        if name.endswith(".zip"):
+            return "zip"
+        return "unknown"
+
+    def _record_member(self, **entry) -> dict:
+        if not hasattr(self, "_trace_members"):
+            self._trace_members = []
+        self._trace_members.append(entry)
+        return entry
 
     def _parse_name_version(self, path: Path) -> tuple[str, str]:
         stem = path.name
@@ -107,33 +219,57 @@ class EntryPointExtractor:
         raw: dict[str, bytes] = {}
         with tarfile.open(path, "r:*") as tf:
             for member in tf.getmembers():
-                if not member.isfile():
-                    continue
                 _fname = Path(member.name).name
-                if not (member.name.endswith(".py") or _fname == "pyproject.toml"):
-                    continue
-                # Strip top-level directory prefix (e.g. "pkg-1.0/setup.py" → "setup.py")
+                selected = member.isfile() and (
+                    member.name.endswith(".py") or _fname == "pyproject.toml"
+                )
                 parts = Path(member.name).parts
                 rel = str(Path(*parts[1:])) if len(parts) > 1 else member.name
+                entry = self._record_member(
+                    name=member.name,
+                    rel=rel,
+                    is_file=member.isfile(),
+                    size=member.size,
+                    selected=selected,
+                    reason="candidate" if selected else "not-python-or-pyproject",
+                )
+                if not selected:
+                    continue
                 try:
                     f = tf.extractfile(member)
                     if f is not None:
                         raw[rel] = f.read()
                 except Exception as exc:
+                    entry["read_error"] = str(exc)
                     log.warning(f"  skip {member.name}: {exc}")
         return raw
 
     def _extract_wheel(self, path: Path) -> dict[str, bytes]:
         raw: dict[str, bytes] = {}
         with zipfile.ZipFile(str(path), "r") as zf:
-            for name in zf.namelist():
-                if not (name.endswith(".py") or Path(name).name == "pyproject.toml"):
-                    continue
-                if ".dist-info/" in name or ".data/" in name:
+            for info in zf.infolist():
+                name = info.filename
+                selected = (
+                    not info.is_dir()
+                    and (name.endswith(".py") or Path(name).name == "pyproject.toml")
+                    and ".dist-info/" not in name
+                    and ".data/" not in name
+                )
+                reason = "candidate" if selected else "wheel-metadata-or-not-source"
+                entry = self._record_member(
+                    name=name,
+                    rel=name,
+                    is_file=not info.is_dir(),
+                    size=info.file_size,
+                    selected=selected,
+                    reason=reason,
+                )
+                if not selected:
                     continue
                 try:
                     raw[name] = zf.read(name)
                 except Exception as exc:
+                    entry["read_error"] = str(exc)
                     log.warning(f"  skip {name}: {exc}")
         return raw
 
@@ -150,25 +286,43 @@ class EntryPointExtractor:
 
         with zf:
             zf.setpassword(b"infected")
-            parts_list = zf.namelist()
+            infos = zf.infolist()
+            parts_list = [info.filename for info in infos]
             # Strip top-level dir if all members share one
             top_dirs = {p.split("/")[0] for p in parts_list if "/" in p}
             strip_prefix = top_dirs.pop() + "/" if len(top_dirs) == 1 else ""
 
-            for name in parts_list:
-                if not (name.endswith(".py") or Path(name.rstrip("/")).name == "pyproject.toml"):
-                    continue
+            for info in infos:
+                name = info.filename
                 rel = name[len(strip_prefix):] if strip_prefix and name.startswith(strip_prefix) else name
+                selected = (
+                    not info.is_dir()
+                    and (name.endswith(".py") or Path(name.rstrip("/")).name == "pyproject.toml")
+                )
+                entry = self._record_member(
+                    name=name,
+                    rel=rel,
+                    is_file=not info.is_dir(),
+                    size=info.file_size,
+                    selected=selected,
+                    reason="candidate" if selected else "not-python-or-pyproject",
+                )
+                if not selected:
+                    continue
                 try:
                     raw[rel] = zf.read(name)
                 except RuntimeError as exc:
                     err_lower = str(exc).lower()
+                    entry["read_error"] = str(exc)
                     if "bad password" in err_lower or "password required" in err_lower:
+                        entry["reason"] = "bad-password"
                         log.warning(f"  skip {name} (bad password): {exc}")
                         self._bad_password_files.append(name)
                     else:
+                        entry["reason"] = "zip-runtime-error"
                         log.warning(f"  skip {name} (encryption/runtime error): {exc}")
                 except Exception as exc:
+                    entry["read_error"] = str(exc)
                     log.warning(f"  skip {name}: {exc}")
         return raw
 
@@ -217,6 +371,12 @@ class EntryPointExtractor:
                     if new_path not in included:
                         included.add(new_path)
                         next_frontier.add(new_path)
+                        if hasattr(self, "_trace_import_edges"):
+                            self._trace_import_edges.append({
+                                "from": path,
+                                "to": new_path,
+                                "depth": _depth + 1,
+                            })
                         log.debug(f"  BFS depth {_depth+1}: {path} → {new_path}")
             frontier = next_frontier
 

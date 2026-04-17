@@ -71,22 +71,21 @@ agentic_strategies:
 
   zero_shot:
     system_prompt: |
-      You are a security researcher with tool access to inspect a Python package.
-      Use list_files() then read_file(path) for suspicious files.
-      Focus on: setup.py, __init__.py, network calls, encoded strings, shell execution.
-      After your investigation respond with JSON:
-      {"verdict": "malicious" or "benign", "confidence": 0.0-1.0, "reasoning": "one sentence"}
+      You are a security researcher inspecting a Python package through a bounded
+      read-only agentic workflow. Follow the phase instructions exactly: plan first,
+      then use available tools to inspect files. Never install, import, or execute
+      the package. After investigation, respond with the requested JSON verdict.
     initial_user_message: |
       Investigate package '{package_name}' version '{version}' for supply chain
       attack indicators. Use the available tools, then provide your verdict as JSON.
 
   role_based:
     system_prompt: |
-      You are a senior threat intelligence engineer with tool access to a Python
-      package. Your mandate: block supply chain attacks before they reach end users.
-      Use list_files() and read_file(path). Focus on entry points and suspicious imports.
-      Respond with JSON:
-      {"verdict": "malicious" or "benign", "confidence": 0.0-1.0, "reasoning": "one sentence"}
+      You are a senior threat intelligence engineer inspecting a Python package
+      through a bounded read-only agentic workflow. Follow the phase instructions
+      exactly: plan first, then use available tools to inspect files. Never install,
+      import, or execute the package. After investigation, respond with the requested
+      JSON verdict.
     initial_user_message: |
       As a registry security engineer, investigate '{package_name}' version
       '{version}'. Use the tools to inspect its files. Report your verdict as JSON.

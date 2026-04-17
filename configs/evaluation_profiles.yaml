@@ -18,6 +18,43 @@ profiles:
       - together_budget
       - claude_haiku_agentic
 
+  medium:
+    tier: medium
+    configs:
+      - claude_sonnet
+      - gpt_mini
+      - gemini_flash
+      - together_medium
+      - claude_sonnet_agentic
+
+  frontier:
+    tier: frontier
+    configs:
+      - claude_opus
+      - gpt
+      - gemini
+      - together_frontier
+      - claude_agentic
+
+  all_models:
+    tier: frontier
+    configs:
+      - claude_haiku
+      - gpt_nano
+      - gemini_flash_lite
+      - together_budget
+      - claude_haiku_agentic
+      - claude_sonnet
+      - gpt_mini
+      - gemini_flash
+      - together_medium
+      - claude_sonnet_agentic
+      - claude_opus
+      - gpt
+      - gemini
+      - together_frontier
+      - claude_agentic
+
   test:
     tier: budget
     configs:

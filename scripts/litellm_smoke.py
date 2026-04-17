@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke-test LiteLLM proxy routing for a PyPI-SCADA model profile."""
+"""Smoke-test LiteLLM proxy routing for PyPI-SCADA model profiles."""
 
 from __future__ import annotations
 
@@ -19,31 +19,69 @@ _ANALYZER_CONFIGS = _REPO_ROOT / "src" / "analyzer" / "configs"
 TRANSIENT_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
+def _load_profile_config_stems(profile_name: str) -> list[str]:
+    lines = _PROFILE_FILE.read_text(encoding="utf-8").splitlines()
+    known: list[str] = []
+    in_profile = False
+    in_configs = False
+    stems: list[str] = []
+
+    for line in lines:
+        if line.startswith("  ") and not line.startswith("    ") and line.rstrip().endswith(":"):
+            current = line.strip()[:-1]
+            known.append(current)
+            if in_profile:
+                break
+            in_profile = current == profile_name
+            in_configs = False
+            continue
+        if not in_profile:
+            continue
+        if line.strip() == "configs:":
+            in_configs = True
+            continue
+        if in_configs and line.startswith("      - "):
+            stems.append(line.split("-", 1)[1].strip())
+            continue
+        if in_configs and line.startswith("    ") and line.strip() and not line.startswith("      "):
+            in_configs = False
+
+    if not stems:
+        known_text = ", ".join(sorted(set(known))) or "none"
+        raise SystemExit(f"unknown LiteLLM smoke-test profile '{profile_name}'. Known: {known_text}")
+    return stems
+
+
+def _read_model_name(cfg_path: Path) -> str:
+    for raw_line in cfg_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line.startswith("model_name:"):
+            continue
+        return line.split(":", 1)[1].strip().strip("'\"")
+    raise SystemExit(f"config '{cfg_path}' has no model_name")
+
+
 def _load_profile_models(profile_name: str) -> list[str]:
-    import yaml
-
-    with open(_PROFILE_FILE, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-
-    profiles = data.get("profiles", {})
-    profile = profiles.get(profile_name)
-    if profile is None:
-        known = ", ".join(sorted(profiles)) or "none"
-        raise SystemExit(f"unknown LiteLLM smoke-test profile '{profile_name}'. Known: {known}")
-
     models: list[str] = []
-    for stem in profile.get("configs", []):
+    for stem in _load_profile_config_stems(profile_name):
         cfg_path = _ANALYZER_CONFIGS / f"{stem}.yaml"
         if not cfg_path.exists():
             raise SystemExit(f"profile '{profile_name}' references missing config: {stem}")
-        with open(cfg_path, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-        model_name = cfg.get("model_name")
-        if not model_name:
-            raise SystemExit(f"config '{cfg_path}' has no model_name")
+        model_name = _read_model_name(cfg_path)
         if model_name not in models:
-            models.append(str(model_name))
+            models.append(model_name)
     return models
+
+
+def _is_gemini_model(model: str) -> bool:
+    lowered = model.lower()
+    return lowered.startswith(("gemini-", "gemini/"))
+
+
+def _filter_gemini_models(models: list[str], *, gemini_enabled: bool) -> list[str]:
+    if gemini_enabled:
+        return list(models)
+    return [model for model in models if not _is_gemini_model(model)]
 
 
 def _load_all_litellm_models() -> list[str]:
@@ -130,6 +168,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base-url", default="http://127.0.0.1:4000")
     parser.add_argument("--profile", default="budget")
     parser.add_argument(
+        "--gemini",
+        choices=["on", "off"],
+        default="on",
+        help="Include Gemini/Google models in profile or all-model smoke tests (default: on)",
+    )
+    parser.add_argument(
         "--all-models",
         action="store_true",
         help="Smoke-test every model listed in configs/litellm_config.yaml",
@@ -157,6 +201,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         models = _load_profile_models(args.profile)
         source = f"profile:{args.profile}"
+
+    models = _filter_gemini_models(models, gemini_enabled=args.gemini == "on")
+    if not models:
+        raise SystemExit("HALT: Gemini filter removed every selected LiteLLM model")
+    if args.gemini == "off":
+        source = f"{source} (gemini off)"
 
     if args.dry_run:
         print(f"LiteLLM smoke dry-run: {len(models)} model(s) from {source}")

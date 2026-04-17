@@ -5,13 +5,14 @@ DetectorAdapter (ABC)
   StaticAdapter     — generic SAST tools (bandit, semgrep); ignores prompt params
   GuardDogAdapter   — PyPI-malware-specific static rules; source-only mode
   LLMAdapter        — Single-shot LLM call via YAML-configured model
-  AgenticAdapter    — Multi-turn Anthropic tool_use loop
+  AgenticAdapter    — Plan-and-tool-use LiteLLM agent loop
 
 EvalController imports from this module.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json as _json
 import os as _os
 import subprocess
@@ -87,6 +88,9 @@ class DetectorAdapter(ABC):
         prompt_strategy: str = "zero_shot",
         system_prompt: str | None = None,
         template_override: str | None = None,
+        *,
+        raw_log=None,
+        trace_context: dict | None = None,
     ) -> EvalDetectionResult:
         ...
 
@@ -125,6 +129,32 @@ def _static_error_result(
     )
 
 
+def _context(trace_context: dict | None, pkg: PackageInfo | None = None) -> dict:
+    ctx = dict(trace_context or {})
+    if pkg is not None:
+        ctx.setdefault("package", pkg.name)
+        ctx.setdefault("version", pkg.version)
+    return ctx
+
+
+def _file_map(root: Path) -> list[dict]:
+    files: list[dict] = []
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        data = path.read_bytes()
+        files.append({
+            "path": path.relative_to(root).as_posix(),
+            "bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        })
+    return files
+
+
+def _blob_text(raw_log, kind: str, text: str, suffix: str = ".txt"):
+    if raw_log is None:
+        return None
+    return raw_log.blob_text(kind, text or "", suffix=suffix)
+
+
 # ---------------------------------------------------------------------------
 # StaticAdapter — SAST tools
 # ---------------------------------------------------------------------------
@@ -144,6 +174,9 @@ class StaticAdapter(DetectorAdapter):
         prompt_strategy: str = "zero_shot",
         system_prompt: str | None = None,
         template_override: str | None = None,
+        *,
+        raw_log=None,
+        trace_context: dict | None = None,
     ) -> EvalDetectionResult:
         # Prompt params are unused — SAST is prompt-agnostic.
         if not pkg.files:
@@ -159,25 +192,70 @@ class StaticAdapter(DetectorAdapter):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             _write_pkg_files(pkg, tmp)
-            result = self._invoke(tmp)
+            result = self._invoke(tmp, raw_log=raw_log, trace_context=_context(trace_context, pkg))
 
         result.exec_time_ms = int((_time.monotonic() - t0) * 1000)
         result.heuristic_flags = list(pkg.heuristic_flags)
         return result
 
-    def _invoke(self, target: Path) -> EvalDetectionResult:
+    def _invoke(self, target: Path, *, raw_log=None, trace_context: dict | None = None) -> EvalDetectionResult:
         if self._tool == "bandit":
-            return self._run_bandit(target)
-        return self._run_semgrep(target)
+            return self._run_bandit(target, raw_log=raw_log, trace_context=trace_context)
+        return self._run_semgrep(target, raw_log=raw_log, trace_context=trace_context)
 
-    def _run_bandit(self, target: Path) -> EvalDetectionResult:
+    def _run_bandit(self, target: Path, *, raw_log=None, trace_context: dict | None = None) -> EvalDetectionResult:
+        cmd = ["bandit", "-r", str(target), "-f", "json", "-q"]
+        if raw_log is not None:
+            raw_log.emit(
+                "static.command.start",
+                detector="bandit",
+                mode="static",
+                strategy=(trace_context or {}).get("strategy", "zero_shot"),
+                package=(trace_context or {}).get("package"),
+                version=(trace_context or {}).get("version"),
+                artifact_filename=(trace_context or {}).get("artifact_filename"),
+                payload={"argv": cmd, "timeout": 120, "temp_file_map": _file_map(target)},
+            )
         try:
             proc = subprocess.run(
-                ["bandit", "-r", str(target), "-f", "json", "-q"],
+                cmd,
                 capture_output=True, text=True, timeout=120,
             )
+            stdout_ref = _blob_text(raw_log, "static_stdout", proc.stdout, suffix=".json")
+            stderr_ref = _blob_text(raw_log, "static_stderr", proc.stderr, suffix=".txt")
+            if raw_log is not None:
+                raw_log.emit(
+                    "static.command.raw_exit",
+                    detector="bandit",
+                    mode="static",
+                    strategy=(trace_context or {}).get("strategy", "zero_shot"),
+                    package=(trace_context or {}).get("package"),
+                    version=(trace_context or {}).get("version"),
+                    artifact_filename=(trace_context or {}).get("artifact_filename"),
+                    payload={
+                        "returncode": proc.returncode,
+                        "stdout_ref": stdout_ref,
+                        "stderr_ref": stderr_ref,
+                    },
+                )
             data = _json.loads(proc.stdout) if proc.stdout.strip() else {}
             issues = data.get("results", [])
+            if raw_log is not None:
+                raw_log.emit(
+                    "static.command.exit",
+                    detector="bandit",
+                    mode="static",
+                    strategy=(trace_context or {}).get("strategy", "zero_shot"),
+                    package=(trace_context or {}).get("package"),
+                    version=(trace_context or {}).get("version"),
+                    artifact_filename=(trace_context or {}).get("artifact_filename"),
+                    payload={
+                        "returncode": proc.returncode,
+                        "stdout_ref": stdout_ref,
+                        "stderr_ref": stderr_ref,
+                        "parsed": {"issue_count": len(issues), "issues": issues[:10]},
+                    },
+                )
             if proc.returncode not in (0, 1) and not issues:
                 return _static_error_result(
                     "bandit",
@@ -194,9 +272,20 @@ class StaticAdapter(DetectorAdapter):
                 details={"issue_count": len(issues), "issues": issues[:10]},
             )
         except Exception as exc:
+            if raw_log is not None:
+                raw_log.emit(
+                    "static.command.error",
+                    detector="bandit",
+                    mode="static",
+                    strategy=(trace_context or {}).get("strategy", "zero_shot"),
+                    package=(trace_context or {}).get("package"),
+                    version=(trace_context or {}).get("version"),
+                    artifact_filename=(trace_context or {}).get("artifact_filename"),
+                    payload={"error": str(exc)},
+                )
             return _static_error_result("bandit", str(exc))
 
-    def _run_semgrep(self, target: Path) -> EvalDetectionResult:
+    def _run_semgrep(self, target: Path, *, raw_log=None, trace_context: dict | None = None) -> EvalDetectionResult:
         try:
             semgrep_state = target / ".semgrep-state"
             semgrep_state.mkdir(exist_ok=True)
@@ -206,24 +295,78 @@ class StaticAdapter(DetectorAdapter):
                 "SEMGREP_LOG_FILE": str(semgrep_state / "semgrep.log"),
                 "SEMGREP_SEND_METRICS": "off",
             }
+            cmd = [
+                "semgrep",
+                "scan",
+                "--config",
+                str(SEMGREP_RULES_PATH),
+                "--json",
+                "--metrics",
+                "off",
+                "--disable-version-check",
+                "--no-git-ignore",
+                "--quiet",
+                str(target),
+            ]
+            if raw_log is not None:
+                raw_log.emit(
+                    "static.command.start",
+                    detector="semgrep",
+                    mode="static",
+                    strategy=(trace_context or {}).get("strategy", "zero_shot"),
+                    package=(trace_context or {}).get("package"),
+                    version=(trace_context or {}).get("version"),
+                    artifact_filename=(trace_context or {}).get("artifact_filename"),
+                    payload={
+                        "argv": cmd,
+                        "timeout": 120,
+                        "env_overrides": {
+                            "SEMGREP_SETTINGS_FILE": semgrep_env["SEMGREP_SETTINGS_FILE"],
+                            "SEMGREP_LOG_FILE": semgrep_env["SEMGREP_LOG_FILE"],
+                            "SEMGREP_SEND_METRICS": semgrep_env["SEMGREP_SEND_METRICS"],
+                        },
+                        "temp_file_map": _file_map(target),
+                    },
+                )
             proc = subprocess.run(
-                [
-                    "semgrep",
-                    "scan",
-                    "--config",
-                    str(SEMGREP_RULES_PATH),
-                    "--json",
-                    "--metrics",
-                    "off",
-                    "--disable-version-check",
-                    "--no-git-ignore",
-                    "--quiet",
-                    str(target),
-                ],
+                cmd,
                 capture_output=True, text=True, timeout=120, env=semgrep_env,
             )
+            stdout_ref = _blob_text(raw_log, "static_stdout", proc.stdout, suffix=".json")
+            stderr_ref = _blob_text(raw_log, "static_stderr", proc.stderr, suffix=".txt")
+            if raw_log is not None:
+                raw_log.emit(
+                    "static.command.raw_exit",
+                    detector="semgrep",
+                    mode="static",
+                    strategy=(trace_context or {}).get("strategy", "zero_shot"),
+                    package=(trace_context or {}).get("package"),
+                    version=(trace_context or {}).get("version"),
+                    artifact_filename=(trace_context or {}).get("artifact_filename"),
+                    payload={
+                        "returncode": proc.returncode,
+                        "stdout_ref": stdout_ref,
+                        "stderr_ref": stderr_ref,
+                    },
+                )
             data = _json.loads(proc.stdout) if proc.stdout.strip() else {}
             findings = data.get("results", [])
+            if raw_log is not None:
+                raw_log.emit(
+                    "static.command.exit",
+                    detector="semgrep",
+                    mode="static",
+                    strategy=(trace_context or {}).get("strategy", "zero_shot"),
+                    package=(trace_context or {}).get("package"),
+                    version=(trace_context or {}).get("version"),
+                    artifact_filename=(trace_context or {}).get("artifact_filename"),
+                    payload={
+                        "returncode": proc.returncode,
+                        "stdout_ref": stdout_ref,
+                        "stderr_ref": stderr_ref,
+                        "parsed": {"finding_count": len(findings), "findings": findings[:10]},
+                    },
+                )
             if proc.returncode not in (0, 1) and not findings:
                 return _static_error_result(
                     "semgrep",
@@ -240,6 +383,17 @@ class StaticAdapter(DetectorAdapter):
                 details={"finding_count": len(findings), "findings": findings[:10]},
             )
         except Exception as exc:
+            if raw_log is not None:
+                raw_log.emit(
+                    "static.command.error",
+                    detector="semgrep",
+                    mode="static",
+                    strategy=(trace_context or {}).get("strategy", "zero_shot"),
+                    package=(trace_context or {}).get("package"),
+                    version=(trace_context or {}).get("version"),
+                    artifact_filename=(trace_context or {}).get("artifact_filename"),
+                    payload={"error": str(exc)},
+                )
             return _static_error_result("semgrep", str(exc))
 
 
@@ -274,6 +428,9 @@ class GuardDogAdapter(DetectorAdapter):
         prompt_strategy: str = "zero_shot",
         system_prompt: str | None = None,
         template_override: str | None = None,
+        *,
+        raw_log=None,
+        trace_context: dict | None = None,
     ) -> EvalDetectionResult:
         # Prompt params are unused — GuardDog is prompt-agnostic.
         if not pkg.files:
@@ -296,7 +453,7 @@ class GuardDogAdapter(DetectorAdapter):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             _write_pkg_files(pkg, tmp)
-            result = self._run_guarddog(tmp)
+            result = self._run_guarddog(tmp, raw_log=raw_log, trace_context=_context(trace_context, pkg))
 
         result.exec_time_ms = int((_time.monotonic() - t0) * 1000)
         result.heuristic_flags = list(pkg.heuristic_flags)
@@ -314,14 +471,43 @@ class GuardDogAdapter(DetectorAdapter):
             cmd.extend(["--rules", rule])
         return cmd
 
-    def _run_guarddog(self, target: Path) -> EvalDetectionResult:
+    def _run_guarddog(self, target: Path, *, raw_log=None, trace_context: dict | None = None) -> EvalDetectionResult:
+        cmd = self._command(target)
+        if raw_log is not None:
+            raw_log.emit(
+                "static.command.start",
+                detector=self._detector_name,
+                mode="static",
+                strategy=(trace_context or {}).get("strategy", "zero_shot"),
+                package=(trace_context or {}).get("package"),
+                version=(trace_context or {}).get("version"),
+                artifact_filename=(trace_context or {}).get("artifact_filename"),
+                payload={"argv": cmd, "timeout": self._timeout, "temp_file_map": _file_map(target)},
+            )
         try:
             proc = subprocess.run(
-                self._command(target),
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=self._timeout,
             )
+            stdout_ref = _blob_text(raw_log, "static_stdout", proc.stdout, suffix=".json")
+            stderr_ref = _blob_text(raw_log, "static_stderr", proc.stderr, suffix=".txt")
+            if raw_log is not None:
+                raw_log.emit(
+                    "static.command.raw_exit",
+                    detector=self._detector_name,
+                    mode="static",
+                    strategy=(trace_context or {}).get("strategy", "zero_shot"),
+                    package=(trace_context or {}).get("package"),
+                    version=(trace_context or {}).get("version"),
+                    artifact_filename=(trace_context or {}).get("artifact_filename"),
+                    payload={
+                        "returncode": proc.returncode,
+                        "stdout_ref": stdout_ref,
+                        "stderr_ref": stderr_ref,
+                    },
+                )
             data = None
             if not proc.stdout.strip():
                 if proc.returncode == 0:
@@ -355,6 +541,22 @@ class GuardDogAdapter(DetectorAdapter):
                         returncode=proc.returncode,
                     )
 
+            if raw_log is not None:
+                raw_log.emit(
+                    "static.command.exit",
+                    detector=self._detector_name,
+                    mode="static",
+                    strategy=(trace_context or {}).get("strategy", "zero_shot"),
+                    package=(trace_context or {}).get("package"),
+                    version=(trace_context or {}).get("version"),
+                    artifact_filename=(trace_context or {}).get("artifact_filename"),
+                    payload={
+                        "returncode": proc.returncode,
+                        "stdout_ref": stdout_ref,
+                        "stderr_ref": stderr_ref,
+                        "parsed": {"finding_count": len(findings), "findings": findings[:10]},
+                    },
+                )
             details = {
                 "finding_count": len(findings),
                 "findings": findings[:10],
@@ -377,6 +579,17 @@ class GuardDogAdapter(DetectorAdapter):
                 details=details,
             )
         except Exception as exc:
+            if raw_log is not None:
+                raw_log.emit(
+                    "static.command.error",
+                    detector=self._detector_name,
+                    mode="static",
+                    strategy=(trace_context or {}).get("strategy", "zero_shot"),
+                    package=(trace_context or {}).get("package"),
+                    version=(trace_context or {}).get("version"),
+                    artifact_filename=(trace_context or {}).get("artifact_filename"),
+                    payload={"error": str(exc)},
+                )
             return _static_error_result(self._detector_name, str(exc))
 
     def _extract_errors(self, data) -> dict:
@@ -424,7 +637,7 @@ class GuardDogAdapter(DetectorAdapter):
 
 
 # ---------------------------------------------------------------------------
-# LLMAdapter — single-shot LLM call (YAML-configured model)
+# LLMAdapter - single-shot LLM call (YAML-configured model)
 # ---------------------------------------------------------------------------
 
 class LLMAdapter(DetectorAdapter):
@@ -445,6 +658,9 @@ class LLMAdapter(DetectorAdapter):
         prompt_strategy: str = "zero_shot",
         system_prompt: str | None = None,
         template_override: str | None = None,
+        *,
+        raw_log=None,
+        trace_context: dict | None = None,
     ) -> EvalDetectionResult:
         system = system_prompt    if system_prompt    is not None else self._system_prompt
         tmpl   = template_override if template_override is not None else self._user_template
@@ -455,18 +671,24 @@ class LLMAdapter(DetectorAdapter):
             file_listing=listing,
             heuristic_flags=", ".join(pkg.heuristic_flags) if pkg.heuristic_flags else "none",
         )
+        ctx = _context(trace_context, pkg)
+        ctx.update({"detector": self._detector_name, "mode": "hybrid", "strategy": prompt_strategy})
         log.debug(
             f"[{self._detector_name}] prompt ({len(user)} chars, truncated={truncated}):\n{user}"
         )
         t0 = _time.monotonic()
         try:
-            raw_text, in_tok, out_tok, cost = self._call_api(system, user)
+            raw_text, in_tok, out_tok, cost = self._call_api(
+                system, user, raw_log=raw_log, trace_context=ctx
+            )
             log.debug(
                 f"[{self._detector_name}] response "
                 f"(in={in_tok} out={out_tok} cost=${cost:.6f}):\n{raw_text}"
             )
             verdict, confidence, details = self._parse_response(raw_text)
         except Exception as exc:
+            if raw_log is not None:
+                raw_log.emit("llm.error", **ctx, payload={"model": self._model_name, "error": str(exc)})
             return EvalDetectionResult(
                 detector=self._detector_name,
                 experiment_mode="error",
@@ -509,62 +731,114 @@ class LLMAdapter(DetectorAdapter):
             total += len(chunk)
         return "".join(parts), False
 
-    def _call_api(self, system: str, user: str) -> tuple[str, int, int, float]:
+    def _call_api(
+        self,
+        system: str,
+        user: str,
+        *,
+        raw_log=None,
+        trace_context: dict | None = None,
+    ) -> tuple[str, int, int, float]:
         m = self._model_name
         if m.startswith("claude-"):
-            return self._call_anthropic(system, user)
+            return self._call_anthropic(system, user, raw_log=raw_log, trace_context=trace_context)
         if m.startswith(("gpt-", "o1-", "o3-", "together_ai/")):
-            return self._call_openai(system, user)
+            return self._call_openai(system, user, raw_log=raw_log, trace_context=trace_context)
         if m.startswith(("gemini-", "gemini/")):
-            return self._call_gemini(system, user)
+            return self._call_gemini(system, user, raw_log=raw_log, trace_context=trace_context)
         raise ValueError(f"Unknown model prefix for: {m}")
 
-    def _call_via_proxy(self, system: str, user: str) -> tuple[str, int, int, float]:
+    def _call_via_proxy(
+        self,
+        system: str,
+        user: str,
+        *,
+        raw_log=None,
+        trace_context: dict | None = None,
+    ) -> tuple[str, int, int, float]:
         """Route through LiteLLM; returns (text, input_tokens, output_tokens, cost_usd)."""
         import openai as _openai
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user},
+        ]
+        request_payload = {
+            "model": self._model_name,
+            "temperature": self._temperature,
+            "max_tokens": 512,
+            "messages": messages,
+        }
+        if raw_log is not None:
+            raw_log.emit(
+                "llm.request",
+                **(trace_context or {}),
+                payload={
+                    "model": self._model_name,
+                    "proxy_url": self._proxy_url,
+                    "system_prompt_ref": raw_log.blob_text("llm_system_prompt", system, suffix=".txt"),
+                    "user_prompt_ref": raw_log.blob_text("llm_user_prompt", user, suffix=".txt"),
+                    "request_json_ref": raw_log.blob_json("llm_request", request_payload),
+                },
+            )
         client = _openai.OpenAI(
             base_url=self._proxy_url.rstrip("/") + "/v1",
             api_key="no-key-needed",
         )
-        http_resp = client.with_raw_response.chat.completions.create(
-            model=self._model_name,
-            temperature=self._temperature,
-            max_tokens=512,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user",   "content": user},
-            ],
-        )
+        http_resp = client.with_raw_response.chat.completions.create(**request_payload)
         cost = float(http_resp.headers.get("x-litellm-response-cost") or 0.0)
         resp = http_resp.parse()
         text = resp.choices[0].message.content or ""
         in_tok  = resp.usage.prompt_tokens     if resp.usage else 0
         out_tok = resp.usage.completion_tokens if resp.usage else 0
+        if raw_log is not None:
+            if hasattr(resp, "model_dump"):
+                response_payload = resp.model_dump(mode="json")
+            else:  # pragma: no cover - SDK compatibility fallback
+                response_payload = repr(resp)
+            raw_log.emit(
+                "llm.response",
+                **(trace_context or {}),
+                payload={
+                    "model": self._model_name,
+                    "headers": dict(http_resp.headers),
+                    "assistant_text_ref": raw_log.blob_text("llm_assistant_text", text, suffix=".txt"),
+                    "response_json_ref": raw_log.blob_json("llm_response", response_payload),
+                    "input_tokens": in_tok,
+                    "output_tokens": out_tok,
+                    "cost_usd": cost,
+                },
+            )
         return text, in_tok, out_tok, cost
 
-    def _call_anthropic(self, system: str, user: str) -> tuple[str, int, int, float]:
+    def _call_anthropic(
+        self, system: str, user: str, *, raw_log=None, trace_context: dict | None = None
+    ) -> tuple[str, int, int, float]:
         if self._proxy_url:
-            return self._call_via_proxy(system, user)
+            return self._call_via_proxy(system, user, raw_log=raw_log, trace_context=trace_context)
         raise RuntimeError(
-            f"proxy_url not set in '{self._detector_name}' config — direct API calls "
+            f"proxy_url not set in '{self._detector_name}' config - direct API calls "
             "bypass key isolation (RISK_DIARY.md Decision 5). Add proxy_url to the "
             "model YAML."
         )
 
-    def _call_openai(self, system: str, user: str) -> tuple[str, int, int, float]:
+    def _call_openai(
+        self, system: str, user: str, *, raw_log=None, trace_context: dict | None = None
+    ) -> tuple[str, int, int, float]:
         if self._proxy_url:
-            return self._call_via_proxy(system, user)
+            return self._call_via_proxy(system, user, raw_log=raw_log, trace_context=trace_context)
         raise RuntimeError(
-            f"proxy_url not set in '{self._detector_name}' config — direct API calls "
+            f"proxy_url not set in '{self._detector_name}' config - direct API calls "
             "bypass key isolation (RISK_DIARY.md Decision 5). Add proxy_url to the "
             "model YAML."
         )
 
-    def _call_gemini(self, system: str, user: str) -> tuple[str, int, int, float]:
+    def _call_gemini(
+        self, system: str, user: str, *, raw_log=None, trace_context: dict | None = None
+    ) -> tuple[str, int, int, float]:
         if self._proxy_url:
-            return self._call_via_proxy(system, user)
+            return self._call_via_proxy(system, user, raw_log=raw_log, trace_context=trace_context)
         raise RuntimeError(
-            f"proxy_url not set in '{self._detector_name}' config — direct API calls "
+            f"proxy_url not set in '{self._detector_name}' config - direct API calls "
             "bypass key isolation (RISK_DIARY.md Decision 5). Add proxy_url to the "
             "model YAML."
         )
@@ -585,7 +859,7 @@ class LLMAdapter(DetectorAdapter):
 
 
 # ---------------------------------------------------------------------------
-# AgenticAdapter — multi-turn Anthropic tool_use loop
+# AgenticAdapter - multi-turn LiteLLM plan-and-tool-use loop
 # ---------------------------------------------------------------------------
 
 class AgenticAdapter(DetectorAdapter):
@@ -602,8 +876,10 @@ class AgenticAdapter(DetectorAdapter):
         self._max_turns: int         = int(cfg.get("max_turns", 5))
         self._temperature: float     = float(cfg.get("temperature", 0.0))
         self._proxy_url: str | None  = cfg.get("proxy_url") or None
+        self._agentic_flow: str      = str(cfg.get("agentic_flow", "legacy_tool_loop"))
         self._detector_name: str     = Path(config_path).stem   # e.g. "claude_haiku_agentic"
         self._current_pkg: PackageInfo | None = None
+        self._last_plan: dict | None = None
 
     _TOOLS = [
         {
@@ -622,6 +898,32 @@ class AgenticAdapter(DetectorAdapter):
                 "required": ["path"],
             },
         },
+        {
+            "name": "search_files",
+            "description": "Search extracted package files with a regular expression.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Python regular expression."},
+                    "path_glob": {
+                        "type": "string",
+                        "description": "Optional shell-style glob limiting paths to search.",
+                    },
+                },
+                "required": ["pattern"],
+            },
+        },
+        {
+            "name": "file_info",
+            "description": "Return metadata for one extracted package file.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Relative file path to inspect."}
+                },
+                "required": ["path"],
+            },
+        },
     ]
 
     def run(
@@ -630,18 +932,28 @@ class AgenticAdapter(DetectorAdapter):
         prompt_strategy: str = "zero_shot",
         system_prompt: str | None = None,
         template_override: str | None = None,
+        *,
+        raw_log=None,
+        trace_context: dict | None = None,
     ) -> EvalDetectionResult:
         # template_override maps to initial_user_message for the agentic adapter.
         self._current_pkg = pkg
+        self._last_plan = None
         _sys  = system_prompt     if system_prompt     is not None else self._system_prompt
         _init = template_override if template_override is not None else self._initial_template
+        ctx = _context(trace_context, pkg)
+        ctx.update({"detector": self._detector_name, "mode": "agentic", "strategy": prompt_strategy})
         t0 = _time.monotonic()
         try:
-            final_text, in_tok, out_tok, total_cost = self._agentic_loop(pkg, _sys, _init)
+            final_text, in_tok, out_tok, total_cost = self._agentic_loop(
+                pkg, _sys, _init, raw_log=raw_log, trace_context=ctx
+            )
             verdict, confidence, details = self._parse_response(final_text)
         except NotImplementedError:
             raise
         except Exception as exc:
+            if raw_log is not None:
+                raw_log.emit("agentic.error", **ctx, payload={"model": self._model_name, "error": str(exc)})
             return EvalDetectionResult(
                 detector=self._detector_name,
                 experiment_mode="error",
@@ -658,6 +970,9 @@ class AgenticAdapter(DetectorAdapter):
             self._current_pkg = None
 
         details["model"] = self._model_name
+        details["agentic_flow"] = self._agentic_flow
+        if self._last_plan is not None:
+            details["plan"] = self._last_plan
         return EvalDetectionResult(
             detector=self._detector_name,
             experiment_mode="agentic",
@@ -671,14 +986,20 @@ class AgenticAdapter(DetectorAdapter):
             details=details,
         )
 
-    def _make_api_call(self, messages: list[dict], system_prompt: str | None = None) -> dict:
+    def _make_api_call(
+        self,
+        messages: list[dict],
+        system_prompt: str | None = None,
+        *,
+        raw_log=None,
+        trace_context: dict | None = None,
+        turn: int = 0,
+        tools_enabled: bool = True,
+        phase: str = "turn",
+    ) -> dict:
         """
         Single API call returning a normalised response dict:
           {content: list[dict], stop_reason: str, input_tokens: int, output_tokens: int}
-
-        Proxy path (LiteLLM): translates Anthropic-format messages → OpenAI format,
-        calls /v1/chat/completions, normalises response back to Anthropic-like dict.
-        Direct path: calls Anthropic SDK directly.
         """
         _sys = system_prompt if system_prompt is not None else self._system_prompt
         if self._proxy_url:
@@ -729,14 +1050,28 @@ class AgenticAdapter(DetectorAdapter):
                     },
                 }
                 for t in self._TOOLS
-            ]
-            http_resp = client.with_raw_response.chat.completions.create(
-                model=self._model_name,
-                temperature=self._temperature,
-                max_tokens=1024,
-                messages=oai_messages,
-                tools=oai_tools,
-            )
+            ] if tools_enabled else []
+            request_payload = {
+                "model": self._model_name,
+                "temperature": self._temperature,
+                "max_tokens": 1024,
+                "messages": oai_messages,
+            }
+            if tools_enabled:
+                request_payload["tools"] = oai_tools
+            if raw_log is not None:
+                payload = {
+                    "turn": turn,
+                    "phase": phase,
+                    "model": self._model_name,
+                    "proxy_url": self._proxy_url,
+                    "messages_ref": raw_log.blob_json("agentic_messages", oai_messages),
+                    "request_json_ref": raw_log.blob_json("agentic_request", request_payload),
+                }
+                if tools_enabled:
+                    payload["tools_ref"] = raw_log.blob_json("agentic_tools", oai_tools)
+                raw_log.emit(f"agentic.{phase}.request", **(trace_context or {}), payload=payload)
+            http_resp = client.with_raw_response.chat.completions.create(**request_payload)
             call_cost = float(http_resp.headers.get("x-litellm-response-cost") or 0.0)
             resp = http_resp.parse()
             oai_msg_out = resp.choices[0].message
@@ -752,6 +1087,27 @@ class AgenticAdapter(DetectorAdapter):
                         "name":  tc.function.name,
                         "input": _j.loads(tc.function.arguments or "{}"),
                     })
+            if raw_log is not None:
+                if hasattr(resp, "model_dump"):
+                    response_payload = resp.model_dump(mode="json")
+                else:  # pragma: no cover - SDK compatibility fallback
+                    response_payload = repr(resp)
+                raw_log.emit(
+                    f"agentic.{phase}.response",
+                    **(trace_context or {}),
+                    payload={
+                        "turn": turn,
+                        "phase": phase,
+                        "model": self._model_name,
+                        "headers": dict(http_resp.headers),
+                        "response_json_ref": raw_log.blob_json("agentic_response", response_payload),
+                        "content_ref": raw_log.blob_json("agentic_content", content_blocks),
+                        "tool_calls": [b for b in content_blocks if b.get("type") == "tool_use"],
+                        "input_tokens": resp.usage.prompt_tokens if resp.usage else 0,
+                        "output_tokens": resp.usage.completion_tokens if resp.usage else 0,
+                        "cost_usd": call_cost,
+                    },
+                )
             return {
                 "content":       content_blocks,
                 "stop_reason":   "tool_use" if finish == "tool_calls" else "end_turn",
@@ -761,23 +1117,160 @@ class AgenticAdapter(DetectorAdapter):
             }
 
         raise RuntimeError(
-            "proxy_url not set in AgenticAdapter config — direct API calls bypass "
+            "proxy_url not set in AgenticAdapter config - direct API calls bypass "
             "key isolation (RISK_DIARY.md Decision 5). Add proxy_url to the model YAML."
         )
 
     def _agentic_loop(
-        self, pkg: PackageInfo, system_prompt: str, initial_template: str
+        self,
+        pkg: PackageInfo,
+        system_prompt: str,
+        initial_template: str,
+        *,
+        raw_log=None,
+        trace_context: dict | None = None,
+    ) -> tuple[str, int, int, float]:
+        if self._agentic_flow == "plan_then_execute":
+            return self._agentic_plan_then_execute_loop(
+                pkg,
+                system_prompt,
+                initial_template,
+                raw_log=raw_log,
+                trace_context=trace_context,
+            )
+        if self._agentic_flow != "legacy_tool_loop":
+            raise ValueError(f"unknown agentic_flow: {self._agentic_flow}")
+        return self._tool_loop(
+            pkg,
+            system_prompt,
+            initial_template,
+            raw_log=raw_log,
+            trace_context=trace_context,
+            initial_turn=0,
+        )
+
+    def _agentic_plan_then_execute_loop(
+        self,
+        pkg: PackageInfo,
+        system_prompt: str,
+        initial_template: str,
+        *,
+        raw_log=None,
+        trace_context: dict | None = None,
     ) -> tuple[str, int, int, float]:
         initial_user = initial_template.format(
             package_name=pkg.name, version=pkg.version
         )
+        plan_prompt = (
+            f"{initial_user}\n\n"
+            "Phase 1: produce an investigation plan only. Do not give a verdict yet.\n"
+            "Use this file manifest to decide what to inspect in Phase 2:\n"
+            f"{self._package_manifest(pkg)}\n\n"
+            "Respond ONLY with valid JSON containing investigation planning fields, for example:\n"
+            '{"suspicious_paths": [], "search_terms": [], '
+            '"risk_hypotheses": [], "next_steps": []}'
+        )
+        plan_resp = self._make_api_call(
+            [{"role": "user", "content": plan_prompt}],
+            system_prompt=system_prompt,
+            raw_log=raw_log,
+            trace_context=trace_context,
+            turn=0,
+            tools_enabled=False,
+            phase="plan",
+        )
+        plan_text = "".join(
+            b["text"] for b in plan_resp["content"] if b.get("type") == "text"
+        )
+        plan = self._parse_plan(plan_text)
+        self._last_plan = plan
+
+        execute_template = (
+            f"{initial_user}\n\n"
+            "Phase 2: execute the investigation plan below using only the provided "
+            "read-only tools. Do not install, import, or execute the package.\n\n"
+            f"Investigation plan JSON:\n{_json.dumps(plan, sort_keys=True)}\n\n"
+            "After using the tools, respond ONLY with valid JSON:\n"
+            '{"verdict": "malicious" or "benign", "confidence": 0.0-1.0, '
+            '"reasoning": "one sentence", "evidence": [], "files_reviewed": [], '
+            '"limitations": []}'
+        )
+        final_text, in_tok, out_tok, total_cost = self._tool_loop(
+            pkg,
+            system_prompt,
+            execute_template,
+            raw_log=raw_log,
+            trace_context=trace_context,
+            initial_turn=1,
+            preformatted=True,
+        )
+        return (
+            final_text,
+            plan_resp["input_tokens"] + in_tok,
+            plan_resp["output_tokens"] + out_tok,
+            plan_resp.get("cost_usd", 0.0) + total_cost,
+        )
+
+    @staticmethod
+    def _parse_plan(raw: str) -> dict:
+        import re as _re
+        m = _re.search(r"\{.*\}", raw, _re.DOTALL)
+        if not m:
+            raise ValueError("agentic plan phase did not return JSON")
+        try:
+            data = _json.loads(m.group())
+        except _json.JSONDecodeError as exc:
+            raise ValueError(f"agentic plan phase returned invalid JSON: {exc}") from exc
+        if not isinstance(data, dict):
+            raise ValueError("agentic plan phase JSON must be an object")
+        if "verdict" in data:
+            raise ValueError("agentic plan phase returned a verdict before investigation")
+        for key in ("suspicious_paths", "search_terms", "risk_hypotheses", "next_steps"):
+            data.setdefault(key, [])
+        return data
+
+    @staticmethod
+    def _package_manifest(pkg: PackageInfo, limit: int = 200) -> str:
+        lines = [
+            f"- {path} ({len(content.encode('utf-8', errors='replace'))} bytes)"
+            for path, content in sorted(pkg.files.items())[:limit]
+        ]
+        if len(pkg.files) > limit:
+            lines.append(f"... {len(pkg.files) - limit} additional file(s) omitted")
+        return "\n".join(lines) or "(no extracted files)"
+
+    def _tool_loop(
+        self,
+        pkg: PackageInfo,
+        system_prompt: str,
+        initial_template: str,
+        *,
+        raw_log=None,
+        trace_context: dict | None = None,
+        initial_turn: int = 0,
+        preformatted: bool = False,
+    ) -> tuple[str, int, int, float]:
+        if preformatted:
+            initial_user = initial_template
+        else:
+            initial_user = initial_template.format(
+                package_name=pkg.name, version=pkg.version
+            )
         messages: list[dict] = [{"role": "user", "content": initial_user}]
         total_input_tokens  = 0
         total_output_tokens = 0
         total_cost          = 0.0
 
-        for _turn in range(self._max_turns):
-            resp = self._make_api_call(messages, system_prompt=system_prompt)
+        for offset in range(self._max_turns):
+            _turn = initial_turn + offset
+            resp = self._make_api_call(
+                messages,
+                system_prompt=system_prompt,
+                raw_log=raw_log,
+                trace_context=trace_context,
+                turn=_turn,
+                phase="turn",
+            )
             total_input_tokens  += resp["input_tokens"]
             total_output_tokens += resp["output_tokens"]
             total_cost          += resp.get("cost_usd", 0.0)
@@ -794,6 +1287,20 @@ class AgenticAdapter(DetectorAdapter):
                 for block in content:
                     if block.get("type") == "tool_use":
                         result_content = self._handle_tool(block["name"], block.get("input", {}))
+                        if raw_log is not None:
+                            raw_log.emit(
+                                "agentic.tool.call",
+                                **(trace_context or {}),
+                                payload={
+                                    "turn": _turn,
+                                    "tool_name": block["name"],
+                                    "tool_use_id": block["id"],
+                                    "tool_input": block.get("input", {}),
+                                    "tool_output_ref": raw_log.blob_text(
+                                        "agentic_tool_output", str(result_content), suffix=".txt"
+                                    ),
+                                },
+                            )
                         tool_results.append({
                             "type":        "tool_result",
                             "tool_use_id": block["id"],
@@ -803,7 +1310,7 @@ class AgenticAdapter(DetectorAdapter):
             else:
                 break
 
-        # Max turns exhausted — return whatever the last assistant turn said.
+        # Max turns exhausted - return whatever the last assistant turn said.
         last_content = messages[-1].get("content", [])
         final_text = ""
         if isinstance(last_content, list):
@@ -822,7 +1329,51 @@ class AgenticAdapter(DetectorAdapter):
         if name == "read_file":
             path = tool_input.get("path", "")
             return pkg.files.get(path, f"File not found: {path}")
+        if name == "search_files":
+            return self._tool_search_files(pkg, tool_input)
+        if name == "file_info":
+            return self._tool_file_info(pkg, tool_input)
         return f"Unknown tool: {name}"
+
+    @staticmethod
+    def _tool_search_files(pkg: PackageInfo, tool_input: dict) -> object:
+        import fnmatch as _fnmatch, re as _re
+        pattern = str(tool_input.get("pattern", ""))
+        path_glob = tool_input.get("path_glob")
+        try:
+            regex = _re.compile(pattern)
+        except _re.error as exc:
+            return {"error": f"invalid regex: {exc}"}
+        matches = []
+        for path, content in sorted(pkg.files.items()):
+            if path_glob and not _fnmatch.fnmatch(path, str(path_glob)):
+                continue
+            for line_no, line in enumerate(content.splitlines(), start=1):
+                if regex.search(line):
+                    matches.append({
+                        "path": path,
+                        "line": line_no,
+                        "text": line[:500],
+                    })
+                    if len(matches) >= 50:
+                        return {"matches": matches, "truncated": True}
+        return {"matches": matches, "truncated": False}
+
+    @staticmethod
+    def _tool_file_info(pkg: PackageInfo, tool_input: dict) -> object:
+        path = str(tool_input.get("path", ""))
+        if path not in pkg.files:
+            return {"path": path, "exists": False}
+        content = pkg.files[path]
+        encoded = content.encode("utf-8", errors="replace")
+        return {
+            "path": path,
+            "exists": True,
+            "size_bytes": len(encoded),
+            "sha256": hashlib.sha256(encoded).hexdigest(),
+            "line_count": len(content.splitlines()),
+            "in_raw_entrypoints": path in pkg.files_raw,
+        }
 
     def _parse_response(self, raw: str) -> tuple[bool, float | None, dict]:
         import re as _re, json as _j
@@ -855,6 +1406,9 @@ class LLMRawAdapter(LLMAdapter):
         prompt_strategy: str = "zero_shot",
         system_prompt: str | None = None,
         template_override: str | None = None,
+        *,
+        raw_log=None,
+        trace_context: dict | None = None,
     ) -> EvalDetectionResult:
         system = system_prompt     if system_prompt     is not None else self._system_prompt
         tmpl   = template_override if template_override is not None else self._user_template
@@ -865,18 +1419,24 @@ class LLMRawAdapter(LLMAdapter):
             file_listing=listing,
             heuristic_flags=", ".join(pkg.heuristic_flags) if pkg.heuristic_flags else "none",
         )
+        ctx = _context(trace_context, pkg)
+        ctx.update({"detector": self._detector_name, "mode": "llm_raw", "strategy": prompt_strategy})
         log.debug(
             f"[{self._detector_name}/raw] prompt ({len(user)} chars, truncated={truncated}):\n{user}"
         )
         t0 = _time.monotonic()
         try:
-            raw_text, in_tok, out_tok, cost = self._call_api(system, user)
+            raw_text, in_tok, out_tok, cost = self._call_api(
+                system, user, raw_log=raw_log, trace_context=ctx
+            )
             log.debug(
                 f"[{self._detector_name}/raw] response "
                 f"(in={in_tok} out={out_tok} cost=${cost:.6f}):\n{raw_text}"
             )
             verdict, confidence, details = self._parse_response(raw_text)
         except Exception as exc:
+            if raw_log is not None:
+                raw_log.emit("llm.error", **ctx, payload={"model": self._model_name, "error": str(exc)})
             return EvalDetectionResult(
                 detector=self._detector_name,
                 experiment_mode="error",

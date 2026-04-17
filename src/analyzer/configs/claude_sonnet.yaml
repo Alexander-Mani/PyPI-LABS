@@ -1,0 +1,4 @@
+model_name: "claude-sonnet-4-6"
+tier: "medium"
+temperature: 0.0
+proxy_url: "http://127.0.0.1:4000"

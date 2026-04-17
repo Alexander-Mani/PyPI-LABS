@@ -15,6 +15,8 @@ from evaluate import (  # noqa: E402
     GroundTruthLabel,
     ResolvedPackage,
     _aggregate_package_version_metrics,
+    _apply_gemini_toggle,
+    _config_stems_for_tier,
     _load_evaluation_profile,
     _make_run_id,
 )
@@ -60,6 +62,20 @@ def _patch_profile(monkeypatch, profile):
     )
 
 
+def _patch_yaml_for_model_configs(monkeypatch):
+    def safe_load(f):
+        text = f.read() if hasattr(f, "read") else str(f)
+        data = {}
+        for line in text.splitlines():
+            if not line or line.startswith(" ") or ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            data[key.strip()] = value.strip().strip("'\"")
+        return data
+
+    monkeypatch.setitem(sys.modules, "yaml", types.SimpleNamespace(safe_load=safe_load))
+
+
 def test_test_profiles_enable_controls_and_limit_to_four_packages():
     test_block = _profile_block("test")
     test_no_gemini_block = _profile_block("test_no_gemini")
@@ -70,6 +86,33 @@ def test_test_profiles_enable_controls_and_limit_to_four_packages():
         assert "malicious: 2" in block
         assert "control: 2" in block
         assert "benign: 0" in block
+
+
+def test_medium_frontier_and_all_model_profiles_are_declared():
+    medium_block = _profile_block("medium")
+    frontier_block = _profile_block("frontier")
+    all_models_block = _profile_block("all_models")
+
+    for stem in ("claude_sonnet", "gpt_mini", "gemini_flash", "together_medium", "claude_sonnet_agentic"):
+        assert f"- {stem}" in medium_block
+        assert f"- {stem}" in all_models_block
+    for stem in ("claude_opus", "gpt", "gemini", "together_frontier", "claude_agentic"):
+        assert f"- {stem}" in frontier_block
+        assert f"- {stem}" in all_models_block
+
+
+def test_gemini_toggle_filters_gemini_configs_only(monkeypatch):
+    _patch_yaml_for_model_configs(monkeypatch)
+    stems = {"claude_haiku", "gemini_flash_lite", "gemini", "gpt_nano"}
+
+    assert _apply_gemini_toggle(stems, gemini_enabled=False) == {"claude_haiku", "gpt_nano"}
+    assert _apply_gemini_toggle(stems, gemini_enabled=True) == stems
+
+
+def test_config_stems_for_tier_includes_medium_configs(monkeypatch):
+    _patch_yaml_for_model_configs(monkeypatch)
+
+    assert {"claude_sonnet", "gpt_mini", "gemini_flash", "together_medium", "claude_sonnet_agentic"} <= _config_stems_for_tier("medium")
 
 
 def test_package_limits_keep_two_malicious_two_controls_and_skip_benign():

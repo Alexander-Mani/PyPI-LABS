@@ -116,3 +116,29 @@ def test_test_profiles_have_expected_gemini_split():
 
     assert "gemini_flash_lite" in profiles["test"]
     assert "gemini_flash_lite" not in profiles["test_no_gemini"]
+
+
+def test_medium_profile_uses_medium_analyzer_configs():
+    profiles = _profile_config_stems()
+
+    assert {"claude_sonnet", "gpt_mini", "gemini_flash", "together_medium", "claude_sonnet_agentic"} <= profiles["medium"]
+
+
+def test_frontier_profile_uses_frontier_analyzer_configs():
+    profiles = _profile_config_stems()
+
+    assert {"claude_opus", "gpt", "gemini", "together_frontier", "claude_agentic"} <= profiles["frontier"]
+
+
+def test_all_models_profile_includes_budget_medium_and_frontier_profiles():
+    profiles = _profile_config_stems()
+
+    expected = profiles["budget"] | profiles["medium"] | profiles["frontier"]
+    assert expected <= profiles["all_models"]
+
+
+def test_agentic_configs_use_plan_then_execute_flow():
+    for stem in ("claude_haiku_agentic", "claude_sonnet_agentic", "claude_agentic"):
+        text = (_ANALYZER_CONFIGS / f"{stem}.yaml").read_text(encoding="utf-8")
+        assert 'agentic_flow: "plan_then_execute"' in text
+        assert re.search(r"^max_turns:\s*8\s*$", text, re.MULTILINE)

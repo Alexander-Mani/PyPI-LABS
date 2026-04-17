@@ -10,6 +10,7 @@ so dependency resolution cannot escape the local, iptables-restricted VM.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from html.parser import HTMLParser
 from pathlib import Path
 import re
@@ -152,29 +153,65 @@ def _wheel_score(artifact: IndexArtifact) -> tuple[int, str]:
 class SimulatorResolver:
     """Resolve bounded package/version/artifact samples from the simulator."""
 
-    def __init__(self, base_url: str, cache_dir: Path, timeout: int = 20):
+    def __init__(self, base_url: str, cache_dir: Path, timeout: int = 20, raw_log=None):
         self.base_url = base_url.rstrip("/")
         self.cache_dir = cache_dir
         self.timeout = timeout
+        self.raw_log = raw_log
 
     def project_index_url(self, project: str) -> str:
         return f"{self.base_url}/simple/{normalize_project_name(project)}/"
 
     def list_project_artifacts(self, project: str) -> list[IndexArtifact]:
         index_url = self.project_index_url(project)
+        if self.raw_log is not None:
+            self.raw_log.emit(
+                "resolver.project_index.request",
+                project=normalize_project_name(project),
+                payload={"url": index_url, "timeout": self.timeout},
+            )
         try:
             with urlopen(index_url, timeout=self.timeout) as resp:
-                html = resp.read().decode("utf-8", errors="replace")
+                body = resp.read()
+                status = getattr(resp, "status", None)
+                headers = dict(getattr(resp, "headers", {}) or {})
+                html = body.decode("utf-8", errors="replace")
         except HTTPError as exc:
+            if self.raw_log is not None:
+                self.raw_log.emit(
+                    "resolver.project_index.error",
+                    project=normalize_project_name(project),
+                    payload={"url": index_url, "status": exc.code, "error": str(exc)},
+                )
             if exc.code == 404:
                 log.warning(f"Simulator project missing: {project} ({index_url})")
                 return []
             raise SimpleIndexError(f"Could not query simulator index {index_url}: {exc}") from exc
         except URLError as exc:
+            if self.raw_log is not None:
+                self.raw_log.emit(
+                    "resolver.project_index.error",
+                    project=normalize_project_name(project),
+                    payload={"url": index_url, "error": str(exc)},
+                )
             raise SimpleIndexError(f"Could not query simulator index {index_url}: {exc}") from exc
 
         parser = _AnchorParser()
         parser.feed(html)
+        if self.raw_log is not None:
+            self.raw_log.emit(
+                "resolver.project_index.response",
+                project=normalize_project_name(project),
+                payload={
+                    "url": index_url,
+                    "status": status,
+                    "headers": headers,
+                    "html_ref": self.raw_log.blob_text(
+                        "simulator_simple_index_html", html, suffix=".html"
+                    ),
+                    "hrefs": list(parser.hrefs),
+                },
+            )
 
         artifacts: list[IndexArtifact] = []
         for href in parser.hrefs:
@@ -271,12 +308,61 @@ class SimulatorResolver:
         project_dir = self.cache_dir / artifact.project / artifact.version
         project_dir.mkdir(parents=True, exist_ok=True)
         dest = project_dir / artifact.filename
+        if self.raw_log is not None:
+            self.raw_log.emit(
+                "artifact.download.request",
+                package=artifact.project,
+                version=artifact.version,
+                artifact_filename=artifact.filename,
+                payload={"url": artifact.url, "cache_path": dest, "timeout": self.timeout},
+            )
         if dest.exists() and dest.stat().st_size > 0:
+            data = dest.read_bytes()
+            if self.raw_log is not None:
+                self.raw_log.emit(
+                    "artifact.download.response",
+                    package=artifact.project,
+                    version=artifact.version,
+                    artifact_filename=artifact.filename,
+                    payload={
+                        "cache_hit": True,
+                        "path": dest,
+                        "bytes": len(data),
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                    },
+                )
             return dest
 
         try:
             with urlopen(artifact.url, timeout=self.timeout) as resp:
-                dest.write_bytes(resp.read())
+                data = resp.read()
+                status = getattr(resp, "status", None)
+                headers = dict(getattr(resp, "headers", {}) or {})
+                dest.write_bytes(data)
         except (HTTPError, URLError) as exc:
+            if self.raw_log is not None:
+                self.raw_log.emit(
+                    "artifact.download.error",
+                    package=artifact.project,
+                    version=artifact.version,
+                    artifact_filename=artifact.filename,
+                    payload={"url": artifact.url, "error": str(exc)},
+                )
             raise SimpleIndexError(f"Could not download {artifact.url}: {exc}") from exc
+        if self.raw_log is not None:
+            self.raw_log.emit(
+                "artifact.download.response",
+                package=artifact.project,
+                version=artifact.version,
+                artifact_filename=artifact.filename,
+                payload={
+                    "cache_hit": False,
+                    "url": artifact.url,
+                    "status": status,
+                    "headers": headers,
+                    "path": dest,
+                    "bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                },
+            )
         return dest

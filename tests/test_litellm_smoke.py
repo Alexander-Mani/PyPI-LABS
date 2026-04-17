@@ -189,3 +189,39 @@ def test_smoke_main_rejects_all_models_with_explicit_models():
         assert "either --models or --all-models" in str(exc)
     else:  # pragma: no cover - defensive failure path
         raise AssertionError("conflicting model selectors should halt")
+
+
+def test_smoke_main_filters_gemini_from_profile_dry_run(monkeypatch, capsys):
+    def fake_load_profile_models(profile_name):
+        assert profile_name == "all_models"
+        return ["gpt-5.4-nano", "gemini-2.5-flash-lite", "gemini/gemini-3-flash"]
+
+    def fail_urlopen(req, timeout):  # pragma: no cover - should never be called
+        raise AssertionError("dry-run should not call LiteLLM")
+
+    monkeypatch.setattr(litellm_smoke, "_load_profile_models", fake_load_profile_models)
+    monkeypatch.setattr(litellm_smoke.urllib.request, "urlopen", fail_urlopen)
+
+    rc = litellm_smoke.main(["--profile", "all_models", "--gemini", "off", "--dry-run"])
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "DRY-RUN gpt-5.4-nano" in captured.out
+    assert "gemini-2.5-flash-lite" not in captured.out
+    assert "gemini/gemini-3-flash" not in captured.out
+    assert "gemini off" in captured.out
+
+
+def test_smoke_main_filters_gemini_from_all_models_dry_run(monkeypatch, capsys):
+    def fail_urlopen(req, timeout):  # pragma: no cover - should never be called
+        raise AssertionError("dry-run should not call LiteLLM")
+
+    monkeypatch.setattr(litellm_smoke.urllib.request, "urlopen", fail_urlopen)
+
+    rc = litellm_smoke.main(["--all-models", "--gemini", "off", "--dry-run"])
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "DRY-RUN gpt-5.4-nano" in captured.out
+    assert "DRY-RUN gemini-" not in captured.out
+    assert "DRY-RUN gemini/" not in captured.out

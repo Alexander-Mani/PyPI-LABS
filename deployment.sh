@@ -160,17 +160,30 @@ sudo -u proxy-runner bash -c "
 "
 
 echo "Step 5: Configuring API keys for proxy-runner"
+_GEMINI="${GEMINI:-on}"
+case "$_GEMINI" in
+  on|off) ;;
+  *)
+    echo "ERROR: invalid GEMINI: $_GEMINI" >&2
+    echo "Allowed values: on, off" >&2
+    exit 1
+    ;;
+esac
+
 echo "Validating API key environment variables..."
 : "${ANTHROPIC_API_KEY:?ERROR: ANTHROPIC_API_KEY is not set in ~/.env}"
 : "${OPENAI_API_KEY:?ERROR: OPENAI_API_KEY is not set in ~/.env}"
-: "${GEMINI_API_KEY:?ERROR: GEMINI_API_KEY is not set in ~/.env}"
 : "${TOGETHER_API_KEY:?ERROR: TOGETHER_API_KEY is not set in ~/.env}"
+if [[ "$_GEMINI" == "on" ]]; then
+  : "${GEMINI_API_KEY:?ERROR: GEMINI_API_KEY is not set in ~/.env}"
+fi
+_GEMINI_API_KEY_VALUE="${GEMINI_API_KEY:-}"
 
 sudo -u proxy-runner bash -c "
 cat > /home/proxy-runner/.env << ENVEOF
 export ANTHROPIC_API_KEY=\"$ANTHROPIC_API_KEY\"
 export OPENAI_API_KEY=\"$OPENAI_API_KEY\"
-export GEMINI_API_KEY=\"$GEMINI_API_KEY\"
+export GEMINI_API_KEY=\"$_GEMINI_API_KEY_VALUE\"
 export TOGETHER_API_KEY=\"$TOGETHER_API_KEY\"
 ENVEOF
 chmod 600 /home/proxy-runner/.env
@@ -202,9 +215,11 @@ done
 LLM_VENDOR_HOSTS=(
   api.anthropic.com
   api.openai.com
-  generativelanguage.googleapis.com
   api.together.xyz
 )
+if [[ "$_GEMINI" == "on" ]]; then
+  LLM_VENDOR_HOSTS+=(generativelanguage.googleapis.com)
+fi
 declare -A _allowed_vendor_ips=()
 for _vendor_host in "${LLM_VENDOR_HOSTS[@]}"; do
   echo "Resolving LLM vendor host: ${_vendor_host}"
@@ -279,7 +294,7 @@ echo "Running LiteLLM model-profile smoke test (profile: ${_MODEL_PROFILE})"
 if ! sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo
-  python scripts/litellm_smoke.py --base-url http://127.0.0.1:4000 --profile \"${_MODEL_PROFILE}\" --retries 3 --retry-delay 20
+  python scripts/litellm_smoke.py --base-url http://127.0.0.1:4000 --profile \"${_MODEL_PROFILE}\" --gemini \"${_GEMINI}\" --retries 3 --retry-delay 20
 "; then
   echo "ERROR: LiteLLM smoke test failed. Aborting before evaluation."
   echo "Last 80 lines of /home/proxy-runner/litellm.log:"
@@ -356,9 +371,9 @@ sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo
   # Defaulting to the budget model profile for safety; reads configs/evaluation_profiles.yaml.
-  python src/analyzer/evaluate.py --profile \"${_MODEL_PROFILE}\" --dry-run-resolution --skip-validation \
+  python src/analyzer/evaluate.py --profile \"${_MODEL_PROFILE}\" --gemini \"${_GEMINI}\" --dry-run-resolution --skip-validation \
     --progress \"${_EVAL_PROGRESS}\" ${_INCLUDE_CONTROLS_FLAG}
-  python src/analyzer/evaluate.py --profile \"${_MODEL_PROFILE}\" ${_VERBOSE_FLAG} \
+  python src/analyzer/evaluate.py --profile \"${_MODEL_PROFILE}\" --gemini \"${_GEMINI}\" ${_VERBOSE_FLAG} \
     --progress \"${_EVAL_PROGRESS}\" ${_INCLUDE_CONTROLS_FLAG}
 "
 

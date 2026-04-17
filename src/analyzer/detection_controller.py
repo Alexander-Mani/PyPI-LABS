@@ -71,6 +71,33 @@ def _task_descriptor(adapter: DetectorAdapter, strategy: str) -> TaskDescriptor:
     }
 
 
+def _evidence_descriptor(adapter: DetectorAdapter, pkg: PackageInfo) -> dict:
+    if isinstance(adapter, LLMRawAdapter):
+        return {"evidence_mode": "raw_entrypoints", "files": sorted(pkg.files_raw)}
+    if isinstance(adapter, AgenticAdapter):
+        return {"evidence_mode": "agentic_tools", "files": sorted(pkg.files)}
+    if isinstance(adapter, (StaticAdapter, GuardDogAdapter)):
+        return {"evidence_mode": "static_tempdir", "files": sorted(pkg.files)}
+    return {"evidence_mode": "filtered", "files": sorted(pkg.files)}
+
+
+def _result_payload(res: EvalDetectionResult, strategy: str, intended_mode: str) -> dict:
+    return {
+        "detector": res.detector,
+        "experiment_mode": res.experiment_mode,
+        "intended_mode": intended_mode,
+        "prompt_strategy": strategy,
+        "verdict": res.verdict,
+        "confidence": res.confidence,
+        "heuristic_flags": list(res.heuristic_flags),
+        "exec_time_ms": res.exec_time_ms,
+        "api_cost_usd": res.api_cost_usd,
+        "input_tokens": res.input_tokens,
+        "output_tokens": res.output_tokens,
+        "details": res.details,
+    }
+
+
 def _log_result(
     res: EvalDetectionResult,
     strategy: str,
@@ -200,6 +227,7 @@ class EvalController:
         on_tasks_prepared: Callable[[list[TaskDescriptor]], None] | None = None,
         on_result: Callable[[EvalDetectionResult, str, str], None] | None = None,
         quiet_console: bool = False,
+        raw_log=None,
     ) -> list[EvalDetectionResult]:
         tasks = self._build_tasks(sast_only=sast_only)
         if on_tasks_prepared is not None:
@@ -207,15 +235,53 @@ class EvalController:
                 _task_descriptor(adapter, strategy)
                 for adapter, strategy, _sys_p, _tpl in tasks
             ])
+        if raw_log is not None:
+            for adapter, strategy, _sys_p, _tpl in tasks:
+                desc = _task_descriptor(adapter, strategy)
+                raw_log.emit(
+                    "detector.schedule",
+                    package=pkg.name,
+                    version=pkg.version,
+                    artifact_filename=artifact_filename or "",
+                    detector=desc["detector"],
+                    mode=desc["mode"],
+                    strategy=strategy,
+                    payload={
+                        **_evidence_descriptor(adapter, pkg),
+                        "artifact_url": artifact_url,
+                        "source_index_url": source_index_url,
+                        "sample_role": sample_role,
+                        "attack_vector": attack_vector,
+                    },
+                )
 
         results: list[EvalDetectionResult] = []
         gt_label = ground_truth  # bool | None — derived from dataset labels
 
         with ThreadPoolExecutor(max_workers=4) as pool:
-            futures: dict = {
-                pool.submit(a.run, pkg, strategy, sys_p, tpl): (a, strategy)
-                for a, strategy, sys_p, tpl in tasks
-            }
+            futures: dict = {}
+            for a, strategy, sys_p, tpl in tasks:
+                trace_context = {
+                    "package": pkg.name,
+                    "version": pkg.version,
+                    "artifact_filename": artifact_filename or "",
+                    "detector": _adapter_name(a),
+                    "mode": _adapter_mode(a),
+                    "strategy": strategy,
+                }
+                if raw_log is None:
+                    future = pool.submit(a.run, pkg, strategy, sys_p, tpl)
+                else:
+                    future = pool.submit(
+                        a.run,
+                        pkg,
+                        strategy,
+                        sys_p,
+                        tpl,
+                        raw_log=raw_log,
+                        trace_context=trace_context,
+                    )
+                futures[future] = (a, strategy)
 
             for future in as_completed(futures):
                 adapter, strategy = futures[future]
@@ -235,33 +301,57 @@ class EvalController:
                     _log_result(res, strategy, quiet_console=quiet_console)
 
                 results.append(res)
-                if on_result is not None:
-                    on_result(res, strategy, intended_mode)
                 res.details.setdefault("intended_mode", intended_mode)
                 # Propagate extractor-level bad-password skips into the result details.
                 if pkg.bad_password_files:
                     res.details["skipped_bad_password"] = pkg.bad_password_files
-                self._db.insert_eval_result(
-                    run_id=run_id,
-                    package_name=pkg.name,
-                    version=pkg.version,
-                    experiment_mode=res.experiment_mode,
-                    prompt_strategy=strategy,
-                    detector=res.detector,
-                    artifact_filename=artifact_filename or "",
-                    artifact_url=artifact_url,
-                    source_index_url=source_index_url,
-                    sample_role=sample_role,
-                    attack_vector=attack_vector,
-                    resolver_policy=resolver_policy,
-                    verdict=res.verdict,
-                    ground_truth=gt_label,
-                    heuristic_flags=res.heuristic_flags,
-                    input_tokens=res.input_tokens,
-                    output_tokens=res.output_tokens,
-                    exec_time_ms=res.exec_time_ms,
-                    api_cost_usd=res.api_cost_usd,
-                    details=res.details,
-                )
+                if raw_log is not None:
+                    event_name = "detector.error" if res.experiment_mode == "error" else "detector.result"
+                    raw_log.emit(
+                        event_name,
+                        package=pkg.name,
+                        version=pkg.version,
+                        artifact_filename=artifact_filename or "",
+                        detector=res.detector,
+                        mode=intended_mode,
+                        strategy=strategy,
+                        payload=_result_payload(res, strategy, intended_mode),
+                    )
+                if on_result is not None:
+                    on_result(res, strategy, intended_mode)
+                db_payload = {
+                    "run_id": run_id,
+                    "package_name": pkg.name,
+                    "version": pkg.version,
+                    "experiment_mode": res.experiment_mode,
+                    "prompt_strategy": strategy,
+                    "detector": res.detector,
+                    "artifact_filename": artifact_filename or "",
+                    "artifact_url": artifact_url,
+                    "source_index_url": source_index_url,
+                    "sample_role": sample_role,
+                    "attack_vector": attack_vector,
+                    "resolver_policy": resolver_policy,
+                    "verdict": res.verdict,
+                    "ground_truth": gt_label,
+                    "heuristic_flags": res.heuristic_flags,
+                    "input_tokens": res.input_tokens,
+                    "output_tokens": res.output_tokens,
+                    "exec_time_ms": res.exec_time_ms,
+                    "api_cost_usd": res.api_cost_usd,
+                    "details": res.details,
+                }
+                row_id = self._db.insert_eval_result(**db_payload)
+                if raw_log is not None:
+                    raw_log.emit(
+                        "db.insert_eval_result",
+                        package=pkg.name,
+                        version=pkg.version,
+                        artifact_filename=artifact_filename or "",
+                        detector=res.detector,
+                        mode=res.experiment_mode,
+                        strategy=strategy,
+                        payload={"row_id": row_id, "fields": db_payload},
+                    )
 
         return results
