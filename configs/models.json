@@ -7,7 +7,7 @@
     "gpt-5.4-mini":                                          [0.15,   0.60],
     "gpt-5.4":                                               [2.50,  10.00],
     "gemini-2.5-flash-lite":                                 [0.075,  0.30],
-    "gemini-3-flash":                                        [0.075,  0.30],
+    "gemini-3-flash-preview":                                [0.075,  0.30],
     "gemini-3.1-pro-preview":                                [1.25,   5.00],
     "together_ai/Qwen/Qwen3.5-9B":                           [0.20,   0.20],
     "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo":  [0.88,   0.88],
@@ -26,7 +26,7 @@
     "medium": [
       { "provider": "OpenAI", "model": "gpt-5.4-mini", "tier": "medium" },
       { "provider": "Anthropic", "model": "claude-sonnet-4-6", "tier": "medium" },
-      { "provider": "Google", "model": "gemini-3-flash", "tier": "medium" }
+      { "provider": "Google", "model": "gemini-3-flash-preview", "tier": "medium" }
     ],
     "budget": [
       { "provider": "OpenAI", "model": "gpt-5.4-nano", "tier": "budget" },

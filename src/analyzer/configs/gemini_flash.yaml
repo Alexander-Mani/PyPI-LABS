@@ -1,4 +1,4 @@
-model_name: "gemini-3-flash"
+model_name: "gemini-3-flash-preview"
 tier: "medium"
 temperature: 0.0
 proxy_url: "http://127.0.0.1:4000"

@@ -194,7 +194,7 @@ def test_smoke_main_rejects_all_models_with_explicit_models():
 def test_smoke_main_filters_gemini_from_profile_dry_run(monkeypatch, capsys):
     def fake_load_profile_models(profile_name):
         assert profile_name == "all_models"
-        return ["gpt-5.4-nano", "gemini-2.5-flash-lite", "gemini/gemini-3-flash"]
+        return ["gpt-5.4-nano", "gemini-2.5-flash-lite", "gemini/gemini-3-flash-preview"]
 
     def fail_urlopen(req, timeout):  # pragma: no cover - should never be called
         raise AssertionError("dry-run should not call LiteLLM")
@@ -208,7 +208,7 @@ def test_smoke_main_filters_gemini_from_profile_dry_run(monkeypatch, capsys):
     assert rc == 0
     assert "DRY-RUN gpt-5.4-nano" in captured.out
     assert "gemini-2.5-flash-lite" not in captured.out
-    assert "gemini/gemini-3-flash" not in captured.out
+    assert "gemini/gemini-3-flash-preview" not in captured.out
     assert "gemini off" in captured.out
 
 
