@@ -1,5 +1,60 @@
 # PyPi-SCADA Thesis: Writing & Engineering TODOs
 
+## 0. Final-Week Canonical-v2 Execution Plan (Added 2026-04-17)
+
+Operator discipline for the final stretch through SM3. Report submission deadline is Friday 2026-04-24; SM3 runs 2026-04-27 through 2026-04-29.
+
+### Pre-flight discipline before any canonical-v2 run
+
+1. **Per-tier LiteLLM smoke.** Run `python scripts/litellm_smoke.py --profile budget`, then `medium`, then `frontier`, then `all_models`, in order. Each smoke call is cheap and catches model-ID drift, provider-alias changes, and 5xx throttling before the tier burns real budget.
+2. **DB archive between tiers.** Archive the current `eval_results.db` before each tier (e.g., using `scripts/archive_eval_db.py` or the Review TUI's DB section). This localises any mid-run routing bug to one tier's rows instead of the full canonical set.
+3. **Run-id prefix is mandatory.** Every canonical execution passes `--run-id-prefix canonical-v2` so the thesis metric filter `run_id LIKE 'canonical-v2-%'` captures exactly those rows. The Review TUI rewrites this automatically; manual CLI invocations must set it.
+4. **Confirm `include_controls` at the CLI.** The canonical profiles (`budget`, `budget_no_gemini`, `medium`, `frontier`, `all_models`) do NOT set `include_controls: true` in their YAML; only the `test` and `test_no_gemini` profiles do. Canonical-v2 runs that need benign control packages (boto3, botocore, etc.) must pass `--include-controls` explicitly. Resolution rule in `evaluate.py`: `include_controls=args.include_controls or bool(profile_include_controls)` — the CLI flag can enable but not disable the profile setting.
+5. **Pre-canonical investigations resolved.** Do not burn frontier budget until the `nmap-python` hybrid-FN gap (see `src/analyzer/CONCERNS.md` §7) is either fixed or documented as an intentional prompt-strategy finding.
+
+### Tier sequencing
+
+Run in order, one tier per day, budget → frontier, to bound blast-radius of any routing/provider failure and to stage cost exposure.
+
+1. **Budget** — smallest cost, fastest wall-time; full malicious set plus benign controls.
+2. **Medium** — same sample set; gates frontier.
+3. **Frontier** — same sample set, most expensive; run only after budget + medium complete cleanly.
+4. **all_models** — aggregate pass if residual budget allows.
+
+Archive the DB between tiers. Treat any mid-tier failure as "do not proceed to the next tier until root-caused."
+
+### Timeline
+
+| Date | Milestone |
+|---|---|
+| 2026-04-18 (Sat) | Resolve `nmap-python` hybrid-FN investigation; run budget-tier canonical-v2 |
+| 2026-04-19 (Sun) | Medium-tier canonical-v2; frontier-tier LiteLLM smoke |
+| 2026-04-20 (Mon) | Frontier-tier canonical-v2; populate result tables from `canonical-v2` rows; first-interpretation paragraphs for RQ1/RQ2/RQ3 |
+| 2026-04-21 (Tue) | Discussion rewrite with actual numbers; Timewarrior hours export; final Overleaf compile |
+| 2026-04-22 (Wed) | Spellcheck pass; final PDF; submit to Canvas/supervisor/examiner |
+| 2026-04-23 (Thu) | Buffer day for reruns if a provider outage requires one |
+| 2026-04-24 (Fri) | **Report submission deadline (two working days before SM3)** |
+| 2026-04-25 – 04-26 (Sat/Sun) | Slide build; two dry-run presentation rehearsals |
+| 2026-04-27 – 04-29 (Mon–Wed) | SM3 meeting |
+
+### Optional weekend work (skip if time-constrained)
+
+- **Frontier-recall robustness check.** One frontier model × named sample (`colourama`) vs obscure typosquat. Details in `src/analyzer/CONCERNS.md` §8. Directly strengthens the external-validity discussion under RQ1, but the thesis is defensible without it as long as the limitation is explicitly named.
+
+### Scope lock — do not do between now and SM3
+
+- Do not add a new detector, model, profile, or comparison axis. Scope creep this close to submission is a bigger risk than any marginal finding it might produce.
+- Do not change evaluation-metric definitions after canonical-v2 runs start. Freezes must hold or the `canonical-v2` filter loses its meaning.
+- Do not swap models mid-tier if one is slow or throttled. Preserve the error row (`experiment_mode="error"`) and move on; variance across models is itself evidence for RQ3 (cost / reliability / reproducibility limits).
+
+### Presentation-framing reminders
+
+- **Lean into proof-of-concept framing.** Nine malicious packages is a curated hard-case set, not a benchmark. Present behavioural trends and per-vector observations, not generalizable detection rates. The validity section already says this; keep the same framing in slides and discussion so the examiner does not have to redescribe the scope themselves.
+- **Own the solo-work + AI-assisted-review compensation honestly.** `CODE_REVIEW_METHOD.md` documents how AI-assisted review stood in for peer review in a solo capstone. State this in the AI-usage disclosure and do not downplay it — transparency is the right move with examiners, and the disclosure is already in the thesis (`sec:ai_usage`).
+- **Narrate the risk diary.** Decisions 1–9 and R-01 through R-06 are specific, defensible, and uncommon in undergraduate work. In the 15–20 minute presentation, budget at least one slide and one minute to walk through two or three of them in the examiner's direction; do not let them stay buried in the report.
+
+---
+
 ## 1. Writing: Incorporate "Active Interception" Concept (High Priority)
 *Drafting notes to frame the Entry-Point Engine as a prototype for real-time proxy defense.*
 

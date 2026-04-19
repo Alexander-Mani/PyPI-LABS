@@ -255,3 +255,43 @@ and engineering process is disciplined.
 **Acceptance criteria before final presentation:**
 - One complete reproducible run package is available end-to-end.
 - Supervisor/examiner can replay the workflow from documented steps.
+
+---
+
+## 7. Hybrid vs Raw Divergence on Typosquat Samples
+
+**Status: Observed in test-profile validation run `43fae0ba-411f-47d4-b961-def9f3b17822`. Investigate before canonical-v2 budget burn.**
+
+**Affected package:** `nmap-python` (Typosquatting, confirmed malicious)
+
+**Observation:** In the 4-package test-profile run (2 control + 2 malicious), `nmap-python` was flagged malicious by every static detector (Bandit, Semgrep, GuardDog) and by most `llm_raw` calls across all budget LLMs, but produced inconsistent false-negative outcomes under `hybrid` mode — multiple budget providers returned `verdict=False` on the hybrid prompt while returning `verdict=True` on the same sample under `llm_raw`. The sibling typosquat sample `colourama` did not exhibit the same gap; it was flagged consistently across hybrid and raw.
+
+**Why it matters:** If the gap is a prompt-template or entry-point-extraction artefact (e.g., the hybrid path dropping a file the LLM needs for the verdict that `llm_raw` preserves), canonical-v2 `hybrid` numbers will systematically under-detect a class of typosquats across every tier — not just budget. The finding then becomes a measurement artefact rather than a real RQ signal on prompt-strategy sensitivity.
+
+**What to do before canonical-v2:**
+1. Read the rendered `hybrid` prompt blob for `nmap-python` in the validation run and compare to the `llm_raw` payload. Identify which code content differs between the two modes.
+2. Inspect the LLM's returned `reasoning` text on the hybrid FN rows — does the model explicitly reason "insufficient evidence" or does it confidently declare benign on the trimmed content?
+3. If the gap is an extraction/template bug, fix it and re-run the test profile before spending frontier-tier API budget.
+4. If the gap reflects genuine prompt-sensitivity behaviour, leave it in canonical-v2 and document it as an RQ2/RQ-prompt-strategy finding rather than silently averaging it away.
+
+---
+
+## 8. Frontier-Model Recognition of Named Incident Packages
+
+**Status: Pre-existing limitation; acknowledged in thesis validity section as Decision 6 residual. Robustness check below is optional weekend work.**
+
+**Affected packages:** `colourama`, `num2words`, `ultralytics` — any malicious sample whose compromise is a public incident with published writeups.
+
+**Observation:** Frontier-tier LLMs are trained on public security writeups. When the package name alone signals a known incident (`colourama` as the classic `colorama` typosquat, `ultralytics 8.3.41` as a GitHub Actions supply-chain compromise, `num2words 0.5.15` as a known ATO case), the model may be recalling the published incident rather than reasoning from the supplied source code.
+
+**Why it matters:** A frontier-LLM "correct" verdict on `colourama` does not prove the LLM can detect unseen typosquats — it may prove only that the LLM read about `colourama` during pre-training. This is the residual risk of Decision 6 (folder-based ground truth, `docs/ops/RISK_DIARY.md`). It weakens external-validity claims under RQ1 unless explicitly controlled for.
+
+**Robustness-check suggestion (time-permitting, weekend work):**
+1. Pick one frontier model and capture its `reasoning` text for a named incident sample (`colourama`) alongside a structurally similar but less-published sample — either a less-famous typosquat in the dataset, or a synthetic stub reproducing the same `typosquat + install-hook exfiltration` pattern under a non-famous name.
+2. If the reasoning text on the named sample cites the public incident ("the Colourama typosquat targets colorama users") while the obscure sample's reasoning reasons purely from code patterns (`"setup.py contains a base64-decoded URL fetch"`), that is evidence of recall contamination.
+3. If the reasoning character is similar across both, the bias is smaller than feared.
+
+**What to do in the thesis regardless of whether the check runs:**
+- Continue to name this as a Decision 6 residual in the Validity section.
+- If the robustness check completes: report both named and obscure verdicts side-by-side in a dedicated subsection, include one excerpt of the reasoning text from each, and interpret honestly.
+- If the robustness check does not run: state explicitly that this remained an uncontrolled variable and that frontier-tier detection numbers should be read with that caveat.
