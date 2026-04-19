@@ -106,3 +106,43 @@ def test_controller_emits_task_and_result_events():
     }]]
     assert result_events == [("fake_static", "zero_shot", "static")]
     assert len(db.rows) == 1
+
+
+def test_progress_visible_rows_prioritize_errors_and_running():
+    from progress_ui import AnalyzerProgress, MAX_VISIBLE_DETECTOR_ROWS, _DetectorRow
+
+    rows = [
+        _DetectorRow(detector=f"done-{i}", mode="hybrid", strategy="zero_shot", state="done", elapsed_s=1.0)
+        for i in range(MAX_VISIBLE_DETECTOR_ROWS + 5)
+    ]
+    rows.append(_DetectorRow(detector="broken", mode="static", strategy="zero_shot", state="error", error="missing"))
+    rows.append(_DetectorRow(detector="slow", mode="llm_raw", strategy="few_shot", state="queued/running"))
+
+    visible, hidden = AnalyzerProgress._visible_detector_rows(rows)
+    visible_names = {row.detector for row in visible}
+
+    assert len(visible) == MAX_VISIBLE_DETECTOR_ROWS
+    assert hidden == len(rows) - MAX_VISIBLE_DETECTOR_ROWS
+    assert "broken" in visible_names
+    assert "slow" in visible_names
+
+
+def test_progress_refresh_is_throttled(monkeypatch):
+    from progress_ui import AnalyzerProgress, MIN_REFRESH_INTERVAL_S
+
+    progress = AnalyzerProgress(enabled=False, total_samples=1, run_id="run", run_label="profile:test")
+    calls = []
+
+    class LiveStub:
+        def refresh(self):
+            calls.append("refresh")
+
+    progress._live = LiveStub()
+    times = iter([10.0, 10.1, 10.1 + MIN_REFRESH_INTERVAL_S + 0.01])
+    monkeypatch.setattr("progress_ui.time.monotonic", lambda: next(times))
+
+    progress.refresh()
+    progress.refresh()
+    progress.refresh()
+
+    assert calls == ["refresh", "refresh"]

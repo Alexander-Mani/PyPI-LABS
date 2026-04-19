@@ -31,6 +31,8 @@ except ImportError:  # pragma: no cover - deployment dependency guard
 
 
 PROVIDERS = ("anthropic", "openai", "google", "together", "other")
+MAX_VISIBLE_DETECTOR_ROWS = 18
+MIN_REFRESH_INTERVAL_S = 0.75
 
 
 def should_use_progress(mode: str, *, dry_run_resolution: bool) -> bool:
@@ -122,6 +124,7 @@ class AnalyzerProgress:
         self._rows: dict[tuple[str, str, str], _DetectorRow] = {}
         self._costs = CostLedger()
         self._lock = threading.RLock()
+        self._last_refresh = 0.0
         self._console = Console(stderr=True) if self.enabled and Console is not None else None
         self._live = None
 
@@ -134,9 +137,9 @@ class AnalyzerProgress:
             self._live = Live(
                 self,
                 console=self._console,
-                refresh_per_second=2,
+                refresh_per_second=1,
                 transient=False,
-                vertical_overflow="visible",
+                vertical_overflow="ellipsis",
             )
             self._live.start()
         return self
@@ -164,7 +167,7 @@ class AnalyzerProgress:
             self.heuristics = "pending"
             self.package_verdict = ""
             self._rows.clear()
-        self.refresh()
+        self.refresh(force=True)
 
     def set_detector_tasks(self, tasks: list[dict[str, str]]) -> None:
         if not self.enabled:
@@ -181,7 +184,7 @@ class AnalyzerProgress:
                 )
                 for task in tasks
             }
-        self.refresh()
+        self.refresh(force=True)
 
     def record_extraction(
         self,
@@ -260,9 +263,14 @@ class AnalyzerProgress:
             self._rows.clear()
         self.refresh()
 
-    def refresh(self) -> None:
-        if self._live is not None:
-            self._live.refresh()
+    def refresh(self, *, force: bool = False) -> None:
+        if self._live is None:
+            return
+        now = time.monotonic()
+        if not force and now - self._last_refresh < MIN_REFRESH_INTERVAL_S:
+            return
+        self._last_refresh = now
+        self._live.refresh()
 
     def _render(self):
         if Group is None or Panel is None or Table is None:
@@ -309,8 +317,9 @@ class AnalyzerProgress:
             table.add_row("-", "-", "-", "pending", "-", "-", "")
             return table
 
+        visible_rows, hidden = self._visible_detector_rows(rows)
         now = time.monotonic()
-        for row in rows:
+        for row in visible_rows:
             elapsed = row.elapsed_s
             if elapsed is None:
                 elapsed = max(now - row.started_at, 0.0)
@@ -325,6 +334,16 @@ class AnalyzerProgress:
                 f"${row.cost_usd:.5f}" if row.cost_usd else "-",
                 detail,
             )
+        if hidden:
+            table.add_row(
+                "...",
+                "...",
+                "...",
+                f"showing {len(visible_rows)}/{len(rows)}",
+                "-",
+                "-",
+                "Full detector details are in the analyzer log and raw trace.",
+            )
         return table
 
     def _cost_table(self):
@@ -337,6 +356,24 @@ class AnalyzerProgress:
             f"${self._costs.total:.4f}",
         )
         return table
+
+
+    @staticmethod
+    def _visible_detector_rows(rows: list[_DetectorRow]) -> tuple[list[_DetectorRow], int]:
+        if len(rows) <= MAX_VISIBLE_DETECTOR_ROWS:
+            return rows, 0
+
+        priority = {"error": 0, "queued/running": 1, "done": 2}
+
+        def sort_key(row: _DetectorRow):
+            state_key = priority.get(row.state, 3)
+            elapsed = row.elapsed_s if row.elapsed_s is not None else time.monotonic() - row.started_at
+            return (state_key, -elapsed, row.detector, row.mode, row.strategy)
+
+        selected = sorted(rows, key=sort_key)[:MAX_VISIBLE_DETECTOR_ROWS]
+        selected_keys = {(r.detector, r.mode, r.strategy) for r in selected}
+        ordered = [row for row in rows if (row.detector, row.mode, row.strategy) in selected_keys]
+        return ordered, len(rows) - len(ordered)
 
     @staticmethod
     def _key(detector: str, mode: str, strategy: str) -> tuple[str, str, str]:

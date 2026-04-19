@@ -327,9 +327,14 @@ def _shell(command: str) -> tuple[str, ...]:
     return ("bash", "-lc", command)
 
 
+def _context_path_prefix(context: ReviewContext) -> str:
+    python_dir = Path(context.python_executable).parent
+    return f"export PATH={shlex.quote(str(python_dir))}:$PATH"
+
+
 def _shell_in_context(context: ReviewContext, command: str, *, user: str | None = None, cwd: Path | None = None) -> tuple[str, ...]:
     cwd = cwd or context.repo_root
-    wrapped = f"cd {shlex.quote(str(cwd))} && {command}"
+    wrapped = f"cd {shlex.quote(str(cwd))} && {_context_path_prefix(context)} && {command}"
     if user:
         return ("sudo", "-u", user, "bash", "-lc", wrapped)
     return ("bash", "-lc", wrapped)

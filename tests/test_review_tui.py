@@ -318,3 +318,22 @@ def test_mixed_root_warning_detects_local_script_with_deployed_python(tmp_path):
 
     assert review_tui._command_mentions_mixed_roots(mixed, context) is True
     assert review_tui._command_mentions_mixed_roots(clean, context) is False
+
+
+def test_context_shell_prepends_selected_python_bin_to_path(tmp_path):
+    deployed = tmp_path / "deployed"
+    deployed.mkdir()
+    deployed_python = deployed / "venv" / "bin" / "python"
+    context = review_tui.ReviewContext(
+        name="deployed",
+        repo_root=deployed,
+        python_executable=str(deployed_python),
+        runner_user="pypi-runner",
+    )
+
+    command = review_tui._shell_in_context(context, "python src/analyzer/evaluate.py", user="pypi-runner")
+    preview = review_tui.command_preview(command)
+
+    assert command[:3] == ("sudo", "-u", "pypi-runner")
+    assert f"export PATH={deployed_python.parent}:$PATH" in preview
+    assert "python src/analyzer/evaluate.py" in preview

@@ -32,6 +32,7 @@ def _pkg() -> PackageInfo:
 
 
 def test_guarddog_uses_source_only_rule_allowlist(monkeypatch):
+    monkeypatch.setattr(adapters, "_resolve_tool_executable", lambda tool: f"/venv/bin/{tool}")
     calls: list[list[str]] = []
 
     def fake_run(cmd, capture_output, text, timeout):
@@ -55,7 +56,8 @@ def test_guarddog_uses_source_only_rule_allowlist(monkeypatch):
     )
 
     cmd = calls[0]
-    assert cmd[:3] == ["guarddog", "pypi", "scan"]
+    assert Path(cmd[0]).name == "guarddog"
+    assert cmd[1:3] == ["pypi", "scan"]
     assert "--output-format=json" in cmd
     assert "--exclude-rules" not in cmd
     assert "typosquatting" not in cmd
@@ -73,6 +75,8 @@ def test_guarddog_uses_source_only_rule_allowlist(monkeypatch):
 
 
 def test_guarddog_parses_dict_output(monkeypatch):
+    monkeypatch.setattr(adapters, "_resolve_tool_executable", lambda tool: f"/venv/bin/{tool}")
+
     def fake_run(cmd, capture_output, text, timeout):
         return subprocess.CompletedProcess(
             cmd,
@@ -91,6 +95,8 @@ def test_guarddog_parses_dict_output(monkeypatch):
 
 
 def test_guarddog_empty_findings_are_benign_static(monkeypatch):
+    monkeypatch.setattr(adapters, "_resolve_tool_executable", lambda tool: f"/venv/bin/{tool}")
+
     def fake_run(cmd, capture_output, text, timeout):
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"results": []}), stderr="")
 
@@ -105,6 +111,8 @@ def test_guarddog_empty_findings_are_benign_static(monkeypatch):
 
 
 def test_guarddog_subprocess_failure_is_error(monkeypatch):
+    monkeypatch.setattr(adapters, "_resolve_tool_executable", lambda tool: f"/venv/bin/{tool}")
+
     def fake_run(cmd, capture_output, text, timeout):
         return subprocess.CompletedProcess(cmd, 2, stdout="", stderr="network unavailable")
 
@@ -120,6 +128,8 @@ def test_guarddog_subprocess_failure_is_error(monkeypatch):
 
 
 def test_guarddog_reported_rule_errors_are_errors(monkeypatch):
+    monkeypatch.setattr(adapters, "_resolve_tool_executable", lambda tool: f"/venv/bin/{tool}")
+
     def fake_run(cmd, capture_output, text, timeout):
         return subprocess.CompletedProcess(
             cmd,
@@ -142,6 +152,7 @@ def test_guarddog_reported_rule_errors_are_errors(monkeypatch):
 
 
 def test_semgrep_uses_checked_in_offline_rules(monkeypatch):
+    monkeypatch.setattr(adapters, "_resolve_tool_executable", lambda tool: f"/venv/bin/{tool}")
     calls: list[list[str]] = []
 
     def fake_run(cmd, capture_output, text, timeout, **kwargs):
@@ -162,7 +173,8 @@ def test_semgrep_uses_checked_in_offline_rules(monkeypatch):
     result = StaticAdapter("semgrep").run(_pkg())
 
     cmd = calls[0]
-    assert cmd[:4] == ["semgrep", "scan", "--config", str(SEMGREP_RULES_PATH)]
+    assert Path(cmd[0]).name == "semgrep"
+    assert cmd[1:4] == ["scan", "--config", str(SEMGREP_RULES_PATH)]
     assert SEMGREP_RULES_PATH.is_file()
     assert "p/python" not in cmd
     assert "--metrics" in cmd
@@ -175,6 +187,8 @@ def test_semgrep_uses_checked_in_offline_rules(monkeypatch):
 
 
 def test_static_tool_subprocess_exceptions_are_errors(monkeypatch):
+    monkeypatch.setattr(adapters, "_resolve_tool_executable", lambda tool: f"/venv/bin/{tool}")
+
     def fake_run(cmd, capture_output, text, timeout, **kwargs):
         raise FileNotFoundError(f"{cmd[0]} missing")
 
@@ -187,3 +201,34 @@ def test_static_tool_subprocess_exceptions_are_errors(monkeypatch):
     assert semgrep.experiment_mode == "error"
     assert "missing" in bandit.details["error"]
     assert "missing" in semgrep.details["error"]
+
+
+def test_static_tool_resolves_from_active_python_bin(monkeypatch, tmp_path):
+    bin_dir = tmp_path / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    tool = bin_dir / "bandit"
+    tool.write_text("#!/bin/sh\n", encoding="utf-8")
+    tool.chmod(0o755)
+
+    monkeypatch.setattr(adapters.shutil, "which", lambda name: None)
+    monkeypatch.setattr(adapters.sys, "executable", str(bin_dir / "python"))
+
+    assert adapters._resolve_tool_executable("bandit") == str(tool)
+
+
+def test_static_tool_missing_error_lists_checked_paths(monkeypatch, tmp_path):
+    bin_dir = tmp_path / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    monkeypatch.setattr(adapters.shutil, "which", lambda name: None)
+    monkeypatch.setattr(adapters.sys, "executable", str(bin_dir / "python"))
+
+    try:
+        adapters._resolve_tool_executable("semgrep")
+    except FileNotFoundError as exc:
+        message = str(exc)
+    else:  # pragma: no cover - defensive failure path
+        raise AssertionError("missing tool should raise")
+
+    assert "semgrep" in message
+    assert str(bin_dir / "semgrep") in message
+    assert "active venv" in message

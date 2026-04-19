@@ -15,7 +15,9 @@ from __future__ import annotations
 import hashlib
 import json as _json
 import os as _os
+import shutil
 import subprocess
+import sys
 import tempfile
 import time as _time
 from abc import ABC, abstractmethod
@@ -155,6 +157,24 @@ def _blob_text(raw_log, kind: str, text: str, suffix: str = ".txt"):
     return raw_log.blob_text(kind, text or "", suffix=suffix)
 
 
+def _resolve_tool_executable(tool: str) -> str:
+    """Resolve a console script even when the venv was not shell-activated."""
+    from_path = shutil.which(tool)
+    if from_path:
+        return from_path
+
+    candidates = [Path(sys.executable).resolve().parent / tool]
+    checked = [str(candidate) for candidate in candidates]
+    for candidate in candidates:
+        if candidate.exists() and _os.access(candidate, _os.X_OK):
+            return str(candidate)
+
+    raise FileNotFoundError(
+        f"{tool!r} executable not found. Checked PATH and: {', '.join(checked)}. "
+        "Install project requirements in the active venv or launch through deployment/TUI with the venv bin on PATH."
+    )
+
+
 # ---------------------------------------------------------------------------
 # StaticAdapter — SAST tools
 # ---------------------------------------------------------------------------
@@ -204,7 +224,7 @@ class StaticAdapter(DetectorAdapter):
         return self._run_semgrep(target, raw_log=raw_log, trace_context=trace_context)
 
     def _run_bandit(self, target: Path, *, raw_log=None, trace_context: dict | None = None) -> EvalDetectionResult:
-        cmd = ["bandit", "-r", str(target), "-f", "json", "-q"]
+        cmd = [_resolve_tool_executable("bandit"), "-r", str(target), "-f", "json", "-q"]
         if raw_log is not None:
             raw_log.emit(
                 "static.command.start",
@@ -296,7 +316,7 @@ class StaticAdapter(DetectorAdapter):
                 "SEMGREP_SEND_METRICS": "off",
             }
             cmd = [
-                "semgrep",
+                _resolve_tool_executable("semgrep"),
                 "scan",
                 "--config",
                 str(SEMGREP_RULES_PATH),
@@ -461,7 +481,7 @@ class GuardDogAdapter(DetectorAdapter):
 
     def _command(self, target: Path) -> list[str]:
         cmd = [
-            "guarddog",
+            _resolve_tool_executable("guarddog"),
             "pypi",
             "scan",
             str(target),
