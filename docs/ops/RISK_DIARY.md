@@ -223,6 +223,9 @@ incorrectly labeled as malicious. This leads to:
 reports for `num2words 0.5.15` during its training, it may flag the package
 based on memory rather than code analysis. This is documented as a limitation
 in the final thesis and addressed via the "Reasoning" analysis in the rubric.
+The source-free `scripts/model_memory_probe.py` sidecar records whether models
+recognize selected package names/versions without source evidence; those JSONL
+results are validity evidence only and are not included in detector metrics.
 
 ---
 

@@ -278,7 +278,9 @@ and engineering process is disciplined.
 
 ## 8. Frontier-Model Recognition of Named Incident Packages
 
-**Status: Pre-existing limitation; acknowledged in thesis validity section as Decision 6 residual. Robustness check below is optional weekend work.**
+**Status: Pre-existing limitation; acknowledged in thesis validity section as
+Decision 6 residual. Controlled with a source-free sidecar probe, not with
+benchmark metrics.**
 
 **Affected packages:** `colourama`, `num2words`, `ultralytics` — any malicious sample whose compromise is a public incident with published writeups.
 
@@ -286,12 +288,33 @@ and engineering process is disciplined.
 
 **Why it matters:** A frontier-LLM "correct" verdict on `colourama` does not prove the LLM can detect unseen typosquats — it may prove only that the LLM read about `colourama` during pre-training. This is the residual risk of Decision 6 (folder-based ground truth, `docs/ops/RISK_DIARY.md`). It weakens external-validity claims under RQ1 unless explicitly controlled for.
 
-**Robustness-check suggestion (time-permitting, weekend work):**
-1. Pick one frontier model and capture its `reasoning` text for a named incident sample (`colourama`) alongside a structurally similar but less-published sample — either a less-famous typosquat in the dataset, or a synthetic stub reproducing the same `typosquat + install-hook exfiltration` pattern under a non-famous name.
-2. If the reasoning text on the named sample cites the public incident ("the Colourama typosquat targets colorama users") while the obscure sample's reasoning reasons purely from code patterns (`"setup.py contains a base64-decoded URL fetch"`), that is evidence of recall contamination.
-3. If the reasoning character is similar across both, the bias is smaller than feared.
+**Implemented control:**
+`scripts/model_memory_probe.py` runs a name/version-only recognition probe
+through LiteLLM. It sends no source code, no extracted evidence, no ground-truth
+label, no Backstabber's Knife reference, and no dataset membership. Cases live
+in `configs/model_memory_probe_cases.json` and include known public incident
+names plus benign/decoy controls. Results are written as JSONL under
+`logs/model_memory_probe/`.
 
-**What to do in the thesis regardless of whether the check runs:**
+Example:
+
+```bash
+python scripts/model_memory_probe.py --profile budget --dry-run
+python scripts/model_memory_probe.py --profile frontier
+```
+
+**Interpretation rule:**
+The probe is not a contamination detector and cannot prove that a model was or
+was not trained on a specific package. It only records whether a model can
+recognize named incidents without seeing source evidence. If a model recognizes
+`colourama==0.1.6` or `ultralytics==8.3.41` in this source-free setting, final
+thesis interpretation should treat code-based success on those packages as
+potentially aided by prior public knowledge. If the model does not recognize a
+case, that still does not prove the benchmark verdict was source-derived.
+
+**What to do in the thesis:**
 - Continue to name this as a Decision 6 residual in the Validity section.
-- If the robustness check completes: report both named and obscure verdicts side-by-side in a dedicated subsection, include one excerpt of the reasoning text from each, and interpret honestly.
-- If the robustness check does not run: state explicitly that this remained an uncontrolled variable and that frontier-tier detection numbers should be read with that caveat.
+- Report source-free probe results in an appendix or validity subsection,
+  separate from the detector metrics table.
+- Use the probe as a sanity check when interpreting unusually strong results on
+  famous public incidents, not as a row-level correction factor.

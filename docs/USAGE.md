@@ -286,6 +286,20 @@ investigation, inspects extracted package evidence through constrained tools,
 and returns a structured verdict. It does not install packages, execute package
 code, run shell commands, or evaluate Codex/Claude Code directly.
 
+The model-memory probe is a separate validity sidecar for checking whether
+models recognize package names and versions from public incident reporting. It
+does not send source code, ground-truth labels, Backstabber's Knife references,
+or dataset membership, and it does not write `eval_results.db` rows.
+
+```bash
+# Preview the name/version cases and selected models without API calls.
+python scripts/model_memory_probe.py --profile budget --dry-run
+
+# Run the source-free recognition probe and write JSONL under logs/model_memory_probe/.
+python scripts/model_memory_probe.py --profile budget
+python scripts/model_memory_probe.py --profile frontier --gemini off
+```
+
 LKGR samples remain part of the dataset for provenance and baseline context, but
 canonical scoring uses only the latest labelled stable version per package. Old
 database rows may contain `sample_limits` in `resolver_policy`; canonical runs
@@ -331,7 +345,9 @@ The canonical experiment actions are organized so static baselines run only via
 detectors and cover only hybrid, raw LLM, and agentic adapters. Non-agentic and
 agentic-only subset lanes remain available for cost and latency control. The
 Gemini ON/OFF toggle rewrites deployment, dry-run, smoke, and experiment
-commands.
+commands. The TUI also exposes a source-free model-memory probe preview under
+`Dry Runs` and paid probe actions under `Deployment`; these write JSONL audit
+records only and are not benchmark detector runs.
 
 The TUI prints the exact command before running each action and asks for
 confirmation before actions that mutate the local DB, change deployment state,

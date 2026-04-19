@@ -38,11 +38,15 @@ def test_action_registry_contains_expected_sectioned_actions(tmp_path):
 
     expected = {
         "models-preview-all",
+        "memory-probe-preview",
         "models-smoke-all",
         "models-smoke-budget",
         "models-smoke-medium",
         "models-smoke-frontier",
         "models-smoke-all-models",
+        "memory-probe-budget",
+        "memory-probe-frontier",
+        "memory-probe-all-models",
         "analyzer-dry-run-test",
         "analyzer-dry-run-test-no-gemini",
         "experiment-tiny-test",
@@ -115,6 +119,9 @@ def test_safety_and_confirmation_policy(tmp_path):
 
     assert by_id["models-preview-all"].safety == review_tui.SAFETY_SAFE
     assert by_id["models-preview-all"].confirm is False
+    assert by_id["memory-probe-preview"].safety == review_tui.SAFETY_SAFE
+    assert by_id["memory-probe-budget"].safety == review_tui.SAFETY_API_COST
+    assert by_id["memory-probe-budget"].confirm is True
     assert by_id["models-smoke-all"].safety == review_tui.SAFETY_API_COST
     assert by_id["models-smoke-all"].confirm is True
     assert by_id["experiment-full-budget"].requires_clean_db is True
@@ -152,6 +159,8 @@ def test_gemini_toggle_changes_generated_commands(tmp_path):
     disabled_eval = review_tui.action_by_id("experiment-full-budget", disabled)
     enabled_smoke = review_tui.action_by_id("models-smoke-all", enabled)
     disabled_smoke = review_tui.action_by_id("models-smoke-all", disabled)
+    enabled_probe = review_tui.action_by_id("memory-probe-budget", enabled)
+    disabled_probe = review_tui.action_by_id("memory-probe-budget", disabled)
     enabled_deploy = review_tui.action_by_id("deployment-setup", enabled)
     disabled_deploy = review_tui.action_by_id("deployment-setup", disabled)
 
@@ -159,6 +168,8 @@ def test_gemini_toggle_changes_generated_commands(tmp_path):
     assert disabled_eval.command[disabled_eval.command.index("--gemini") + 1] == "off"
     assert enabled_smoke.command[enabled_smoke.command.index("--gemini") + 1] == "on"
     assert disabled_smoke.command[disabled_smoke.command.index("--gemini") + 1] == "off"
+    assert enabled_probe.command[enabled_probe.command.index("--gemini") + 1] == "on"
+    assert disabled_probe.command[disabled_probe.command.index("--gemini") + 1] == "off"
     assert "GEMINI=on" in enabled_deploy.command[2]
     assert "GEMINI=off" in disabled_deploy.command[2]
 
@@ -200,6 +211,23 @@ def test_experiment_suite_has_deduplicated_lanes(tmp_path):
     assert "--skip-static" in non_agentic.command
     assert "--skip-agentic" in non_agentic.command
     assert "--only-agentic" in agentic.command
+
+
+def test_model_memory_probe_actions_are_source_free_sidecars(tmp_path):
+    actions = review_tui.build_actions(tmp_path, python_executable="/py")
+
+    preview = review_tui.action_by_id("memory-probe-preview", actions)
+    budget = review_tui.action_by_id("memory-probe-budget", actions)
+    frontier = review_tui.action_by_id("memory-probe-frontier", actions)
+    all_models = review_tui.action_by_id("memory-probe-all-models", actions)
+
+    assert preview.section == review_tui.SECTION_DRY_RUNS
+    assert "--dry-run" in preview.command
+    assert budget.section == review_tui.SECTION_DEPLOYMENT
+    assert budget.command[:2] == ("/py", str(tmp_path / "scripts" / "model_memory_probe.py"))
+    assert budget.command[budget.command.index("--profile") + 1] == "budget"
+    assert frontier.double_confirm is True
+    assert all_models.double_confirm is True
 
 
 def test_full_model_runs_skip_static_for_every_profile(tmp_path):
@@ -332,6 +360,37 @@ contexts:
     assert context.repo_root == deployed.resolve()
     assert context.python_executable == str(deployed_python.resolve())
     assert context.runner_user == "pypi-runner"
+
+
+def test_deployed_context_rejects_system_python_fallback(tmp_path):
+    deployed = tmp_path / "deployed"
+    deployed.mkdir()
+    config = tmp_path / "review_tui.yaml"
+    config.write_text(
+        f"""
+default_context: deployed
+contexts:
+  deployed:
+    repo_root: {deployed}
+    python: null
+    runner_user: pypi-runner
+    litellm_log: /tmp/litellm.log
+    deployment_cwd: {tmp_path}
+    deployment_script: {tmp_path / 'deployment.sh'}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    try:
+        review_tui.resolve_review_context(
+            "deployed",
+            config_path=config,
+            python_override=sys.executable,
+        )
+    except SystemExit as exc:
+        assert "Python outside the deployed repo" in str(exc)
+    else:
+        raise AssertionError("deployed context accepted system Python fallback")
 
 
 def test_deployed_context_commands_use_deployed_repo_and_python(tmp_path):

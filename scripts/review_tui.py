@@ -109,6 +109,20 @@ def _clean_config_value(value: str) -> str | None:
 def _parse_review_tui_config(path: Path) -> dict:
     if not path.exists():
         return {}
+    try:
+        import yaml  # type: ignore
+
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            contexts = loaded.get("contexts")
+            if contexts is None or isinstance(contexts, dict):
+                loaded.setdefault("contexts", {})
+                return loaded
+    except Exception:
+        # Keep the tiny fallback parser so the TUI can run in minimal Python
+        # environments where PyYAML is not installed.
+        pass
+
     data: dict = {"contexts": {}}
     current_context: str | None = None
     in_contexts = False
@@ -172,6 +186,24 @@ def _context_ready(context: ReviewContext) -> bool:
     return context.repo_root.exists() and Path(context.python_executable).exists()
 
 
+def _validate_review_context(context: ReviewContext, *, python_override: str | None = None) -> None:
+    if context.name != "deployed":
+        return
+
+    python_path = Path(context.python_executable)
+    try:
+        python_path.resolve().relative_to(context.repo_root.resolve())
+        return
+    except ValueError:
+        source = "--python override" if python_override else "context config/fallback"
+        raise SystemExit(
+            "HALT: deployed Review TUI context resolved to a Python outside the "
+            f"deployed repo ({python_path}) from {source}. This usually means the "
+            "configured venv path was not read and commands would run with system "
+            f"Python instead of {context.repo_root / 'venv' / 'bin' / 'python'}."
+        )
+
+
 def resolve_review_context(
     requested: str = "auto",
     *,
@@ -206,6 +238,7 @@ def resolve_review_context(
             deployment_cwd=context.deployment_cwd,
             deployment_script=context.deployment_script,
         )
+    _validate_review_context(context, python_override=python_override)
     return context
 
 
@@ -513,6 +546,9 @@ def build_actions(
     def smoke(*args: str) -> tuple[str, ...]:
         return _context_script(context, "scripts/litellm_smoke.py", *args, "--gemini", gemini)
 
+    def memory_probe(*args: str) -> tuple[str, ...]:
+        return _context_script(context, "scripts/model_memory_probe.py", *args, "--gemini", gemini)
+
     def deploy(
         profile: str,
         *,
@@ -553,6 +589,13 @@ def build_actions(
             title="Preview all LiteLLM models",
             description="List configured LiteLLM models without API calls; Gemini follows toggle.",
             command=smoke("--all-models", "--dry-run"),
+        ),
+        ReviewAction(
+            id="memory-probe-preview",
+            section=SECTION_DRY_RUNS,
+            title="Preview model memory probe",
+            description="Show selected models and name-only incident-recognition cases without API calls.",
+            command=memory_probe("--profile", "budget", "--dry-run"),
         ),
         ReviewAction(
             id="models-smoke-all",
@@ -618,6 +661,17 @@ def build_actions(
             safety=SAFETY_API_COST,
             confirm=True,
         ))
+        if profile in {"budget", "frontier", "all_models"}:
+            actions.append(ReviewAction(
+                id=f"memory-probe-{slug}",
+                section=SECTION_DEPLOYMENT,
+                title=f"Run {label} model memory probe",
+                description="Name/version-only probe for public incident recognition; writes JSONL, not DB rows.",
+                command=memory_probe("--profile", profile),
+                safety=SAFETY_API_COST,
+                confirm=True,
+                double_confirm=high_cost,
+            ))
         actions.append(ReviewAction(
             id=f"experiment-dry-run-{slug}",
             section=SECTION_DRY_RUNS,
@@ -826,6 +880,7 @@ def build_actions(
                 "tests/test_semgrep_rules.py",
                 "tests/test_financial_validation.py",
                 "tests/test_litellm_smoke.py",
+                "tests/test_model_memory_probe.py",
                 "tests/test_review_tui.py",
                 "-q",
             ),
@@ -851,9 +906,9 @@ def build_actions(
         ReviewAction(
             id="tests-litellm-smoke",
             section=SECTION_TESTS,
-            title="Run LiteLLM smoke tests",
-            description="Run unit tests for LiteLLM smoke helper.",
-            command=_context_python_module(context, "pytest", "tests/test_litellm_smoke.py", "-q"),
+            title="Run LiteLLM helper tests",
+            description="Run unit tests for LiteLLM smoke and model-memory probe helpers.",
+            command=_context_python_module(context, "pytest", "tests/test_litellm_smoke.py", "tests/test_model_memory_probe.py", "-q"),
         ),
         ReviewAction(
             id="tests-all",
@@ -873,7 +928,8 @@ def build_actions(
                 context,
                 "bash -n deployment.sh && "
                 f"{shlex.quote(context.python_executable)} -m py_compile "
-                "scripts/review_tui.py scripts/litellm_smoke.py scripts/archive_eval_db.py src/analyzer/evaluate.py",
+                "scripts/review_tui.py scripts/litellm_smoke.py scripts/model_memory_probe.py "
+                "scripts/archive_eval_db.py src/analyzer/evaluate.py",
             ),
         ),
     ])

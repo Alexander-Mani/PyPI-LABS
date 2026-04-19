@@ -1,0 +1,77 @@
+{
+  "description": "Source-free name/version recognition cases for checking whether LLMs may recall public PyPI supply-chain incidents. Labels are never included in prompts.",
+  "cases": [
+    {
+      "id": "known-colourama",
+      "package_name": "colourama",
+      "version": "0.1.6",
+      "expected_recognized": true,
+      "category": "known_public_incident",
+      "notes": "Classic public PyPI typosquat targeting colorama."
+    },
+    {
+      "id": "known-num2words",
+      "package_name": "num2words",
+      "version": "0.5.15",
+      "expected_recognized": true,
+      "category": "known_public_incident",
+      "notes": "Publicly reported compromised release/account-takeover case."
+    },
+    {
+      "id": "known-ultralytics",
+      "package_name": "ultralytics",
+      "version": "8.3.41",
+      "expected_recognized": true,
+      "category": "known_public_incident",
+      "notes": "Publicly documented supply-chain compromise."
+    },
+    {
+      "id": "known-torchtriton",
+      "package_name": "torchtriton",
+      "version": "2.0.0+0d7e753227",
+      "expected_recognized": true,
+      "category": "known_public_incident",
+      "notes": "Public PyTorch dependency-confusion incident."
+    },
+    {
+      "id": "known-nmap-python",
+      "package_name": "nmap-python",
+      "version": "1.0.0",
+      "expected_recognized": true,
+      "category": "known_public_incident",
+      "notes": "Historical PyPI package incident in public datasets/writeups."
+    },
+    {
+      "id": "control-colorama",
+      "package_name": "colorama",
+      "version": "0.4.6",
+      "expected_recognized": false,
+      "category": "benign_target_control",
+      "notes": "Legitimate package targeted by colourama."
+    },
+    {
+      "id": "control-python-nmap",
+      "package_name": "python-nmap",
+      "version": "0.7.1",
+      "expected_recognized": false,
+      "category": "benign_target_control",
+      "notes": "Legitimate package adjacent to nmap-python."
+    },
+    {
+      "id": "decoy-colourama-tools",
+      "package_name": "colourama-tools",
+      "version": "0.1.6",
+      "expected_recognized": false,
+      "category": "synthetic_decoy",
+      "notes": "Name resembles a known incident but is not itself the named package."
+    },
+    {
+      "id": "decoy-numwords2",
+      "package_name": "numwords2",
+      "version": "0.5.15",
+      "expected_recognized": false,
+      "category": "synthetic_decoy",
+      "notes": "Version resembles a known incident but package name is altered."
+    }
+  ]
+}
