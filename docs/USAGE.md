@@ -319,12 +319,18 @@ venv exist; otherwise it falls back to the local checkout. Use `--context local`
 for local-only review, or `--context deployed` to fail fast if the deployed
 target is missing.
 
-The menu is split into `Run Experiment Suite`, `Database`, `Logs`, and `Tests`.
-`Run Experiment Suite` warns when the active context's `src/data/eval_results.db`
-already contains result rows and offers to archive it before debug or canonical
-runs. The section also includes all-model LiteLLM dry-run/smoke checks, tiny
-test-profile runs, full budget/medium/frontier/all-model runs, deployment
-smoke/full runs, and a Gemini ON/OFF toggle that rewrites the generated commands.
+The menu is split into `Deployment`, `Dry Runs`, `Run Experiment Suite`,
+`Database`, `Logs`, and `Tests`. `Deployment` prepares or refreshes the VM and
+can run a deployment smoke test; it is not treated as an experiment by default.
+`Dry Runs` resolves package/artifact plans without writing DB rows. `Run
+Experiment Suite` contains actual analyzer runs and warns when the active
+context's `src/data/eval_results.db` already contains result rows.
+
+The canonical experiment actions are organized so static baselines can be run
+once, followed by non-agentic and agentic-only model lanes. Legacy full profile
+runs remain available, but they repeat static detector work if run separately
+for budget, medium, and frontier. The Gemini ON/OFF toggle rewrites deployment,
+dry-run, smoke, and experiment commands.
 
 The TUI prints the exact command before running each action and asks for
 confirmation before actions that mutate the local DB, change deployment state,

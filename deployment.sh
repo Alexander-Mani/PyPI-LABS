@@ -10,6 +10,16 @@ fi
 
 trap 'rc=$?; echo "ERROR: command failed (exit ${rc}) at line ${LINENO}: ${BASH_COMMAND}" >&2; exit ${rc}' ERR
 
+_DEPLOY_PHASE="${DEPLOY_PHASE:-full}"
+case "$_DEPLOY_PHASE" in
+  setup|smoke|full) ;;
+  *)
+    echo "ERROR: invalid DEPLOY_PHASE: $_DEPLOY_PHASE" >&2
+    echo "Allowed values: setup, smoke, full" >&2
+    exit 1
+    ;;
+esac
+
 GUARDDOG_SOURCE_RULES=(
   api-obfuscation
   shady-links
@@ -43,6 +53,8 @@ else
   echo "ERROR: .env not found. Ensure PULL_TOKEN and API keys are exported."
   exit 1
 fi
+
+echo "Deployment phase: ${_DEPLOY_PHASE}"
 
 echo "Step 0: Installing system dependencies"
 sudo apt-get update
@@ -307,8 +319,9 @@ if ! sudo -u pypi-runner bash -c "
   exit 1
 fi
 
-echo " Basic deployment updat done, Press Enter to continue..."
-read
+if [[ "${DEPLOY_PAUSE:-0}" == "1" ]]; then
+  read -r -p "Basic deployment update done. Press Enter to continue..."
+fi
 
 echo "Step 8: Starting the PyPI simulator (background)"
 sudo -u pypi-runner bash -c "
@@ -328,6 +341,7 @@ sleep 5
 
 # UPLOAD_CATEGORIES controls which sample categories are injected.
 # Default: all three. Override: UPLOAD_CATEGORIES="malicious" bash deployment.sh
+# Set UPLOAD_CATEGORIES=none to skip upload during setup-only deployment refreshes.
 # The value is validated before outer-shell expansion into the sudo subshell.
 _UPLOAD_CATS="${UPLOAD_CATEGORIES:-benign controls malicious}"
 if [[ -z "${_UPLOAD_CATS//[[:space:]]/}" ]]; then
@@ -336,26 +350,39 @@ if [[ -z "${_UPLOAD_CATS//[[:space:]]/}" ]]; then
 fi
 for _cat in $_UPLOAD_CATS; do
   case "$_cat" in
-    benign|controls|malicious|all) ;;
+    benign|controls|malicious|all|none) ;;
     *)
       echo "ERROR: invalid UPLOAD_CATEGORIES entry: $_cat" >&2
-      echo "Allowed values: benign controls malicious all" >&2
+      echo "Allowed values: benign controls malicious all none" >&2
       exit 1
       ;;
   esac
 done
 
-echo "Step 9: Uploading samples to simulator index (categories: ${_UPLOAD_CATS})"
-sudo -u pypi-runner bash -c "
-  source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
-  cd /home/pypi-runner/pypi-scada-repo
-  for _cat in ${_UPLOAD_CATS}; do
-    PYTHONPATH=/home/pypi-runner/pypi-scada-repo python -m src.injector.upload_samples \
-      --samples-dir /home/pypi-runner/pypi-scada-repo/samples \
-      --simulator-url http://127.0.0.1:8080 \
-      --only \"\$_cat\"
-  done
-"
+if [[ " ${_UPLOAD_CATS} " == *" none "* ]]; then
+  if [[ "${_UPLOAD_CATS}" != "none" ]]; then
+    echo "ERROR: UPLOAD_CATEGORIES=none cannot be combined with other categories" >&2
+    exit 1
+  fi
+  echo "Step 9: Skipping sample upload (UPLOAD_CATEGORIES=none)"
+else
+  echo "Step 9: Uploading samples to simulator index (categories: ${_UPLOAD_CATS})"
+  sudo -u pypi-runner bash -c "
+    source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
+    cd /home/pypi-runner/pypi-scada-repo
+    for _cat in ${_UPLOAD_CATS}; do
+      PYTHONPATH=/home/pypi-runner/pypi-scada-repo python -m src.injector.upload_samples \
+        --samples-dir /home/pypi-runner/pypi-scada-repo/samples \
+        --simulator-url http://127.0.0.1:8080 \
+        --only \"\$_cat\"
+    done
+  "
+fi
+
+if [[ "$_DEPLOY_PHASE" == "setup" ]]; then
+  echo "Deployment setup complete. Evaluation was skipped because DEPLOY_PHASE=setup."
+  exit 0
+fi
 
 # VERBOSE=1 enables --verbose flag on evaluate.py (DEBUG-level prompt/response logging).
 _VERBOSE_FLAG=""
@@ -374,7 +401,7 @@ case "$_EVAL_PROGRESS" in
     ;;
 esac
 
-echo "Step 10: Running the evaluation pipeline (Entry-Point Scanning)"
+echo "Step 10: Running the evaluation pipeline (phase: ${_DEPLOY_PHASE})"
 sudo -u pypi-runner bash -c "
   source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
   cd /home/pypi-runner/pypi-scada-repo
@@ -385,4 +412,4 @@ sudo -u pypi-runner bash -c "
     --progress \"${_EVAL_PROGRESS}\" ${_INCLUDE_CONTROLS_FLAG}
 "
 
-echo "Deployment and evaluation complete. Results stored in src/data/eval_results.db"
+echo "Deployment ${_DEPLOY_PHASE} phase complete. Results stored in src/data/eval_results.db"

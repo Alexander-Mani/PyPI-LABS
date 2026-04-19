@@ -18,13 +18,17 @@ def test_sections_are_registered_with_expected_preflight():
     by_id = {section.id: section for section in sections}
 
     assert [section.id for section in sections] == [
+        review_tui.SECTION_DEPLOYMENT,
+        review_tui.SECTION_DRY_RUNS,
         review_tui.SECTION_EXPERIMENT,
         review_tui.SECTION_DATABASE,
         review_tui.SECTION_LOGS,
         review_tui.SECTION_TESTS,
     ]
     assert by_id[review_tui.SECTION_EXPERIMENT].title == "Run Experiment Suite"
-    assert by_id[review_tui.SECTION_EXPERIMENT].preflight == "clean-db"
+    assert by_id[review_tui.SECTION_EXPERIMENT].preflight is None
+    assert by_id[review_tui.SECTION_DEPLOYMENT].title == "Deployment"
+    assert by_id[review_tui.SECTION_DRY_RUNS].title == "Dry Runs"
     assert by_id[review_tui.SECTION_DATABASE].preflight is None
 
 
@@ -40,7 +44,17 @@ def test_action_registry_contains_expected_sectioned_actions(tmp_path):
         "models-smoke-frontier",
         "models-smoke-all-models",
         "analyzer-dry-run-test",
+        "analyzer-dry-run-test-no-gemini",
         "experiment-tiny-test",
+        "experiment-static-baseline",
+        "experiment-non-agentic-budget",
+        "experiment-non-agentic-medium",
+        "experiment-non-agentic-frontier",
+        "experiment-non-agentic-all-models",
+        "experiment-agentic-budget",
+        "experiment-agentic-medium",
+        "experiment-agentic-frontier",
+        "experiment-agentic-all-models",
         "experiment-dry-run-budget",
         "experiment-dry-run-medium",
         "experiment-dry-run-frontier",
@@ -49,11 +63,10 @@ def test_action_registry_contains_expected_sectioned_actions(tmp_path):
         "experiment-full-medium",
         "experiment-full-frontier",
         "experiment-full-all-models",
+        "deployment-setup",
+        "deployment-setup-no-upload",
         "deployment-smoke-test",
-        "deployment-full-budget",
-        "deployment-full-medium",
-        "deployment-full-frontier",
-        "deployment-full-all-models",
+        "deployment-restart-services",
         "db-status",
         "archive-db-dry-run",
         "archive-db",
@@ -76,8 +89,10 @@ def test_action_registry_contains_expected_sectioned_actions(tmp_path):
         "syntax-checks",
     }
     assert expected <= set(by_id)
-    assert not any("no-gemini" in action.id for action in actions)
+    assert not any(action.id.startswith("experiment-full-") and "no-gemini" in action.id for action in actions)
     assert by_id["experiment-full-all-models"].section == review_tui.SECTION_EXPERIMENT
+    assert by_id["experiment-dry-run-budget"].section == review_tui.SECTION_DRY_RUNS
+    assert by_id["deployment-setup"].section == review_tui.SECTION_DEPLOYMENT
     assert by_id["db-status"].section == review_tui.SECTION_DATABASE
     assert by_id["logs-tail-litellm"].section == review_tui.SECTION_LOGS
     assert by_id["syntax-checks"].section == review_tui.SECTION_TESTS
@@ -107,8 +122,9 @@ def test_safety_and_confirmation_policy(tmp_path):
     assert by_id["experiment-full-budget"].double_confirm is False
     assert by_id["experiment-full-frontier"].double_confirm is True
     assert by_id["experiment-full-all-models"].double_confirm is True
-    assert by_id["deployment-full-all-models"].safety == review_tui.SAFETY_DEPLOYMENT
-    assert by_id["deployment-full-all-models"].double_confirm is True
+    assert by_id["deployment-setup"].safety == review_tui.SAFETY_DEPLOYMENT
+    assert by_id["deployment-setup"].double_confirm is True
+    assert by_id["deployment-smoke-test"].requires_clean_db is True
     assert by_id["archive-db"].safety == review_tui.SAFETY_MUTATES_DB
     assert by_id["archive-db"].confirm is True
     assert by_id["tests-all"].safety == review_tui.SAFETY_LONG_RUNNING
@@ -136,8 +152,8 @@ def test_gemini_toggle_changes_generated_commands(tmp_path):
     disabled_eval = review_tui.action_by_id("experiment-full-budget", disabled)
     enabled_smoke = review_tui.action_by_id("models-smoke-all", enabled)
     disabled_smoke = review_tui.action_by_id("models-smoke-all", disabled)
-    enabled_deploy = review_tui.action_by_id("deployment-full-budget", enabled)
-    disabled_deploy = review_tui.action_by_id("deployment-full-budget", disabled)
+    enabled_deploy = review_tui.action_by_id("deployment-setup", enabled)
+    disabled_deploy = review_tui.action_by_id("deployment-setup", disabled)
 
     assert enabled_eval.command[enabled_eval.command.index("--gemini") + 1] == "on"
     assert disabled_eval.command[disabled_eval.command.index("--gemini") + 1] == "off"
@@ -152,10 +168,34 @@ def test_deployment_actions_are_shell_wrapped_and_profiled(tmp_path):
     deployment = review_tui.action_by_id("deployment-smoke-test", actions)
 
     assert deployment.command[:2] == ("bash", "-lc")
+    assert "DEPLOY_PHASE=smoke" in deployment.command[2]
     assert "MODEL_PROFILE=test" in deployment.command[2]
     assert "GEMINI=off" in deployment.command[2]
     assert "UPLOAD_CATEGORIES='controls malicious'" in deployment.command[2]
     assert deployment.double_confirm is True
+
+    setup = review_tui.action_by_id("deployment-setup", actions)
+    assert "DEPLOY_PHASE=setup" in setup.command[2]
+    assert "UPLOAD_CATEGORIES" not in setup.command[2]
+
+    no_upload = review_tui.action_by_id("deployment-setup-no-upload", actions)
+    assert "DEPLOY_PHASE=setup" in no_upload.command[2]
+    assert "UPLOAD_CATEGORIES=none" in no_upload.command[2]
+
+
+def test_experiment_suite_has_deduplicated_lanes(tmp_path):
+    actions = review_tui.build_actions(tmp_path, python_executable="/py")
+
+    static = review_tui.action_by_id("experiment-static-baseline", actions)
+    non_agentic = review_tui.action_by_id("experiment-non-agentic-budget", actions)
+    agentic = review_tui.action_by_id("experiment-agentic-budget", actions)
+
+    assert "--sast-only" in static.command
+    assert "--run-id-prefix" in static.command
+    assert "canonical-v2-static" in static.command
+    assert "--skip-static" in non_agentic.command
+    assert "--skip-agentic" in non_agentic.command
+    assert "--only-agentic" in agentic.command
 
 
 def test_safe_action_executes_with_repo_root_cwd_through_runner(tmp_path):
@@ -231,7 +271,7 @@ def test_context_status_action_registered(tmp_path):
     actions = review_tui.build_actions(tmp_path, python_executable="/py")
     action = review_tui.action_by_id("context-status", actions)
 
-    assert action.section == review_tui.SECTION_DATABASE
+    assert action.section == review_tui.SECTION_DEPLOYMENT
     assert "Context:" in review_tui.command_preview(action.command)
 
 

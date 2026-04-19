@@ -15,6 +15,8 @@ from typing import Callable, Sequence
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_CONFIG = _REPO_ROOT / "configs" / "review_tui.yaml"
 
+SECTION_DEPLOYMENT = "deployment"
+SECTION_DRY_RUNS = "dry_runs"
 SECTION_EXPERIMENT = "experiment"
 SECTION_DATABASE = "database"
 SECTION_LOGS = "logs"
@@ -232,11 +234,22 @@ def context_warnings(context: ReviewContext) -> list[str]:
 def build_sections() -> tuple[Section, ...]:
     return (
         Section(
+            id=SECTION_DEPLOYMENT,
+            title="Deployment",
+            description="Prepare or refresh the VM environment, services, uploads, and model routing.",
+            style="red",
+        ),
+        Section(
+            id=SECTION_DRY_RUNS,
+            title="Dry Runs",
+            description="Resolve sample plans and preview model config without writing experiment rows.",
+            style="cyan",
+        ),
+        Section(
             id=SECTION_EXPERIMENT,
             title="Run Experiment Suite",
-            description="Model checks, analyzer dry-runs, tiny experiments, and deployment smoke/full runs.",
+            description="Actual analyzer runs that write eval_results rows and may spend API money.",
             style="magenta",
-            preflight="clean-db",
         ),
         Section(
             id=SECTION_DATABASE,
@@ -403,12 +416,54 @@ def _litellm_tail_command(context: ReviewContext) -> tuple[str, ...]:
     return _shell(f"tail -n 80 {shlex.quote(path)} 2>/dev/null || echo 'LiteLLM VM log unavailable'")
 
 
-def _deployment_command(context: ReviewContext, profile: str, gemini: str, *, upload_categories: str | None = None) -> tuple[str, ...]:
-    env_parts = [f"MODEL_PROFILE={profile}", f"GEMINI={gemini}", "EVAL_PROGRESS=always"]
+def _deployment_command(
+    context: ReviewContext,
+    profile: str,
+    gemini: str,
+    *,
+    phase: str = "full",
+    upload_categories: str | None = None,
+) -> tuple[str, ...]:
+    env_parts = [
+        f"DEPLOY_PHASE={phase}",
+        f"MODEL_PROFILE={profile}",
+        f"GEMINI={gemini}",
+        "EVAL_PROGRESS=always",
+    ]
     if upload_categories:
         env_parts.append(f"UPLOAD_CATEGORIES={shlex.quote(upload_categories)}")
     command = " ".join(env_parts + ["bash", shlex.quote(str(context.deployment_script))])
     return _shell_in_context(context, command, cwd=context.deployment_cwd)
+
+
+def _restart_services_command(context: ReviewContext) -> tuple[str, ...]:
+    command = """
+set -euo pipefail
+sudo -u proxy-runner bash -lc '
+  source /home/proxy-runner/.env
+  source /home/proxy-runner/venv/bin/activate
+  existing_litellm_pids=$(pgrep -x litellm || true)
+  if [ -n "$existing_litellm_pids" ]; then
+    echo "Stopping existing LiteLLM PIDs: $existing_litellm_pids"
+    kill $existing_litellm_pids 2>/dev/null || true
+    sleep 1
+  fi
+  nohup litellm --config /home/proxy-runner/litellm_config.yaml --port 4000 > /home/proxy-runner/litellm.log 2>&1 &
+'
+sudo -u pypi-runner bash -lc '
+  source /home/pypi-runner/pypi-scada-repo/venv/bin/activate
+  cd /home/pypi-runner/pypi-scada-repo/src/simulator
+  existing_sim_pids=$(pgrep -u pypi-runner -f "python main.py" | grep -vw "$$" || true)
+  if [ -n "$existing_sim_pids" ]; then
+    echo "Stopping existing simulator PIDs: $existing_sim_pids"
+    kill $existing_sim_pids 2>/dev/null || true
+    sleep 1
+  fi
+  nohup python main.py > /home/pypi-runner/simulator.log 2>&1 &
+'
+echo "Services restarted."
+""".strip()
+    return _shell(command)
 
 
 def _command_mentions_mixed_roots(command: Sequence[str], context: ReviewContext) -> bool:
@@ -428,6 +483,10 @@ def _gemini_value(gemini_enabled: bool) -> str:
 
 def _gemini_label(gemini_enabled: bool) -> str:
     return "ON" if gemini_enabled else "OFF"
+
+
+def _section_has_gemini_toggle(section_id: str) -> bool:
+    return section_id in {SECTION_DEPLOYMENT, SECTION_DRY_RUNS, SECTION_EXPERIMENT}
 
 
 def build_actions(
@@ -454,14 +513,25 @@ def build_actions(
     def smoke(*args: str) -> tuple[str, ...]:
         return _context_script(context, "scripts/litellm_smoke.py", *args, "--gemini", gemini)
 
-    def deploy(profile: str, *, upload_categories: str | None = None) -> tuple[str, ...]:
-        return _deployment_command(context, profile, gemini, upload_categories=upload_categories)
+    def deploy(
+        profile: str,
+        *,
+        phase: str = "full",
+        upload_categories: str | None = None,
+    ) -> tuple[str, ...]:
+        return _deployment_command(
+            context,
+            profile,
+            gemini,
+            phase=phase,
+            upload_categories=upload_categories,
+        )
 
     actions: list[ReviewAction] = [
         ReviewAction(
             id="context-status",
-            section=SECTION_DATABASE,
-            title="Show active TUI context",
+            section=SECTION_DEPLOYMENT,
+            title="Show active deployment context",
             description="Show target repo, Python, DB, runner user, and LiteLLM log paths.",
             command=_shell(
                 "printf '%s\n' "
@@ -479,19 +549,60 @@ def build_actions(
         ),
         ReviewAction(
             id="models-preview-all",
-            section=SECTION_EXPERIMENT,
+            section=SECTION_DRY_RUNS,
             title="Preview all LiteLLM models",
             description="List configured LiteLLM models without API calls; Gemini follows toggle.",
             command=smoke("--all-models", "--dry-run"),
         ),
         ReviewAction(
             id="models-smoke-all",
-            section=SECTION_EXPERIMENT,
+            section=SECTION_DEPLOYMENT,
             title="Smoke all LiteLLM models",
             description="Send the minimal OK request to every configured model; Gemini follows toggle.",
             command=smoke("--all-models", "--retries", "3", "--retry-delay", "20"),
             safety=SAFETY_API_COST,
             confirm=True,
+        ),
+        ReviewAction(
+            id="deployment-setup",
+            section=SECTION_DEPLOYMENT,
+            title="Deploy / refresh VM environment",
+            description="Run setup, service startup, model smoke, and all sample uploads; skip evaluation.",
+            command=deploy("budget", phase="setup"),
+            safety=SAFETY_DEPLOYMENT,
+            confirm=True,
+            double_confirm=True,
+        ),
+        ReviewAction(
+            id="deployment-setup-no-upload",
+            section=SECTION_DEPLOYMENT,
+            title="Deploy / refresh VM without upload",
+            description="Run setup, service startup, and model smoke; skip sample upload and evaluation.",
+            command=deploy("budget", phase="setup", upload_categories="none"),
+            safety=SAFETY_DEPLOYMENT,
+            confirm=True,
+            double_confirm=True,
+        ),
+        ReviewAction(
+            id="deployment-smoke-test",
+            section=SECTION_DEPLOYMENT,
+            title="Deployment smoke run, four packages",
+            description="Run setup, controls+malicious upload, and the test profile evaluation.",
+            command=deploy("test", phase="smoke", upload_categories="controls malicious"),
+            safety=SAFETY_DEPLOYMENT,
+            confirm=True,
+            double_confirm=True,
+            requires_clean_db=True,
+        ),
+        ReviewAction(
+            id="deployment-restart-services",
+            section=SECTION_DEPLOYMENT,
+            title="Restart LiteLLM and simulator",
+            description="Restart the already-installed proxy and simulator services without repo setup.",
+            command=_restart_services_command(context),
+            safety=SAFETY_DEPLOYMENT,
+            confirm=True,
+            double_confirm=True,
         ),
     ]
 
@@ -500,7 +611,7 @@ def build_actions(
         high_cost = profile in HIGH_COST_PROFILES
         actions.append(ReviewAction(
             id=f"models-smoke-{slug}",
-            section=SECTION_EXPERIMENT,
+            section=SECTION_DEPLOYMENT,
             title=f"Smoke {label} profile",
             description=f"Check routing for the {profile} profile; Gemini follows toggle.",
             command=smoke("--profile", profile, "--retries", "3", "--retry-delay", "20"),
@@ -509,7 +620,7 @@ def build_actions(
         ))
         actions.append(ReviewAction(
             id=f"experiment-dry-run-{slug}",
-            section=SECTION_EXPERIMENT,
+            section=SECTION_DRY_RUNS,
             title=f"Dry-run full {label} experiment",
             description="Resolve all selected latest package versions/artifacts without scanning.",
             command=evaluate(profile, "--dry-run-resolution", "--skip-validation"),
@@ -517,8 +628,8 @@ def build_actions(
         actions.append(ReviewAction(
             id=f"experiment-full-{slug}",
             section=SECTION_EXPERIMENT,
-            title=f"Full {label} experiment, all packages",
-            description="Run all selected latest package versions/artifacts; Gemini follows toggle.",
+            title=f"Legacy full {label} experiment",
+            description="Run static, hybrid, raw, and agentic together; repeats static baselines if run per tier.",
             command=evaluate(profile, "--run-id-prefix", "canonical-v2", "--progress", "always"),
             safety=SAFETY_API_COST,
             confirm=True,
@@ -526,24 +637,67 @@ def build_actions(
             requires_clean_db=True,
         ))
         actions.append(ReviewAction(
-            id=f"deployment-full-{slug}",
+            id=f"experiment-non-agentic-{slug}",
             section=SECTION_EXPERIMENT,
-            title=f"Deployment full {label} run",
-            description="Run full VM deployment/evaluation for this profile; Gemini follows toggle.",
-            command=deploy(profile),
-            safety=SAFETY_DEPLOYMENT,
+            title=f"{label} non-agentic LLM run",
+            description="Run hybrid/raw LLM adapters only; assumes static baseline is already run once.",
+            command=evaluate(
+                profile,
+                "--skip-static",
+                "--skip-agentic",
+                "--run-id-prefix",
+                f"canonical-v2-{slug}",
+                "--progress",
+                "always",
+            ),
+            safety=SAFETY_API_COST,
             confirm=True,
-            double_confirm=True,
+            double_confirm=high_cost,
+            requires_clean_db=True,
+        ))
+        actions.append(ReviewAction(
+            id=f"experiment-agentic-{slug}",
+            section=SECTION_EXPERIMENT,
+            title=f"{label} agentic-only run",
+            description="Run only the selected profile's agentic adapters; static and non-agentic LLMs are skipped.",
+            command=evaluate(
+                profile,
+                "--only-agentic",
+                "--run-id-prefix",
+                f"canonical-v2-{slug}-agentic",
+                "--progress",
+                "always",
+            ),
+            safety=SAFETY_API_COST,
+            confirm=True,
+            double_confirm=high_cost,
             requires_clean_db=True,
         ))
 
     actions.extend([
         ReviewAction(
-            id="analyzer-dry-run-test",
+            id="experiment-static-baseline",
             section=SECTION_EXPERIMENT,
+            title="Static baseline once",
+            description="Run Bandit, Semgrep, and GuardDog once over the canonical artifact set.",
+            command=evaluate("budget", "--sast-only", "--run-id-prefix", "canonical-v2-static", "--progress", "always"),
+            safety=SAFETY_LONG_RUNNING,
+            confirm=True,
+            requires_clean_db=True,
+        ),
+        ReviewAction(
+            id="analyzer-dry-run-test",
+            section=SECTION_DRY_RUNS,
             title="Analyzer dry-run, tiny test profile",
             description="Resolve the four-package test profile without scanning; Gemini follows toggle.",
             command=evaluate("test", "--dry-run-resolution", "--skip-validation"),
+        ),
+        ReviewAction(
+            id="analyzer-dry-run-test-no-gemini",
+            section=SECTION_DRY_RUNS,
+            title="Analyzer dry-run, tiny no-Gemini profile",
+            description="Resolve the four-package no-Gemini test profile without scanning.",
+            command=evaluate("test_no_gemini", "--dry-run-resolution", "--skip-validation"),
         ),
         ReviewAction(
             id="experiment-tiny-test",
@@ -553,17 +707,6 @@ def build_actions(
             command=evaluate("test", "--run-id-prefix", "debug", "--progress", "never"),
             safety=SAFETY_API_COST,
             confirm=True,
-            requires_clean_db=True,
-        ),
-        ReviewAction(
-            id="deployment-smoke-test",
-            section=SECTION_EXPERIMENT,
-            title="Deployment smoke run, four packages",
-            description="Run deployment with controls+malicious upload and the test profile.",
-            command=deploy("test", upload_categories="controls malicious"),
-            safety=SAFETY_DEPLOYMENT,
-            confirm=True,
-            double_confirm=True,
             requires_clean_db=True,
         ),
         ReviewAction(
@@ -1023,9 +1166,9 @@ def run_menu(
             raw_choice = ui.choose_action(
                 section,
                 section_actions,
-                gemini_enabled=gemini_enabled if section.id == SECTION_EXPERIMENT else None,
+                gemini_enabled=gemini_enabled if _section_has_gemini_toggle(section.id) else None,
             )
-            if section.id == SECTION_EXPERIMENT and raw_choice in {"g", "gemini", "toggle"}:
+            if _section_has_gemini_toggle(section.id) and raw_choice in {"g", "gemini", "toggle"}:
                 gemini_enabled = not gemini_enabled
                 ui.print(f"Gemini is now {_gemini_label(gemini_enabled)}.")
                 continue
@@ -1041,7 +1184,7 @@ def run_menu(
 
             ui.print(f"\nAction: {action.title}")
             ui.print(f"Safety: {action.safety}")
-            if section.id == SECTION_EXPERIMENT:
+            if _section_has_gemini_toggle(section.id):
                 ui.print(f"Gemini: {_gemini_label(gemini_enabled)}")
             if action.requires_clean_db and db_needs_archive_warning(context=context):
                 ui.print("[yellow]Warning: active DB contains previous result rows.[/yellow]")

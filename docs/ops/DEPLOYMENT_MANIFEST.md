@@ -238,7 +238,8 @@ The evaluation stage resolves packages from the simulator. It does not install o
 execute package code. Optional overrides:
 
 ```bash
-UPLOAD_CATEGORIES=malicious # benign, controls, malicious, all; space-separated
+DEPLOY_PHASE=setup       # setup, smoke, full; TUI setup skips evaluation
+UPLOAD_CATEGORIES=malicious # benign, controls, malicious, all, none; space-separated
 INCLUDE_CONTROLS=1         # include high-volume benign controls
 MODEL_PROFILE=budget    # budget, medium, frontier, all_models, or test
 GEMINI=off              # on, off; disables Gemini key requirement/model calls when off
