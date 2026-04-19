@@ -297,6 +297,11 @@ if ! sudo -u pypi-runner bash -c "
   python scripts/litellm_smoke.py --base-url http://127.0.0.1:4000 --profile \"${_MODEL_PROFILE}\" --gemini \"${_GEMINI}\" --retries 3 --retry-delay 20
 "; then
   echo "ERROR: LiteLLM smoke test failed. Aborting before evaluation."
+  echo "Focused LiteLLM failure context (filtered last 220 log lines):"
+  sudo -u proxy-runner bash -c "
+    tail -n 220 /home/proxy-runner/litellm.log 2>/dev/null |
+      grep -Ei 'gemini|google|timeout|timed out|429|503|401|403|unavailable|resource_exhausted|invalid_api_key|connecterror|ratelimit|quota|overload|high demand|serviceunavailable|authentication|badrequest' || true
+  "
   echo "Last 80 lines of /home/proxy-runner/litellm.log:"
   sudo -u proxy-runner tail -n 80 /home/proxy-runner/litellm.log || true
   exit 1

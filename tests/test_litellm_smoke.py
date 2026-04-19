@@ -225,3 +225,116 @@ def test_smoke_main_filters_gemini_from_all_models_dry_run(monkeypatch, capsys):
     assert "DRY-RUN gpt-5.4-nano" in captured.out
     assert "DRY-RUN gemini-" not in captured.out
     assert "DRY-RUN gemini/" not in captured.out
+
+
+def test_smoke_model_classifies_client_timeout_as_retryable(monkeypatch, capsys):
+    calls = []
+
+    def fake_urlopen(req, timeout):
+        calls.append(timeout)
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(litellm_smoke.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(litellm_smoke.time, "sleep", lambda seconds: None)
+
+    ok, message = litellm_smoke.smoke_model(
+        base_url="http://127.0.0.1:4000",
+        model="gemini-2.5-flash-lite",
+        timeout=1.0,
+        max_tokens=4,
+        retries=1,
+        retry_delay=0,
+    )
+
+    captured = capsys.readouterr()
+    assert ok is False
+    assert "client_timeout after 1s" in message
+    assert "no HTTP response received" in message
+    assert "attempts=2/2" in message
+    assert "RETRY gemini-2.5-flash-lite: client_timeout" in captured.err
+    assert calls == [1.0, 1.0]
+
+
+def test_smoke_model_classifies_rate_limit_and_retries(monkeypatch, capsys):
+    calls = []
+
+    def fake_urlopen(req, timeout):
+        calls.append(req.full_url)
+        raise urllib.error.HTTPError(
+            req.full_url,
+            429,
+            "Too Many Requests",
+            {},
+            io.BytesIO(b'{"error":{"message":"quota exceeded","status":"RESOURCE_EXHAUSTED"}}'),
+        )
+
+    monkeypatch.setattr(litellm_smoke.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(litellm_smoke.time, "sleep", lambda seconds: None)
+
+    ok, message = litellm_smoke.smoke_model(
+        base_url="http://127.0.0.1:4000",
+        model="gemini-2.5-flash-lite",
+        timeout=1.0,
+        max_tokens=4,
+        retries=1,
+        retry_delay=0,
+    )
+
+    captured = capsys.readouterr()
+    assert ok is False
+    assert "rate_limit HTTP 429" in message
+    assert "RESOURCE_EXHAUSTED" in message
+    assert "attempts=2/2" in message
+    assert "RETRY gemini-2.5-flash-lite: rate_limit" in captured.err
+    assert len(calls) == 2
+
+
+def test_smoke_model_classifies_gemini_overload_body(monkeypatch):
+    body = b'''{
+      "error": {
+        "code": 503,
+        "message": "This model is currently experiencing high demand. Please try again later.",
+        "status": "UNAVAILABLE"
+      }
+    }'''
+
+    def fake_urlopen(req, timeout):
+        raise urllib.error.HTTPError(req.full_url, 503, "Service Unavailable", {}, io.BytesIO(body))
+
+    monkeypatch.setattr(litellm_smoke.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(litellm_smoke.time, "sleep", lambda seconds: None)
+
+    ok, message = litellm_smoke.smoke_model(
+        base_url="http://127.0.0.1:4000",
+        model="gemini-2.5-flash-lite",
+        timeout=1.0,
+        max_tokens=4,
+        retries=0,
+        retry_delay=0,
+    )
+
+    assert ok is False
+    assert "provider_overload HTTP 503" in message
+    assert "UNAVAILABLE" in message
+    assert "high demand" in message
+
+
+def test_smoke_model_classifies_proxy_connection_error(monkeypatch):
+    def fake_urlopen(req, timeout):
+        raise urllib.error.URLError(ConnectionRefusedError("connection refused"))
+
+    monkeypatch.setattr(litellm_smoke.urllib.request, "urlopen", fake_urlopen)
+
+    ok, message = litellm_smoke.smoke_model(
+        base_url="http://127.0.0.1:4000",
+        model="gpt-5.4-nano",
+        timeout=1.0,
+        max_tokens=4,
+        retries=2,
+        retry_delay=0,
+    )
+
+    assert ok is False
+    assert "proxy_connection_error" in message
+    assert "retryable=false" in message
+    assert "connection refused" in message
