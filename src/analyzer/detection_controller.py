@@ -177,19 +177,37 @@ class EvalController:
                     + ", ".join(missing)
                 )
 
-    def expected_non_static_detectors(self) -> set[str]:
+    def expected_non_static_detectors(
+        self,
+        *,
+        skip_agentic: bool = False,
+        only_agentic: bool = False,
+    ) -> set[str]:
+        adapters = [*self._agentic] if only_agentic else [*self._llm, *self._llm_raw]
+        if not skip_agentic and not only_agentic:
+            adapters.extend(self._agentic)
         return {
             getattr(adapter, "_detector_name")
-            for adapter in [*self._llm, *self._llm_raw, *self._agentic]
+            for adapter in adapters
         }
 
-    def _build_tasks(self, sast_only: bool = False) -> list[tuple]:
+    def _build_tasks(
+        self,
+        sast_only: bool = False,
+        *,
+        skip_static: bool = False,
+        skip_agentic: bool = False,
+        only_agentic: bool = False,
+    ) -> list[tuple]:
         # Build a uniform task list: (adapter, strategy, sys_override, tpl_override).
         # All adapters share the DetectorAdapter.run() signature so they can be
         # dispatched identically. Static adapters ignore the prompt params.
         tasks: list[tuple] = []
-        for a in self._static:
-            tasks.append((a, "zero_shot", None, None))
+        if only_agentic and skip_agentic:
+            raise ValueError("only_agentic and skip_agentic cannot both be true")
+        if not skip_static and not only_agentic:
+            for a in self._static:
+                tasks.append((a, "zero_shot", None, None))
 
         if sast_only:
             return tasks
@@ -197,18 +215,20 @@ class EvalController:
         from prompt_manager import PromptManager
         pm = PromptManager.instance()
 
-        for a in self._llm:
-            for s in pm.llm_strategy_names():
-                sp, ut = pm.get_llm_strategy(s)
-                tasks.append((a, s, sp, ut))
-        for a in self._llm_raw:
-            for s in pm.llm_strategy_names():
-                sp, ut = pm.get_llm_strategy(s)
-                tasks.append((a, s, sp, ut))
-        for a in self._agentic:
-            for s in pm.agentic_strategy_names():
-                sp, im = pm.get_agentic_strategy(s)
-                tasks.append((a, s, sp, im))
+        if not only_agentic:
+            for a in self._llm:
+                for s in pm.llm_strategy_names():
+                    sp, ut = pm.get_llm_strategy(s)
+                    tasks.append((a, s, sp, ut))
+            for a in self._llm_raw:
+                for s in pm.llm_strategy_names():
+                    sp, ut = pm.get_llm_strategy(s)
+                    tasks.append((a, s, sp, ut))
+        if not skip_agentic:
+            for a in self._agentic:
+                for s in pm.agentic_strategy_names():
+                    sp, im = pm.get_agentic_strategy(s)
+                    tasks.append((a, s, sp, im))
 
         return tasks
 
@@ -218,6 +238,9 @@ class EvalController:
         pkg: PackageInfo,
         ground_truth: bool | None = None,
         sast_only: bool = False,
+        skip_static: bool = False,
+        skip_agentic: bool = False,
+        only_agentic: bool = False,
         artifact_filename: str | None = None,
         artifact_url: str | None = None,
         source_index_url: str | None = None,
@@ -229,7 +252,12 @@ class EvalController:
         quiet_console: bool = False,
         raw_log=None,
     ) -> list[EvalDetectionResult]:
-        tasks = self._build_tasks(sast_only=sast_only)
+        tasks = self._build_tasks(
+            sast_only=sast_only,
+            skip_static=skip_static,
+            skip_agentic=skip_agentic,
+            only_agentic=only_agentic,
+        )
         if on_tasks_prepared is not None:
             on_tasks_prepared([
                 _task_descriptor(adapter, strategy)

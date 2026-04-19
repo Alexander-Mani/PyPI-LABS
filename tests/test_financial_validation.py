@@ -58,7 +58,7 @@ def _runner_with_controller(controller):
 
 def test_financial_validation_passes_when_selected_detector_succeeds():
     class Controller:
-        def expected_non_static_detectors(self):
+        def expected_non_static_detectors(self, **kwargs):
             return {"gpt_nano"}
 
         def run(self, **kwargs):
@@ -91,7 +91,7 @@ def test_financial_validation_passes_when_selected_detector_succeeds():
 
 def test_financial_validation_warns_not_halts_on_cost_divergence_under_cap():
     class Controller:
-        def expected_non_static_detectors(self):
+        def expected_non_static_detectors(self, **kwargs):
             return {"gpt_nano"}
 
         def run(self, **kwargs):
@@ -115,7 +115,7 @@ def test_financial_validation_warns_not_halts_on_cost_divergence_under_cap():
 
 def test_financial_validation_halts_when_selected_detector_all_errors():
     class Controller:
-        def expected_non_static_detectors(self):
+        def expected_non_static_detectors(self, **kwargs):
             return {"gemini_flash_lite"}
 
         def run(self, **kwargs):

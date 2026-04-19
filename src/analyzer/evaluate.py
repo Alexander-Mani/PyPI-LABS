@@ -14,6 +14,8 @@ Usage:
                                     [--tier budget|medium|frontier]
                                     [--gemini on|off]
                                     [--skip-validation] [--sast-only]
+                                    [--skip-static] [--skip-agentic]
+                                    [--only-agentic]
                                     [--dry-run-resolution]
                                     [--progress auto|always|never]
                                     [--run-id-prefix PREFIX]
@@ -763,18 +765,42 @@ class EvaluationRunner:
         self,
         skip_validation: bool = False,
         sast_only: bool = False,
+        skip_static: bool = False,
+        skip_agentic: bool = False,
+        only_agentic: bool = False,
         dry_run_resolution: bool = False,
     ) -> None:
+        if sast_only and skip_static:
+            raise SystemExit("HALT: --sast-only cannot be combined with --skip-static.")
+        if sast_only and only_agentic:
+            raise SystemExit("HALT: --sast-only cannot be combined with --only-agentic.")
+        if only_agentic and skip_agentic:
+            raise SystemExit("HALT: --only-agentic cannot be combined with --skip-agentic.")
+
         run_id = _make_run_id(getattr(self, "_run_id_prefix", None))
+        task_scope = (
+            "sast-only" if sast_only else
+            "agentic-only" if only_agentic else
+            "llm-no-agentic" if skip_agentic and skip_static else
+            "no-agentic" if skip_agentic else
+            "no-static" if skip_static else
+            "all"
+        )
         log.info(
             f"EvaluationRunner start - run_id={run_id}  "
             f"profile={self._profile or 'tier-filter'}  tier={self._tier}  "
-            f"sast_only={sast_only}"
+            f"task_scope={task_scope}"
         )
-        self._db.create_eval_run(run_id, tier=self._run_label if not sast_only else "sast-only")
+        run_label = self._run_label if not sast_only else "sast-only"
+        if not sast_only and task_scope != "all":
+            run_label = f"{run_label}:{task_scope}"
+        self._db.create_eval_run(run_id, tier=run_label)
 
         if not skip_validation and not sast_only and not dry_run_resolution:
-            self._validate_financial_airgap()
+            self._validate_financial_airgap(
+                skip_agentic=skip_agentic,
+                only_agentic=only_agentic,
+            )
 
         raw_log = None
         package_failures = 0
@@ -789,8 +815,12 @@ class EvaluationRunner:
                     "cli_args": self._cli_args,
                     "profile": self._profile,
                     "tier": self._tier,
-                    "run_label": self._run_label if not sast_only else "sast-only",
+                    "run_label": run_label,
                     "sast_only": sast_only,
+                    "skip_static": skip_static,
+                    "skip_agentic": skip_agentic,
+                    "only_agentic": only_agentic,
+                    "task_scope": task_scope,
                     "gemini": "on" if self._gemini_enabled else "off",
                     "model_config_stems": self._model_config_stems,
                     "simulator_base_url": self._simulator_url,
@@ -826,7 +856,7 @@ class EvaluationRunner:
                 enabled=self._progress_enabled,
                 total_samples=len(samples),
                 run_id=run_id,
-                run_label=self._run_label if not sast_only else "sast-only",
+                run_label=run_label,
             ) as progress:
                 run_log = log.bind(file_only=True) if progress.active else log
                 for index, sample in enumerate(samples, start=1):
@@ -892,6 +922,9 @@ class EvaluationRunner:
                         results = self._controller.run(
                             run_id=run_id, pkg=pkg,
                             ground_truth=sample.ground_truth, sast_only=sast_only,
+                            skip_static=skip_static,
+                            skip_agentic=skip_agentic,
+                            only_agentic=only_agentic,
                             artifact_filename=sample.artifact_filename,
                             artifact_url=sample.artifact_url,
                             source_index_url=sample.source_index_url,
@@ -953,7 +986,12 @@ class EvaluationRunner:
     # Financial air-gap validation
     # ------------------------------------------------------------------
 
-    def _validate_financial_airgap(self) -> None:
+    def _validate_financial_airgap(
+        self,
+        *,
+        skip_agentic: bool = False,
+        only_agentic: bool = False,
+    ) -> None:
         """
         Run one benign package through all active LLM adapters.
         Compare LiteLLM-reported cost against token-math estimate.
@@ -983,6 +1021,9 @@ class EvaluationRunner:
             run_id=val_id,
             pkg=pkg,
             ground_truth=benign_sample.ground_truth,
+            skip_static=True,
+            skip_agentic=skip_agentic,
+            only_agentic=only_agentic,
             artifact_filename=benign_sample.artifact_filename,
             artifact_url=benign_sample.artifact_url,
             source_index_url=benign_sample.source_index_url,
@@ -1004,7 +1045,10 @@ class EvaluationRunner:
                 "Check profile/tier selection and analyzer model configs."
             )
 
-        expected_detectors = self._controller.expected_non_static_detectors()
+        expected_detectors = self._controller.expected_non_static_detectors(
+            skip_agentic=skip_agentic,
+            only_agentic=only_agentic,
+        )
         successful_detectors = {r.detector for r in successful_llm_results}
         failed_detectors = sorted(expected_detectors - successful_detectors)
         if failed_detectors:
@@ -1188,7 +1232,19 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--sast-only", action="store_true",
-        help="Run only static tools (Bandit/Semgrep), skip all LLM/agentic adapters",
+        help="Run only static tools (Bandit/Semgrep/GuardDog), skip all LLM/agentic adapters",
+    )
+    parser.add_argument(
+        "--skip-static", action="store_true",
+        help="Skip static tools. Use after a separate --sast-only baseline run.",
+    )
+    parser.add_argument(
+        "--skip-agentic", action="store_true",
+        help="Skip agentic adapters while keeping static, hybrid, and raw LLM adapters.",
+    )
+    parser.add_argument(
+        "--only-agentic", action="store_true",
+        help="Run only agentic adapters for the selected profile.",
     )
     parser.add_argument(
         "--dry-run-resolution",
@@ -1222,6 +1278,12 @@ if __name__ == "__main__":
         help="Write raw JSONL experiment flight recorder for real runs (default: on)",
     )
     args = parser.parse_args()
+    if args.sast_only and args.skip_static:
+        raise SystemExit("HALT: --sast-only cannot be combined with --skip-static.")
+    if args.sast_only and args.only_agentic:
+        raise SystemExit("HALT: --sast-only cannot be combined with --only-agentic.")
+    if args.only_agentic and args.skip_agentic:
+        raise SystemExit("HALT: --only-agentic cannot be combined with --skip-agentic.")
     with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
@@ -1281,5 +1343,8 @@ if __name__ == "__main__":
     ).run(
         skip_validation=args.skip_validation,
         sast_only=args.sast_only,
+        skip_static=args.skip_static,
+        skip_agentic=args.skip_agentic,
+        only_agentic=args.only_agentic,
         dry_run_resolution=args.dry_run_resolution,
     )
