@@ -187,15 +187,35 @@ def test_experiment_suite_has_deduplicated_lanes(tmp_path):
     actions = review_tui.build_actions(tmp_path, python_executable="/py")
 
     static = review_tui.action_by_id("experiment-static-baseline", actions)
+    full = review_tui.action_by_id("experiment-full-budget", actions)
     non_agentic = review_tui.action_by_id("experiment-non-agentic-budget", actions)
     agentic = review_tui.action_by_id("experiment-agentic-budget", actions)
 
     assert "--sast-only" in static.command
     assert "--run-id-prefix" in static.command
     assert "canonical-v2-static" in static.command
+    assert "--skip-static" in full.command
+    assert "--sast-only" not in full.command
+    assert "--skip-agentic" not in full.command
     assert "--skip-static" in non_agentic.command
     assert "--skip-agentic" in non_agentic.command
     assert "--only-agentic" in agentic.command
+
+
+def test_full_model_runs_skip_static_for_every_profile(tmp_path):
+    actions = review_tui.build_actions(tmp_path, python_executable="/py")
+
+    for profile, _label in review_tui.EXPERIMENT_PROFILES:
+        action = review_tui.action_by_id(f"experiment-full-{review_tui._profile_slug(profile)}", actions)
+        assert "--skip-static" in action.command
+        assert "--sast-only" not in action.command
+        assert action.title.endswith("model run")
+
+    static_actions = [
+        action for action in actions
+        if action.section == review_tui.SECTION_EXPERIMENT and "--sast-only" in action.command
+    ]
+    assert [action.id for action in static_actions] == ["experiment-static-baseline"]
 
 
 def test_safe_action_executes_with_repo_root_cwd_through_runner(tmp_path):

@@ -326,11 +326,12 @@ can run a deployment smoke test; it is not treated as an experiment by default.
 Experiment Suite` contains actual analyzer runs and warns when the active
 context's `src/data/eval_results.db` already contains result rows.
 
-The canonical experiment actions are organized so static baselines can be run
-once, followed by non-agentic and agentic-only model lanes. Legacy full profile
-runs remain available, but they repeat static detector work if run separately
-for budget, medium, and frontier. The Gemini ON/OFF toggle rewrites deployment,
-dry-run, smoke, and experiment commands.
+The canonical experiment actions are organized so static baselines run only via
+`Static baseline once`. Full budget/medium/frontier model runs skip static
+detectors and cover only hybrid, raw LLM, and agentic adapters. Non-agentic and
+agentic-only subset lanes remain available for cost and latency control. The
+Gemini ON/OFF toggle rewrites deployment, dry-run, smoke, and experiment
+commands.
 
 The TUI prints the exact command before running each action and asks for
 confirmation before actions that mutate the local DB, change deployment state,

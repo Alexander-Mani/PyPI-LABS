@@ -628,9 +628,9 @@ def build_actions(
         actions.append(ReviewAction(
             id=f"experiment-full-{slug}",
             section=SECTION_EXPERIMENT,
-            title=f"Legacy full {label} experiment",
-            description="Run static, hybrid, raw, and agentic together; repeats static baselines if run per tier.",
-            command=evaluate(profile, "--run-id-prefix", "canonical-v2", "--progress", "always"),
+            title=f"Full {label} model run",
+            description="Run hybrid, raw LLM, and agentic adapters only; static baseline is a separate action.",
+            command=evaluate(profile, "--skip-static", "--run-id-prefix", "canonical-v2", "--progress", "always"),
             safety=SAFETY_API_COST,
             confirm=True,
             double_confirm=high_cost,
