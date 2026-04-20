@@ -320,7 +320,10 @@ def test_context_status_action_registered(tmp_path):
     action = review_tui.action_by_id("context-status", actions)
 
     assert action.section == review_tui.SECTION_DEPLOYMENT
-    assert "Context:" in review_tui.command_preview(action.command)
+    preview = review_tui.command_preview(action.command)
+    assert "Context:" in preview
+    assert "Configured Python:" in preview
+    assert "Effective Python:" in preview
 
 
 def test_auto_context_prefers_deployed_when_available(tmp_path):
@@ -387,9 +390,76 @@ contexts:
     context = review_tui.resolve_review_context("deployed", config_path=config)
 
     assert context.python_executable == str(deployed_python.resolve())
+    assert context.warnings
+    assert "No Python configured" in context.warnings[0]
 
 
-def test_deployed_context_rejects_system_python_override(tmp_path):
+def test_auto_context_keeps_deployed_runner_even_when_venv_missing(tmp_path):
+    deployed = tmp_path / "deployed"
+    deployed.mkdir()
+    local = tmp_path / "local"
+    local.mkdir()
+    config = tmp_path / "review_tui.yaml"
+    config.write_text(
+        f"""
+default_context: auto
+contexts:
+  deployed:
+    repo_root: {deployed}
+    python: null
+    runner_user: pypi-runner
+    litellm_log: /tmp/litellm.log
+    deployment_cwd: {local}
+    deployment_script: {local / 'deployment.sh'}
+  local:
+    repo_root: {local}
+    python: {sys.executable}
+    runner_user: null
+    litellm_log: /tmp/litellm.log
+    deployment_cwd: {local}
+    deployment_script: {local / 'deployment.sh'}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    context = review_tui.resolve_review_context("auto", config_path=config)
+
+    assert context.name == "deployed"
+    assert context.runner_user == "pypi-runner"
+    assert context.python_executable == str(deployed / "venv" / "bin" / "python")
+    assert any("does not exist yet" in warning for warning in context.warnings)
+
+
+def test_deployed_context_repairs_system_python_config(tmp_path):
+    deployed = tmp_path / "deployed"
+    deployed.mkdir()
+    deployed_python = deployed / "venv" / "bin" / "python"
+    deployed_python.parent.mkdir(parents=True)
+    deployed_python.write_text("", encoding="utf-8")
+    config = tmp_path / "review_tui.yaml"
+    config.write_text(
+        f"""
+default_context: deployed
+contexts:
+  deployed:
+    repo_root: {deployed}
+    python: {sys.executable}
+    runner_user: pypi-runner
+    litellm_log: /tmp/litellm.log
+    deployment_cwd: {tmp_path}
+    deployment_script: {tmp_path / 'deployment.sh'}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    context = review_tui.resolve_review_context("deployed", config_path=config)
+
+    assert context.configured_python == sys.executable
+    assert context.python_executable == str(deployed_python)
+    assert any("outside" in warning and "using repo venv" in warning for warning in context.warnings)
+
+
+def test_deployed_context_warns_but_keeps_menu_usable_without_venv(tmp_path):
     deployed = tmp_path / "deployed"
     deployed.mkdir()
     config = tmp_path / "review_tui.yaml"
@@ -408,12 +478,10 @@ contexts:
         encoding="utf-8",
     )
 
-    try:
-        review_tui.resolve_review_context("deployed", config_path=config)
-    except SystemExit as exc:
-        assert "Python outside the deployed repo" in str(exc)
-    else:
-        raise AssertionError("deployed context accepted system Python")
+    context = review_tui.resolve_review_context("deployed", config_path=config)
+
+    assert context.python_executable == str(Path(sys.executable).resolve())
+    assert any("expected repo venv is missing" in warning for warning in context.warnings)
 
 
 def test_deployed_context_commands_use_deployed_repo_and_python(tmp_path):

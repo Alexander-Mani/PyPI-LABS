@@ -72,10 +72,12 @@ class ReviewContext:
     name: str
     repo_root: Path
     python_executable: str
+    configured_python: str | None = None
     runner_user: str | None = None
     litellm_log: Path = Path("/home/proxy-runner/litellm.log")
     deployment_cwd: Path = _REPO_ROOT
     deployment_script: Path = _REPO_ROOT / "deployment.sh"
+    warnings: tuple[str, ...] = ()
 
     @property
     def db_path(self) -> Path:
@@ -92,6 +94,7 @@ def _default_local_context(repo_root: Path = _REPO_ROOT, python_executable: str 
         name="local",
         repo_root=repo_root,
         python_executable=str(python_executable),
+        configured_python=str(python_executable),
         runner_user=None,
         litellm_log=Path("/home/proxy-runner/litellm.log"),
         deployment_cwd=repo_root,
@@ -169,43 +172,56 @@ def _context_from_config(name: str, config: dict, *, base: Path, python_fallback
             return _default_local_context(_REPO_ROOT, python_fallback)
         raise SystemExit(f"HALT: unknown review TUI context '{name}'")
     repo_root = _resolve_path(raw.get("repo_root"), base=base, default=_REPO_ROOT)
-    python_value = raw.get("python")
-    if python_value is None and raw.get("runner_user"):
-        python_value = str(repo_root / "venv" / "bin" / "python")
-    elif python_value is None:
-        python_value = python_fallback
-    python_path = str(_resolve_path(python_value, base=base)) if python_value != python_fallback else python_fallback
+    runner_user = raw.get("runner_user")
+    configured_python = raw.get("python")
+    warnings: list[str] = []
+
+    if configured_python is None and runner_user:
+        venv_python = repo_root / "venv" / "bin" / "python"
+        python_path = str(venv_python)
+        warnings.append(f"No Python configured for runner context; using repo venv: {venv_python}")
+    elif configured_python is None:
+        python_path = python_fallback
+    else:
+        candidate = _resolve_path(configured_python, base=base)
+        python_path = str(candidate)
+        if runner_user:
+            try:
+                candidate.resolve().relative_to(repo_root.resolve())
+            except ValueError:
+                venv_python = repo_root / "venv" / "bin" / "python"
+                if venv_python.exists():
+                    python_path = str(venv_python)
+                    warnings.append(
+                        f"Configured Python {candidate} is outside {repo_root}; using repo venv: {venv_python}"
+                    )
+                else:
+                    warnings.append(
+                        f"Configured Python {candidate} is outside {repo_root}; expected repo venv is missing: {venv_python}"
+                    )
+
+    python_candidate = Path(python_path)
+    if runner_user and not python_candidate.exists():
+        warnings.append(
+            f"Runner Python does not exist yet: {python_candidate}. Deployment setup can recreate the venv."
+        )
     return ReviewContext(
         name=name,
         repo_root=repo_root,
         python_executable=python_path,
-        runner_user=raw.get("runner_user"),
+        configured_python=configured_python,
+        runner_user=runner_user,
         litellm_log=_resolve_path(raw.get("litellm_log"), base=base, default=Path("/home/proxy-runner/litellm.log")),
         deployment_cwd=_resolve_path(raw.get("deployment_cwd"), base=base, default=_REPO_ROOT),
         deployment_script=_resolve_path(raw.get("deployment_script"), base=base, default=_REPO_ROOT / "deployment.sh"),
+        warnings=tuple(warnings),
     )
 
 
 def _context_ready(context: ReviewContext) -> bool:
+    if context.runner_user:
+        return context.repo_root.exists()
     return context.repo_root.exists() and Path(context.python_executable).exists()
-
-
-def _validate_review_context(context: ReviewContext, *, python_override: str | None = None) -> None:
-    if context.name != "deployed" and context.runner_user is None:
-        return
-
-    python_path = Path(context.python_executable)
-    try:
-        python_path.resolve().relative_to(context.repo_root.resolve())
-        return
-    except ValueError:
-        source = "--python override" if python_override else "context config/fallback"
-        raise SystemExit(
-            "HALT: deployed Review TUI context resolved to a Python outside the "
-            f"deployed repo ({python_path}) from {source}. This usually means the "
-            "configured venv path was not read and commands would run with system "
-            f"Python instead of {context.repo_root / 'venv' / 'bin' / 'python'}."
-        )
 
 
 def resolve_review_context(
@@ -233,16 +249,38 @@ def resolve_review_context(
                 f"{context.repo_root} / {context.python_executable}"
             )
     if repo_root_override is not None or python_override is not None:
+        warnings = list(context.warnings)
+        effective_python = context.python_executable
+        configured_python = context.configured_python
+        if python_override is not None:
+            configured_python = str(python_override)
+            override_path = Path(python_override)
+            effective_python = str(override_path)
+            if context.runner_user:
+                try:
+                    override_path.resolve().relative_to(context.repo_root.resolve())
+                except ValueError:
+                    venv_python = context.repo_root / "venv" / "bin" / "python"
+                    if venv_python.exists():
+                        effective_python = str(venv_python)
+                        warnings.append(
+                            f"Python override {override_path} is outside {context.repo_root}; using repo venv: {venv_python}"
+                        )
+                    else:
+                        warnings.append(
+                            f"Python override {override_path} is outside {context.repo_root}; expected repo venv is missing: {venv_python}"
+                        )
         context = ReviewContext(
             name=context.name,
             repo_root=Path(repo_root_override).resolve() if repo_root_override is not None else context.repo_root,
-            python_executable=str(python_override) if python_override is not None else context.python_executable,
+            python_executable=effective_python,
+            configured_python=configured_python,
             runner_user=context.runner_user,
             litellm_log=context.litellm_log,
             deployment_cwd=context.deployment_cwd,
             deployment_script=context.deployment_script,
+            warnings=tuple(warnings),
         )
-    _validate_review_context(context, python_override=python_override)
     return context
 
 
@@ -254,7 +292,7 @@ def context_summary(context: ReviewContext) -> str:
 
 
 def context_warnings(context: ReviewContext) -> list[str]:
-    warnings: list[str] = []
+    warnings: list[str] = list(context.warnings)
     python_path = Path(context.python_executable)
     try:
         python_path.relative_to(context.repo_root)
@@ -578,12 +616,14 @@ def build_actions(
                 + shlex.join([
                     f"Context: {context.name}",
                     f"Repo root: {context.repo_root}",
-                    f"Python: {context.python_executable}",
+                    f"Configured Python: {context.configured_python or 'not set'}",
+                    f"Effective Python: {context.python_executable}",
                     f"Runner user: {context.runner_user or 'current user'}",
                     f"DB: {context.db_path}",
                     f"LiteLLM log: {context.litellm_log}",
                     f"Deployment cwd: {context.deployment_cwd}",
                     f"Deployment script: {context.deployment_script}",
+                    f"Warnings: {'; '.join(context.warnings) if context.warnings else 'none'}",
                 ])
             ),
         ),
@@ -930,7 +970,7 @@ def build_actions(
             description="Check deployment shell syntax and compile helper scripts.",
             command=_context_db_shell(
                 context,
-                "bash -n deployment.sh && "
+                "bash -n deployment.sh && bash -n scripts/review_tui_telemetry.sh && "
                 f"{shlex.quote(context.python_executable)} -m py_compile "
                 "scripts/review_tui.py scripts/litellm_smoke.py scripts/model_memory_probe.py "
                 "scripts/archive_eval_db.py src/analyzer/evaluate.py",
