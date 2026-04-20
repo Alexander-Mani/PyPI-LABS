@@ -286,6 +286,12 @@ investigation, inspects extracted package evidence through constrained tools,
 and returns a structured verdict. It does not install packages, execute package
 code, run shell commands, or evaluate Codex/Claude Code directly.
 
+Runtime note: GuardDog and agentic mode are expected to be slower than Bandit,
+Semgrep, and single-shot LLM modes. GuardDog pays local rule-scanner startup and
+large-tree scanning cost per artifact; agentic mode pays for multiple LiteLLM
+turns and serialized read-only tool use. See `docs/ops/RISK_DIARY.md` Decision
+11 for thesis-facing interpretation guidance.
+
 The model-memory probe is a separate validity sidecar for checking whether
 models recognize package names and versions from public incident reporting. It
 does not send source code, ground-truth labels, Backstabber's Knife references,

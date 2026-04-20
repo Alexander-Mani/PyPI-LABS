@@ -403,3 +403,53 @@ The bounded adapter is intentionally less capable than full coding-agent product
 because it cannot run arbitrary commands or execute tests. This reduces ecological
 validity relative to unrestricted coding agents, but it is required for safe,
 reproducible malware evaluation.
+
+---
+
+## Decision 11 — Runtime Interpretation for GuardDog and Agentic Mode
+
+**Decision:**
+GuardDog and agentic mode are retained despite higher wall-clock cost because
+they answer different research questions than the cheap single-shot detectors.
+GuardDog represents a PyPI-malware-specific rule baseline, while agentic mode
+represents a bounded read-only investigation workflow.
+
+**Why GuardDog is slow:**
+GuardDog is not expected to perform live PyPI requests during evaluation. The
+adapter invokes `guarddog pypi scan <local-tempdir> --output-format=json` with
+an explicit source-rule allowlist and scans the local `PackageInfo.files`
+evidence set. Metadata heuristics that can query live registry metadata are
+excluded.
+
+The wall-clock cost comes from local work: creating a temporary source tree,
+starting a fresh GuardDog subprocess per artifact, loading GuardDog/Semgrep-style
+rules, scanning every file in large package trees, and repeating this for every
+wheel/sdist selected by the canonical all-artifacts policy. The 180 second
+timeout is a scanner bound, not evidence of network access.
+
+**How to verify GuardDog is not using network evidence:**
+Inspect the raw experiment JSONL for `static.command.start` events where
+`detector=guarddog`. The recorded `argv` should contain a local temporary
+directory and repeated `--rules` flags, not a package name or registry URL. If
+stderr/stdout contains DNS, connection, HTTP, PyPI, or registry text, treat that
+as a network-leak bug and preserve the row as `experiment_mode="error"`.
+
+**Why agentic mode is slow:**
+Agentic mode is intentionally multi-turn. The configured flow first asks the
+model to produce an investigation plan, then enters a bounded tool loop where
+the model can request read-only file-listing, file-search, and file-inspection
+tools. Each loop iteration requires another LiteLLM HTTP request and resends
+growing conversation context, tool schemas, tool outputs, and package evidence.
+
+This makes agentic mode slower and more expensive than `llm_raw` or `hybrid`
+single-shot prompts. The latency is expected provider/model latency plus token
+volume plus serialized tool iterations. It is not equivalent to running Claude
+Code or Codex interactively, and it does not install, import, or execute package
+code.
+
+**Interpretation for thesis metrics:**
+Report runtime separately from detection quality. GuardDog latency should be
+interpreted as the cost of a malware-specific static baseline. Agentic latency
+should be interpreted as the cost of a richer investigation workflow. Static,
+non-agentic LLM, and agentic lanes may be run separately to avoid duplicating
+static scans and to keep wall-clock time manageable.
