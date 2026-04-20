@@ -60,8 +60,13 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"context    : {review_tui.context_summary(context)}")
     print(f"runner_user: {context.runner_user or 'current user'}")
+    print(f"configured : {context.configured_python or 'not set'}")
     print(f"python     : {context.python_executable}")
     print(f"python ok  : {Path(context.python_executable).exists()}")
+    if context.warnings:
+        print("warnings   :")
+        for warning in context.warnings:
+            print(f"  - {warning}")
 
     import_ok, import_output = _check_python_import(context.python_executable, args.module)
     print(f"import     : {args.module} -> {'ok' if import_ok else 'FAIL'}")
