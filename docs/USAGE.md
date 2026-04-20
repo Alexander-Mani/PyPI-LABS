@@ -271,6 +271,7 @@ Useful flags:
 | `--progress` | `auto` | Live evaluation dashboard: `auto`, `always`, or `never` |
 | `--raw-experiment-log` | `on` | Write raw JSONL flight recorder under `logs/experiments/`; use `off` only for throwaway runs |
 | `--run-id-prefix` | off | Prefix generated run IDs, e.g. `canonical-v2-*`, so old methodology rows can be filtered out |
+| `--identity-alias-probe` | off | Run the standalone masked-identity validity probe: one `hybrid:zero_shot` call per non-agentic model, no static, no raw, no agentic |
 
 Profiles can also carry resolver settings. The full `budget`, `medium`,
 `frontier`, and `all_models` profiles scan all selected latest labelled package
@@ -306,6 +307,33 @@ python scripts/model_memory_probe.py --profile budget
 python scripts/model_memory_probe.py --profile frontier --gemini off
 ```
 
+The identity-alias probe is a second validity sidecar for checking whether
+source-based LLM verdicts are sensitive to recognizable public incident identity.
+It does not try to prove that a model was trained on package artifacts. The
+realistic risk is prior knowledge from public advisories, news, forums, package
+lists, or writeups. The probe masks package names and versions as neutral aliases
+such as `X001` / `V001`, then runs only one cheap lane: `hybrid:zero_shot` across
+the selected non-agentic models.
+
+```bash
+# Run the cheap alias probe across all configured non-agentic models.
+python src/analyzer/evaluate.py --profile all_models --identity-alias-probe
+
+# Use the Gemini toggle if Google routing is unavailable or too expensive.
+python src/analyzer/evaluate.py --profile all_models --identity-alias-probe --gemini off
+
+# Verify that model-facing request blobs did not contain original package identity.
+python scripts/check_identity_alias_leaks.py --run-id canonical-v2-alias-<uuid>
+```
+
+Alias probe rows are written to `eval_results.db` under the original package and
+version for grouping, but result `details` include `identity_mask="alias"` and
+`alias_probe=true`. Treat these rows as validity evidence, not replacement
+canonical metrics. If a canonical run detects a package but the alias probe
+misses it, interpret that as identity sensitivity. For typosquats, package
+identity can itself be legitimate attack evidence, so alias misses are not proof
+of memorization.
+
 LKGR samples remain part of the dataset for provenance and baseline context, but
 canonical scoring uses only the latest labelled stable version per package. Old
 database rows may contain `sample_limits` in `resolver_policy`; canonical runs
@@ -322,6 +350,14 @@ Real evaluation runs also write a raw machine-readable flight recorder to
 `logs/experiments/<run_id>.blobs/`. Use this with `jq` or Python to verify exact
 simulator endpoints, extracted files, detector inputs, raw outputs, and DB writes.
 
+LLM and agentic detectors must return the required JSON verdict object. If a
+provider returns an empty body, prose, truncated output, or JSON without a valid
+`verdict`, the row is stored as `experiment_mode="error"` with
+`details.protocol_failure=true`. Empty model responses are marked
+`details.retryable=true`; malformed non-empty outputs are preserved as errors but
+are not automatically retryable. These rows are excluded from package-version
+metrics rather than counted as benign.
+
 ---
 
 ## Review Runner TUI
@@ -332,6 +368,10 @@ script and flag:
 ```bash
 python scripts/review_tui.py
 ```
+
+The experiment menu includes `Validity: identity alias probe, all models` for
+the standalone masked-identity probe. It respects the Gemini toggle and runs the
+same `--profile all_models --identity-alias-probe` path shown above.
 
 The TUI reads `configs/review_tui.yaml`. By default `--context auto` prefers the
 deployed VM checkout at `/home/pypi-runner/pypi-scada-repo` when that repo and
@@ -459,3 +499,16 @@ Useful safety options:
 python scripts/archive_eval_db.py --dry-run
 python scripts/archive_eval_db.py --no-init
 ```
+
+**Normalize historical malformed LLM rows**
+Older runs may contain non-error LLM rows with `details.raw` because malformed
+model responses used to be parsed as benign. Preview and then apply the
+normalizer before interpreting those rows:
+
+```bash
+python scripts/normalize_llm_protocol_failures.py --db eval_results.db
+python scripts/normalize_llm_protocol_failures.py --db eval_results.db --apply
+```
+
+The script creates a timestamped backup unless `--no-backup` is passed. It
+checks for unique-key collisions before mutating rows.

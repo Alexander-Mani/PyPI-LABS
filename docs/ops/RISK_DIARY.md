@@ -227,6 +227,21 @@ The source-free `scripts/model_memory_probe.py` sidecar records whether models
 recognize selected package names/versions without source evidence; those JSONL
 results are validity evidence only and are not included in detector metrics.
 
+The identity-alias probe adds a second, cheap validity control for the same
+risk. `src/analyzer/evaluate.py --profile all_models --identity-alias-probe`
+masks model-visible package names and versions as neutral aliases such as
+`X001` / `V001`, then runs only one source-based lane:
+`hybrid:zero_shot` across non-agentic models. It skips static tools, raw LLM
+mode, prompt-strategy sweeps, agentic mode, and financial validation so it stays
+timely late in the semester. The probe is not a corrected score and does not
+prove training-set membership. It tests whether model verdicts are sensitive to
+recognizable public identity cues while preserving source-code behavior evidence.
+Because package identity can itself be part of the attack signal, especially for
+typosquatting, alias misses are interpreted as identity sensitivity rather than
+proof of memorization. Use `scripts/check_identity_alias_leaks.py` on alias run
+IDs to verify that model-facing request blobs do not contain original package
+identity.
+
 ---
 
 ## Decision 7 — GuardDog source-only baseline
@@ -453,3 +468,38 @@ interpreted as the cost of a malware-specific static baseline. Agentic latency
 should be interpreted as the cost of a richer investigation workflow. Static,
 non-agentic LLM, and agentic lanes may be run separately to avoid duplicating
 static scans and to keep wall-clock time manageable.
+
+---
+
+## Decision 12 — Malformed LLM Responses Are Protocol Errors, Not Benign Verdicts
+
+**Decision:**
+LLM, raw-LLM, and agentic adapters treat any model response that fails the
+required JSON verdict contract as `experiment_mode="error"`. They no longer
+default missing or malformed verdict JSON to benign. The raw response is retained
+in `details.raw` and the row records `details.protocol_failure=true`.
+
+**Why this matters:**
+Counting empty or prose-only model outputs as benign creates false negatives and
+can make an overloaded, truncated, or format-noncompliant model look like a
+conservative detector. That is not scientifically valid. A detector that did not
+produce a parseable verdict did not make a benign classification.
+
+**Retry policy:**
+Empty responses are marked `details.retryable=true` because they are usually
+provider, timeout, overload, or transport symptoms. Non-empty malformed responses
+are marked `details.retryable=false` by default because they may reflect prompt
+noncompliance or model behavior, not a transient outage. A separate retry script
+can later select only retryable rows.
+
+**Historical cleanup:**
+`scripts/normalize_llm_protocol_failures.py` converts older non-error LLM rows
+with `details.raw` into explicit protocol-error rows after first checking for
+unique-key collisions and creating a timestamped backup. Use this on old
+databases before comparing them with canonical-v2 results.
+
+**Interpretation for thesis metrics:**
+Protocol-error rows are excluded from package-version metrics like other
+`experiment_mode="error"` rows. Report their count separately when discussing
+provider reliability, especially for agentic runs where long multi-turn calls
+are more likely to hit rate limits or truncation.

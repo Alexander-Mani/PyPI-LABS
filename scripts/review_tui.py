@@ -784,6 +784,20 @@ def build_actions(
             requires_clean_db=True,
         ),
         ReviewAction(
+            id="experiment-identity-alias-probe",
+            section=SECTION_EXPERIMENT,
+            title="Validity: identity alias probe, all models",
+            description=(
+                "Run one masked-identity hybrid zero-shot call per non-agentic "
+                "model; no static, no raw, no agentic."
+            ),
+            command=evaluate("all_models", "--identity-alias-probe", "--progress", "always"),
+            safety=SAFETY_API_COST,
+            confirm=True,
+            double_confirm=True,
+            requires_clean_db=True,
+        ),
+        ReviewAction(
             id="analyzer-dry-run-test",
             section=SECTION_DRY_RUNS,
             title="Analyzer dry-run, tiny test profile",
@@ -861,6 +875,22 @@ def build_actions(
             command=_context_sqlite(context, _sqlite_error_query()),
         ),
         ReviewAction(
+            id="db-normalize-protocol-dry-run",
+            section=SECTION_DATABASE,
+            title="Preview LLM protocol-error normalization",
+            description="Show non-error LLM rows with raw malformed/empty outputs that would become error rows.",
+            command=_context_script(context, "scripts/normalize_llm_protocol_failures.py"),
+        ),
+        ReviewAction(
+            id="db-normalize-protocol",
+            section=SECTION_DATABASE,
+            title="Normalize LLM protocol errors",
+            description="Back up eval_results.db, then convert malformed/empty raw LLM outputs to explicit error rows.",
+            command=(*_context_script(context, "scripts/normalize_llm_protocol_failures.py"), "--apply"),
+            safety=SAFETY_MUTATES_DB,
+            confirm=True,
+        ),
+        ReviewAction(
             id="db-detector-summary",
             section=SECTION_DATABASE,
             title="Show detector summary",
@@ -925,6 +955,9 @@ def build_actions(
                 "tests/test_financial_validation.py",
                 "tests/test_litellm_smoke.py",
                 "tests/test_model_memory_probe.py",
+                "tests/test_identity_alias_probe.py",
+                "tests/test_adapters.py",
+                "tests/test_normalize_llm_protocol_failures.py",
                 "tests/test_review_tui.py",
                 "-q",
             ),
@@ -944,8 +977,15 @@ def build_actions(
             id="tests-db-archive",
             section=SECTION_TESTS,
             title="Run DB/archive tests",
-            description="Run DB schema and archive helper tests.",
-            command=_context_python_module(context, "pytest", "tests/test_eval_db_schema.py", "tests/test_archive_eval_db.py", "-q"),
+            description="Run DB schema, archive, and protocol-normalizer helper tests.",
+            command=_context_python_module(
+                context,
+                "pytest",
+                "tests/test_eval_db_schema.py",
+                "tests/test_archive_eval_db.py",
+                "tests/test_normalize_llm_protocol_failures.py",
+                "-q",
+            ),
         ),
         ReviewAction(
             id="tests-litellm-smoke",
@@ -973,7 +1013,9 @@ def build_actions(
                 "bash -n deployment.sh && bash -n scripts/review_tui_telemetry.sh && "
                 f"{shlex.quote(context.python_executable)} -m py_compile "
                 "scripts/review_tui.py scripts/litellm_smoke.py scripts/model_memory_probe.py "
-                "scripts/archive_eval_db.py src/analyzer/evaluate.py",
+                "scripts/check_identity_alias_leaks.py scripts/archive_eval_db.py "
+                "scripts/normalize_llm_protocol_failures.py "
+                "src/analyzer/evaluate.py",
             ),
         ),
     ])

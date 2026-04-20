@@ -288,7 +288,7 @@ benchmark metrics.**
 
 **Why it matters:** A frontier-LLM "correct" verdict on `colourama` does not prove the LLM can detect unseen typosquats — it may prove only that the LLM read about `colourama` during pre-training. This is the residual risk of Decision 6 (folder-based ground truth, `docs/ops/RISK_DIARY.md`). It weakens external-validity claims under RQ1 unless explicitly controlled for.
 
-**Implemented control:**
+**Implemented controls:**
 `scripts/model_memory_probe.py` runs a name/version-only recognition probe
 through LiteLLM. It sends no source code, no extracted evidence, no ground-truth
 label, no Backstabber's Knife reference, and no dataset membership. Cases live
@@ -296,25 +296,66 @@ in `configs/model_memory_probe_cases.json` and include known public incident
 names plus benign/decoy controls. Results are written as JSONL under
 `logs/model_memory_probe/`.
 
+`src/analyzer/evaluate.py --identity-alias-probe` runs a cheap source-based
+identity-sensitivity probe. It masks package names and versions as neutral
+aliases such as `X001` / `V001`, then runs only `hybrid:zero_shot` across the
+selected non-agentic models. It skips static tools, raw LLM mode, prompt
+strategy sweeps, agentic mode, and financial validation. Rows are written to
+`eval_results.db` under the original package/version but include
+`identity_mask="alias"` and `alias_probe=true` in result details. Use
+`scripts/check_identity_alias_leaks.py --run-id <run_id>` to verify that
+model-facing request blobs did not contain original identity terms.
+
 Example:
 
 ```bash
 python scripts/model_memory_probe.py --profile budget --dry-run
 python scripts/model_memory_probe.py --profile frontier
+python src/analyzer/evaluate.py --profile all_models --identity-alias-probe
 ```
 
 **Interpretation rule:**
-The probe is not a contamination detector and cannot prove that a model was or
-was not trained on a specific package. It only records whether a model can
-recognize named incidents without seeing source evidence. If a model recognizes
-`colourama==0.1.6` or `ultralytics==8.3.41` in this source-free setting, final
-thesis interpretation should treat code-based success on those packages as
-potentially aided by prior public knowledge. If the model does not recognize a
-case, that still does not prove the benchmark verdict was source-derived.
+Neither probe is a contamination detector and neither can prove that a model was
+or was not trained on a specific package artifact. The realistic risk is public
+incident prior knowledge from advisories, news, forums, package lists, and
+writeups. If a model recognizes `colourama==0.1.6` or `ultralytics==8.3.41` in
+the source-free setting, final thesis interpretation should treat code-based
+success on those packages as potentially aided by prior public knowledge. If a
+canonical source run detects a package but the alias run misses it, interpret
+that as identity sensitivity. If the alias run still detects it, source evidence
+appears sufficient even without package identity. If the model does not recognize
+a case, that still does not prove the benchmark verdict was source-derived.
 
 **What to do in the thesis:**
 - Continue to name this as a Decision 6 residual in the Validity section.
-- Report source-free probe results in an appendix or validity subsection,
+- Report source-free and identity-alias probe results in an appendix or validity subsection,
   separate from the detector metrics table.
 - Use the probe as a sanity check when interpreting unusually strong results on
   famous public incidents, not as a row-level correction factor.
+
+---
+
+## 9. Empty or Malformed Model Responses Must Not Become Benign Rows
+
+**Status: Fixed in adapters; historical DBs may need normalization.**
+
+**Observation:** Some LiteLLM calls can return an empty assistant body or a
+non-JSON/prose response while still producing tokens and cost metadata. The old
+parser path preserved that text in `details.raw` but returned `verdict=False`,
+which made the row look like a benign classification.
+
+**Why it matters:** This is a false-negative accounting bug. A model that failed
+the required response protocol did not classify the package as benign. Counting
+these rows in metrics penalizes or rewards detectors for provider/protocol
+failures instead of detection behavior.
+
+**Implemented control:** Hybrid, raw-LLM, and agentic adapters now store these
+cases as `experiment_mode="error"` with `details.protocol_failure=true`.
+Empty responses are marked `details.retryable=true`; malformed non-empty outputs
+are marked `details.retryable=false` unless a later retry policy explicitly
+decides otherwise. Token counts and LiteLLM-reported costs are preserved so
+provider reliability and spend can still be audited.
+
+**Historical cleanup:** Run `scripts/normalize_llm_protocol_failures.py` against
+older databases before interpreting them. The script dry-runs by default, checks
+for unique-key collisions, and creates a timestamped backup before applying.

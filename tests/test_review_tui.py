@@ -51,6 +51,7 @@ def test_action_registry_contains_expected_sectioned_actions(tmp_path):
         "analyzer-dry-run-test-no-gemini",
         "experiment-tiny-test",
         "experiment-static-baseline",
+        "experiment-identity-alias-probe",
         "experiment-non-agentic-budget",
         "experiment-non-agentic-medium",
         "experiment-non-agentic-frontier",
@@ -129,6 +130,8 @@ def test_safety_and_confirmation_policy(tmp_path):
     assert by_id["experiment-full-budget"].double_confirm is False
     assert by_id["experiment-full-frontier"].double_confirm is True
     assert by_id["experiment-full-all-models"].double_confirm is True
+    assert by_id["experiment-identity-alias-probe"].requires_clean_db is True
+    assert by_id["experiment-identity-alias-probe"].double_confirm is True
     assert by_id["deployment-setup"].safety == review_tui.SAFETY_DEPLOYMENT
     assert by_id["deployment-setup"].double_confirm is True
     assert by_id["deployment-smoke-test"].requires_clean_db is True
@@ -161,6 +164,8 @@ def test_gemini_toggle_changes_generated_commands(tmp_path):
     disabled_smoke = review_tui.action_by_id("models-smoke-all", disabled)
     enabled_probe = review_tui.action_by_id("memory-probe-budget", enabled)
     disabled_probe = review_tui.action_by_id("memory-probe-budget", disabled)
+    enabled_alias = review_tui.action_by_id("experiment-identity-alias-probe", enabled)
+    disabled_alias = review_tui.action_by_id("experiment-identity-alias-probe", disabled)
     enabled_deploy = review_tui.action_by_id("deployment-setup", enabled)
     disabled_deploy = review_tui.action_by_id("deployment-setup", disabled)
 
@@ -170,6 +175,8 @@ def test_gemini_toggle_changes_generated_commands(tmp_path):
     assert disabled_smoke.command[disabled_smoke.command.index("--gemini") + 1] == "off"
     assert enabled_probe.command[enabled_probe.command.index("--gemini") + 1] == "on"
     assert disabled_probe.command[disabled_probe.command.index("--gemini") + 1] == "off"
+    assert enabled_alias.command[enabled_alias.command.index("--gemini") + 1] == "on"
+    assert disabled_alias.command[disabled_alias.command.index("--gemini") + 1] == "off"
     assert "GEMINI=on" in enabled_deploy.command[2]
     assert "GEMINI=off" in disabled_deploy.command[2]
 
@@ -211,6 +218,20 @@ def test_experiment_suite_has_deduplicated_lanes(tmp_path):
     assert "--skip-static" in non_agentic.command
     assert "--skip-agentic" in non_agentic.command
     assert "--only-agentic" in agentic.command
+
+
+def test_identity_alias_probe_is_standalone_all_models_action(tmp_path):
+    actions = review_tui.build_actions(tmp_path, python_executable="/py")
+    alias = review_tui.action_by_id("experiment-identity-alias-probe", actions)
+
+    assert alias.section == review_tui.SECTION_EXPERIMENT
+    assert alias.command[:2] == ("/py", str(tmp_path / "src" / "analyzer" / "evaluate.py"))
+    assert alias.command[alias.command.index("--profile") + 1] == "all_models"
+    assert "--identity-alias-probe" in alias.command
+    assert "--sast-only" not in alias.command
+    assert "--only-agentic" not in alias.command
+    assert "--skip-agentic" not in alias.command
+    assert "identity alias probe" in alias.title
 
 
 def test_model_memory_probe_actions_are_source_free_sidecars(tmp_path):
