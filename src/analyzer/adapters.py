@@ -131,6 +131,51 @@ def _static_error_result(
     )
 
 
+def _protocol_failure_details(raw: str | None, *, reason: str | None = None) -> dict:
+    raw_text = raw or ""
+    error = "empty_model_response" if not raw_text.strip() else "unparseable_model_response"
+    details = {
+        "error": error,
+        "protocol_failure": True,
+        "retryable": error == "empty_model_response",
+        "raw": raw_text,
+    }
+    if reason:
+        details["parse_error"] = reason
+    return details
+
+
+def _is_protocol_failure(details: dict) -> bool:
+    return bool(details.get("protocol_failure"))
+
+
+def _parse_json_verdict_response(raw: str) -> tuple[bool, float | None, dict]:
+    import re as _re
+
+    m = _re.search(r"\{.*\}", raw, _re.DOTALL)
+    if not m:
+        return False, None, _protocol_failure_details(raw, reason="no_json_object")
+    try:
+        data = _json.loads(m.group())
+    except _json.JSONDecodeError:
+        return False, None, _protocol_failure_details(raw, reason="invalid_json")
+    if not isinstance(data, dict):
+        return False, None, _protocol_failure_details(raw, reason="json_not_object")
+
+    verdict_raw = data.get("verdict")
+    if not isinstance(verdict_raw, str):
+        return False, None, _protocol_failure_details(raw, reason="missing_or_invalid_verdict")
+    verdict_str = verdict_raw.strip().lower()
+    if verdict_str not in {"malicious", "benign"}:
+        return False, None, _protocol_failure_details(raw, reason="invalid_verdict")
+
+    try:
+        confidence = float(data["confidence"]) if "confidence" in data else None
+    except (TypeError, ValueError):
+        return False, None, _protocol_failure_details(raw, reason="invalid_confidence")
+    return verdict_str == "malicious", confidence, data
+
+
 def _context(trace_context: dict | None, pkg: PackageInfo | None = None) -> dict:
     ctx = dict(trace_context or {})
     if pkg is not None:
@@ -155,6 +200,21 @@ def _blob_text(raw_log, kind: str, text: str, suffix: str = ".txt"):
     if raw_log is None:
         return None
     return raw_log.blob_text(kind, text or "", suffix=suffix)
+
+
+def _emit_protocol_error(raw_log, event: str, ctx: dict, *, model: str, details: dict) -> None:
+    if raw_log is None:
+        return
+    payload = {
+        "model": model,
+        "error": details.get("error"),
+        "retryable": details.get("retryable", False),
+        "protocol_failure": True,
+    }
+    raw = details.get("raw")
+    if raw is not None:
+        payload["raw_response_ref"] = raw_log.blob_text("model_protocol_failure_raw", str(raw), suffix=".txt")
+    raw_log.emit(event, **ctx, payload=payload)
 
 
 def _resolve_tool_executable(tool: str) -> str:
@@ -725,6 +785,27 @@ class LLMAdapter(DetectorAdapter):
         details["model"] = self._model_name
         if truncated:
             details["truncated"] = True
+        if _is_protocol_failure(details):
+            details["intended_mode"] = "hybrid"
+            _emit_protocol_error(
+                raw_log,
+                "llm.protocol_error",
+                ctx,
+                model=self._model_name,
+                details=details,
+            )
+            return EvalDetectionResult(
+                detector=self._detector_name,
+                experiment_mode="error",
+                verdict=False,
+                confidence=None,
+                heuristic_flags=list(pkg.heuristic_flags),
+                exec_time_ms=int((_time.monotonic() - t0) * 1000),
+                api_cost_usd=cost,
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+                details=details,
+            )
         return EvalDetectionResult(
             detector=self._detector_name,
             experiment_mode="hybrid",
@@ -864,18 +945,7 @@ class LLMAdapter(DetectorAdapter):
         )
 
     def _parse_response(self, raw: str) -> tuple[bool, float | None, dict]:
-        import re as _re, json as _j
-        m = _re.search(r"\{.*\}", raw, _re.DOTALL)
-        if not m:
-            return False, None, {"raw": raw}
-        try:
-            data = _j.loads(m.group())
-            verdict_str = data.get("verdict", "benign")
-            verdict = verdict_str.strip().lower() == "malicious"
-            confidence = float(data["confidence"]) if "confidence" in data else None
-            return verdict, confidence, data
-        except (_j.JSONDecodeError, ValueError):
-            return False, None, {"raw": raw}
+        return _parse_json_verdict_response(raw)
 
 
 # ---------------------------------------------------------------------------
@@ -993,6 +1063,27 @@ class AgenticAdapter(DetectorAdapter):
         details["agentic_flow"] = self._agentic_flow
         if self._last_plan is not None:
             details["plan"] = self._last_plan
+        if _is_protocol_failure(details):
+            details["intended_mode"] = "agentic"
+            _emit_protocol_error(
+                raw_log,
+                "agentic.protocol_error",
+                ctx,
+                model=self._model_name,
+                details=details,
+            )
+            return EvalDetectionResult(
+                detector=self._detector_name,
+                experiment_mode="error",
+                verdict=False,
+                confidence=None,
+                heuristic_flags=list(pkg.heuristic_flags),
+                exec_time_ms=int((_time.monotonic() - t0) * 1000),
+                api_cost_usd=total_cost,
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+                details=details,
+            )
         return EvalDetectionResult(
             detector=self._detector_name,
             experiment_mode="agentic",
@@ -1396,17 +1487,7 @@ class AgenticAdapter(DetectorAdapter):
         }
 
     def _parse_response(self, raw: str) -> tuple[bool, float | None, dict]:
-        import re as _re, json as _j
-        m = _re.search(r"\{.*\}", raw, _re.DOTALL)
-        if not m:
-            return False, None, {"raw": raw}
-        try:
-            data = _j.loads(m.group())
-            verdict = data.get("verdict", "benign").strip().lower() == "malicious"
-            confidence = float(data["confidence"]) if "confidence" in data else None
-            return verdict, confidence, data
-        except (_j.JSONDecodeError, ValueError):
-            return False, None, {"raw": raw}
+        return _parse_json_verdict_response(raw)
 
 
 # ---------------------------------------------------------------------------
@@ -1473,6 +1554,27 @@ class LLMRawAdapter(LLMAdapter):
         details["model"] = self._model_name
         if truncated:
             details["truncated"] = True
+        if _is_protocol_failure(details):
+            details["intended_mode"] = "llm_raw"
+            _emit_protocol_error(
+                raw_log,
+                "llm.protocol_error",
+                ctx,
+                model=self._model_name,
+                details=details,
+            )
+            return EvalDetectionResult(
+                detector=self._detector_name,
+                experiment_mode="error",
+                verdict=False,
+                confidence=None,
+                heuristic_flags=list(pkg.heuristic_flags),
+                exec_time_ms=int((_time.monotonic() - t0) * 1000),
+                api_cost_usd=cost,
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+                details=details,
+            )
         return EvalDetectionResult(
             detector=self._detector_name,
             experiment_mode="llm_raw",

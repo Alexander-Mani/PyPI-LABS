@@ -9,7 +9,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_REPO_ROOT / "src" / "analyzer"))
 
-from adapters import AgenticAdapter, LLMAdapter  # noqa: E402
+from adapters import AgenticAdapter, LLMAdapter, LLMRawAdapter  # noqa: E402
 from entry_extractor import PackageInfo  # noqa: E402
 
 
@@ -115,6 +115,98 @@ def test_llm_adapter_proxy_raw_response_is_not_context_manager(monkeypatch):
     assert completions.calls[0]["model"] == "gpt-5.4-nano"
 
 
+def _make_llm_adapter() -> LLMAdapter:
+    adapter = LLMAdapter.__new__(LLMAdapter)
+    adapter._model_name = "gpt-5.4-nano"
+    adapter._temperature = 0.0
+    adapter._system_prompt = "system"
+    adapter._user_template = "{file_listing}"
+    adapter._detector_name = "gpt_nano"
+    adapter._proxy_url = "http://127.0.0.1:4000"
+    return adapter
+
+
+def _pkg() -> PackageInfo:
+    return PackageInfo(
+        name="demo",
+        version="1.0.0",
+        files={"setup.py": "print('x')\n"},
+        files_raw={"setup.py": "print('x')\n"},
+        heuristic_flags=["shell_execution"],
+    )
+
+
+def test_llm_protocol_failure_empty_response_is_retryable_error(monkeypatch):
+    adapter = _make_llm_adapter()
+    monkeypatch.setattr(adapter, "_call_api", lambda *args, **kwargs: ("", 101, 3, 0.0042))
+
+    result = adapter.run(_pkg(), prompt_strategy="few_shot")
+
+    assert result.experiment_mode == "error"
+    assert result.verdict is False
+    assert result.input_tokens == 101
+    assert result.output_tokens == 3
+    assert result.api_cost_usd == 0.0042
+    assert result.details["error"] == "empty_model_response"
+    assert result.details["retryable"] is True
+    assert result.details["protocol_failure"] is True
+    assert result.details["intended_mode"] == "hybrid"
+
+
+def test_llm_protocol_failure_non_json_response_is_unparseable_error(monkeypatch):
+    adapter = _make_llm_adapter()
+    monkeypatch.setattr(adapter, "_call_api", lambda *args, **kwargs: ("I think this is safe.", 11, 9, 0.001))
+
+    result = adapter.run(_pkg(), prompt_strategy="zero_shot")
+
+    assert result.experiment_mode == "error"
+    assert result.details["error"] == "unparseable_model_response"
+    assert result.details["retryable"] is False
+    assert result.details["raw"] == "I think this is safe."
+
+
+def test_llm_protocol_failure_missing_verdict_is_error(monkeypatch):
+    adapter = _make_llm_adapter()
+    monkeypatch.setattr(adapter, "_call_api", lambda *args, **kwargs: ('{"confidence": 0.2}', 11, 9, 0.001))
+
+    result = adapter.run(_pkg(), prompt_strategy="zero_shot")
+
+    assert result.experiment_mode == "error"
+    assert result.details["error"] == "unparseable_model_response"
+    assert result.details["parse_error"] == "missing_or_invalid_verdict"
+
+
+def test_llm_valid_json_response_remains_success(monkeypatch):
+    adapter = _make_llm_adapter()
+    monkeypatch.setattr(adapter, "_call_api", lambda *args, **kwargs: ('{"verdict": "malicious", "confidence": 0.8}', 11, 9, 0.001))
+
+    result = adapter.run(_pkg(), prompt_strategy="zero_shot")
+
+    assert result.experiment_mode == "hybrid"
+    assert result.verdict is True
+    assert result.confidence == 0.8
+
+
+def test_llm_raw_protocol_failure_preserves_cost_and_mode(monkeypatch):
+    adapter = LLMRawAdapter.__new__(LLMRawAdapter)
+    adapter._model_name = "gpt-5.4-nano"
+    adapter._temperature = 0.0
+    adapter._system_prompt = "system"
+    adapter._user_template = "{file_listing}"
+    adapter._detector_name = "gpt_nano"
+    adapter._proxy_url = "http://127.0.0.1:4000"
+    monkeypatch.setattr(adapter, "_call_api", lambda *args, **kwargs: ("", 21, 4, 0.002))
+
+    result = adapter.run(_pkg(), prompt_strategy="role_based")
+
+    assert result.experiment_mode == "error"
+    assert result.input_tokens == 21
+    assert result.output_tokens == 4
+    assert result.api_cost_usd == 0.002
+    assert result.details["error"] == "empty_model_response"
+    assert result.details["intended_mode"] == "llm_raw"
+
+
 def test_agentic_proxy_raw_response_is_not_context_manager(monkeypatch):
     completions = _install_fake_openai(monkeypatch)
     adapter = AgenticAdapter.__new__(AgenticAdapter)
@@ -138,6 +230,37 @@ def test_agentic_proxy_raw_response_is_not_context_manager(monkeypatch):
     assert response["output_tokens"] == 7
     assert response["cost_usd"] == 0.0012
     assert completions.calls[0]["model"] == "claude-haiku-4-5"
+
+
+def test_agentic_protocol_failure_preserves_cost_and_mode(monkeypatch):
+    adapter = AgenticAdapter.__new__(AgenticAdapter)
+    adapter._model_name = "claude-haiku-4-5"
+    adapter._system_prompt = ""
+    adapter._initial_template = "Investigate {package_name} {version}"
+    adapter._max_turns = 5
+    adapter._temperature = 0.0
+    adapter._proxy_url = "http://127.0.0.1:4000"
+    adapter._agentic_flow = "plan_then_execute"
+    adapter._detector_name = "claude_haiku_agentic"
+    adapter._current_pkg = None
+    adapter._last_plan = {"next_steps": ["read setup.py"]}
+
+    def non_json_agentic_loop(pkg, system_prompt, initial_template, **kwargs):
+        return "No malware found.", 301, 12, 0.09
+
+    monkeypatch.setattr(adapter, "_agentic_loop", non_json_agentic_loop)
+
+    result = adapter.run(_pkg(), prompt_strategy="role_based")
+
+    assert result.experiment_mode == "error"
+    assert result.input_tokens == 301
+    assert result.output_tokens == 12
+    assert result.api_cost_usd == 0.09
+    assert result.details["error"] == "unparseable_model_response"
+    assert result.details["retryable"] is False
+    assert result.details["intended_mode"] == "agentic"
+    assert result.details["agentic_flow"] == "plan_then_execute"
+    assert adapter._current_pkg is None
 
 
 def _make_agentic_adapter_for_plan_tests() -> AgenticAdapter:

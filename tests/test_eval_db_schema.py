@@ -79,3 +79,33 @@ def test_eval_results_reject_conflicting_ground_truth(monkeypatch, tmp_path):
         assert "conflicting ground_truth" in str(exc)
     else:  # pragma: no cover - defensive failure path
         raise AssertionError("conflicting ground truth should halt")
+
+
+def test_eval_results_keep_error_rows_for_distinct_intended_modes(monkeypatch, tmp_path):
+    monkeypatch.setattr(DBManager, "DB_PATH", tmp_path / "eval_results.db")
+    db = DBManager()
+    db.create_eval_run("run-1", "budget")
+
+    common = {
+        "run_id": "run-1",
+        "package_name": "num2words",
+        "version": "0.5.16",
+        "experiment_mode": "error",
+        "prompt_strategy": "zero_shot",
+        "detector": "gpt_nano",
+        "artifact_filename": "num2words-0.5.16.whl",
+        "verdict": False,
+        "ground_truth": True,
+        "heuristic_flags": [],
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "exec_time_ms": 1,
+        "api_cost_usd": 0.0,
+    }
+
+    db.insert_eval_result(details={"error": "hybrid failed", "intended_mode": "hybrid"}, **common)
+    db.insert_eval_result(details={"error": "raw failed", "intended_mode": "llm_raw"}, **common)
+
+    rows = db.get_eval_results_for_run("run-1")
+    assert [row["intended_mode"] for row in rows] == ["hybrid", "llm_raw"]
+    assert [row["details"]["error"] for row in rows] == ["hybrid failed", "raw failed"]
