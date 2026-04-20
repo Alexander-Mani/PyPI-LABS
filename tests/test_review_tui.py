@@ -362,9 +362,12 @@ contexts:
     assert context.runner_user == "pypi-runner"
 
 
-def test_deployed_context_rejects_system_python_fallback(tmp_path):
+def test_runner_context_defaults_to_repo_venv_python(tmp_path):
     deployed = tmp_path / "deployed"
     deployed.mkdir()
+    deployed_python = deployed / "venv" / "bin" / "python"
+    deployed_python.parent.mkdir(parents=True)
+    deployed_python.write_text("", encoding="utf-8")
     config = tmp_path / "review_tui.yaml"
     config.write_text(
         f"""
@@ -381,16 +384,36 @@ contexts:
         encoding="utf-8",
     )
 
+    context = review_tui.resolve_review_context("deployed", config_path=config)
+
+    assert context.python_executable == str(deployed_python.resolve())
+
+
+def test_deployed_context_rejects_system_python_override(tmp_path):
+    deployed = tmp_path / "deployed"
+    deployed.mkdir()
+    config = tmp_path / "review_tui.yaml"
+    config.write_text(
+        f"""
+default_context: deployed
+contexts:
+  deployed:
+    repo_root: {deployed}
+    python: {sys.executable}
+    runner_user: pypi-runner
+    litellm_log: /tmp/litellm.log
+    deployment_cwd: {tmp_path}
+    deployment_script: {tmp_path / 'deployment.sh'}
+""".strip(),
+        encoding="utf-8",
+    )
+
     try:
-        review_tui.resolve_review_context(
-            "deployed",
-            config_path=config,
-            python_override=sys.executable,
-        )
+        review_tui.resolve_review_context("deployed", config_path=config)
     except SystemExit as exc:
         assert "Python outside the deployed repo" in str(exc)
     else:
-        raise AssertionError("deployed context accepted system Python fallback")
+        raise AssertionError("deployed context accepted system Python")
 
 
 def test_deployed_context_commands_use_deployed_repo_and_python(tmp_path):

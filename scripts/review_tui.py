@@ -169,7 +169,11 @@ def _context_from_config(name: str, config: dict, *, base: Path, python_fallback
             return _default_local_context(_REPO_ROOT, python_fallback)
         raise SystemExit(f"HALT: unknown review TUI context '{name}'")
     repo_root = _resolve_path(raw.get("repo_root"), base=base, default=_REPO_ROOT)
-    python_value = raw.get("python") or python_fallback
+    python_value = raw.get("python")
+    if python_value is None and raw.get("runner_user"):
+        python_value = str(repo_root / "venv" / "bin" / "python")
+    elif python_value is None:
+        python_value = python_fallback
     python_path = str(_resolve_path(python_value, base=base)) if python_value != python_fallback else python_fallback
     return ReviewContext(
         name=name,
@@ -187,7 +191,7 @@ def _context_ready(context: ReviewContext) -> bool:
 
 
 def _validate_review_context(context: ReviewContext, *, python_override: str | None = None) -> None:
-    if context.name != "deployed":
+    if context.name != "deployed" and context.runner_user is None:
         return
 
     python_path = Path(context.python_executable)
