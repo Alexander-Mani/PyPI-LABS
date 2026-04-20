@@ -47,6 +47,10 @@ def test_task_selection_gates_static_agentic_and_llm_lanes(monkeypatch):
     assert len(controller._build_tasks(skip_static=True, skip_agentic=True)) == llm_count * 2
     assert len(controller._build_tasks(only_agentic=True)) == agentic_count
     assert len(controller._build_tasks(skip_agentic=True)) == 2 + (llm_count * 2)
+    alias_probe_tasks = controller._build_tasks(hybrid_zero_shot_only=True)
+    assert len(alias_probe_tasks) == 1
+    assert alias_probe_tasks[0][0] is controller._llm[0]
+    assert alias_probe_tasks[0][1] == "zero_shot"
 
 
 def test_task_selection_rejects_impossible_agentic_combination():

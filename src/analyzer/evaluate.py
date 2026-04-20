@@ -16,6 +16,7 @@ Usage:
                                     [--skip-validation] [--sast-only]
                                     [--skip-static] [--skip-agentic]
                                     [--only-agentic]
+                                    [--identity-alias-probe]
                                     [--dry-run-resolution]
                                     [--progress auto|always|never]
                                     [--run-id-prefix PREFIX]
@@ -46,6 +47,7 @@ from src.utils.logger import get_active_log_path, get_logger, setup_logger
 from src.data.db_manager import DBManager
 from entry_extractor import EntryPointExtractor
 from heuristic_filter import HeuristicFilter
+from identity_mask import mask_package_identity
 from detection_controller import EvalController
 from progress_ui import AnalyzerProgress, should_use_progress
 from raw_experiment_log import RawExperimentLog
@@ -327,6 +329,7 @@ class EvaluationRunner:
         run_id_prefix: str | None = None,
         gemini_enabled: bool = True,
         raw_experiment_log: bool = True,
+        identity_alias_probe: bool = False,
         cli_args: dict | None = None,
     ):
         self._cfg  = config
@@ -340,6 +343,8 @@ class EvaluationRunner:
         self._progress_enabled = progress_enabled
         self._run_id_prefix = run_id_prefix
         self._raw_experiment_log = raw_experiment_log
+        self._identity_alias_probe = identity_alias_probe
+        self._identity_aliases: dict[tuple[str, str], tuple[str, str]] = {}
         self._raw_log = None
         self._cli_args = cli_args or {}
         self._model_config_stems = sorted(model_config_stems) if model_config_stems is not None else None
@@ -363,6 +368,13 @@ class EvaluationRunner:
         self._truth_cache: dict[tuple[str, str], GroundTruthLabel] | None = None
         self._lkgr_cache: dict[str, set[str]] | None = None
         self._resolved_cache: list[ResolvedSample] | None = None
+
+    def _identity_alias_for(self, package_name: str, version: str) -> tuple[str, str]:
+        key = (package_name, version)
+        if key not in self._identity_aliases:
+            index = len(self._identity_aliases) + 1
+            self._identity_aliases[key] = (f"X{index:03d}", f"V{index:03d}")
+        return self._identity_aliases[key]
 
     # ------------------------------------------------------------------
     # Sample discovery (results cached after first call)
@@ -776,9 +788,18 @@ class EvaluationRunner:
             raise SystemExit("HALT: --sast-only cannot be combined with --only-agentic.")
         if only_agentic and skip_agentic:
             raise SystemExit("HALT: --only-agentic cannot be combined with --skip-agentic.")
+        if self._identity_alias_probe:
+            if sast_only or only_agentic:
+                raise SystemExit(
+                    "HALT: --identity-alias-probe cannot be combined with --sast-only "
+                    "or --only-agentic."
+                )
+            skip_static = True
+            skip_agentic = True
 
         run_id = _make_run_id(getattr(self, "_run_id_prefix", None))
         task_scope = (
+            "identity-alias-probe" if self._identity_alias_probe else
             "sast-only" if sast_only else
             "agentic-only" if only_agentic else
             "llm-no-agentic" if skip_agentic and skip_static else
@@ -792,11 +813,18 @@ class EvaluationRunner:
             f"task_scope={task_scope}"
         )
         run_label = self._run_label if not sast_only else "sast-only"
-        if not sast_only and task_scope != "all":
+        if self._identity_alias_probe:
+            run_label = f"{run_label}:identity-alias-probe"
+        elif not sast_only and task_scope != "all":
             run_label = f"{run_label}:{task_scope}"
         self._db.create_eval_run(run_id, tier=run_label)
 
-        if not skip_validation and not sast_only and not dry_run_resolution:
+        if (
+            not skip_validation
+            and not sast_only
+            and not dry_run_resolution
+            and not self._identity_alias_probe
+        ):
             self._validate_financial_airgap(
                 skip_agentic=skip_agentic,
                 only_agentic=only_agentic,
@@ -821,6 +849,7 @@ class EvaluationRunner:
                     "skip_agentic": skip_agentic,
                     "only_agentic": only_agentic,
                     "task_scope": task_scope,
+                    "identity_alias_probe": self._identity_alias_probe,
                     "gemini": "on" if self._gemini_enabled else "off",
                     "model_config_stems": self._model_config_stems,
                     "simulator_base_url": self._simulator_url,
@@ -919,18 +948,47 @@ class EvaluationRunner:
                             )
                         if pkg.heuristic_flags:
                             run_log.info(f"    Heuristic flags: {', '.join(pkg.heuristic_flags)}")
+                        detector_pkg = pkg
+                        result_details_extra = None
+                        if self._identity_alias_probe:
+                            alias_name, alias_version = self._identity_alias_for(
+                                sample.package_name, sample.version
+                            )
+                            masked = mask_package_identity(
+                                pkg,
+                                alias_name=alias_name,
+                                alias_version=alias_version,
+                            )
+                            detector_pkg = masked.package
+                            result_details_extra = masked.details()
+                            if raw_log is not None:
+                                raw_log.emit(
+                                    "identity_alias.mask",
+                                    **sample_ctx,
+                                    payload={
+                                        "alias_name": alias_name,
+                                        "alias_version": alias_version,
+                                        "original_terms": masked.original_terms,
+                                        "replacement_counts": masked.replacement_counts,
+                                        "model_visible_files": sorted(detector_pkg.files),
+                                    },
+                                )
                         results = self._controller.run(
-                            run_id=run_id, pkg=pkg,
+                            run_id=run_id, pkg=detector_pkg,
                             ground_truth=sample.ground_truth, sast_only=sast_only,
                             skip_static=skip_static,
                             skip_agentic=skip_agentic,
                             only_agentic=only_agentic,
+                            hybrid_zero_shot_only=self._identity_alias_probe,
                             artifact_filename=sample.artifact_filename,
                             artifact_url=sample.artifact_url,
                             source_index_url=sample.source_index_url,
                             sample_role=sample.sample_role,
                             attack_vector=sample.attack_vector,
                             resolver_policy=sample.resolver_policy,
+                            record_package_name=sample.package_name,
+                            record_version=sample.version,
+                            result_details_extra=result_details_extra,
                             on_tasks_prepared=(
                                 progress.set_detector_tasks if progress.active else None
                             ),
@@ -1247,6 +1305,14 @@ if __name__ == "__main__":
         help="Run only agentic adapters for the selected profile.",
     )
     parser.add_argument(
+        "--identity-alias-probe",
+        action="store_true",
+        help=(
+            "Run the cheap masked-identity validity probe: hybrid zero-shot only, "
+            "no static, no raw LLM, no agentic, and no financial validation."
+        ),
+    )
+    parser.add_argument(
         "--dry-run-resolution",
         action="store_true",
         help="Resolve simulator samples and print the selected artifacts without scanning",
@@ -1284,6 +1350,17 @@ if __name__ == "__main__":
         raise SystemExit("HALT: --sast-only cannot be combined with --only-agentic.")
     if args.only_agentic and args.skip_agentic:
         raise SystemExit("HALT: --only-agentic cannot be combined with --skip-agentic.")
+    if args.identity_alias_probe:
+        if args.sast_only or args.only_agentic:
+            raise SystemExit(
+                "HALT: --identity-alias-probe cannot be combined with --sast-only "
+                "or --only-agentic."
+            )
+        args.skip_static = True
+        args.skip_agentic = True
+        args.skip_validation = True
+        if args.run_id_prefix is None:
+            args.run_id_prefix = "canonical-v2-alias"
     with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
@@ -1339,6 +1416,7 @@ if __name__ == "__main__":
         run_id_prefix=args.run_id_prefix,
         gemini_enabled=gemini_enabled,
         raw_experiment_log=args.raw_experiment_log == "on",
+        identity_alias_probe=args.identity_alias_probe,
         cli_args=vars(args),
     ).run(
         skip_validation=args.skip_validation,

@@ -182,7 +182,13 @@ class EvalController:
         *,
         skip_agentic: bool = False,
         only_agentic: bool = False,
+        hybrid_zero_shot_only: bool = False,
     ) -> set[str]:
+        if hybrid_zero_shot_only:
+            return {
+                getattr(adapter, "_detector_name")
+                for adapter in self._llm
+            }
         adapters = [*self._agentic] if only_agentic else [*self._llm, *self._llm_raw]
         if not skip_agentic and not only_agentic:
             adapters.extend(self._agentic)
@@ -198,6 +204,7 @@ class EvalController:
         skip_static: bool = False,
         skip_agentic: bool = False,
         only_agentic: bool = False,
+        hybrid_zero_shot_only: bool = False,
     ) -> list[tuple]:
         # Build a uniform task list: (adapter, strategy, sys_override, tpl_override).
         # All adapters share the DetectorAdapter.run() signature so they can be
@@ -205,6 +212,13 @@ class EvalController:
         tasks: list[tuple] = []
         if only_agentic and skip_agentic:
             raise ValueError("only_agentic and skip_agentic cannot both be true")
+        if hybrid_zero_shot_only:
+            if sast_only or only_agentic:
+                raise ValueError("hybrid_zero_shot_only cannot be combined with sast_only or only_agentic")
+            from prompt_manager import PromptManager
+            pm = PromptManager.instance()
+            sp, ut = pm.get_llm_strategy("zero_shot")
+            return [(a, "zero_shot", sp, ut) for a in self._llm]
         if not skip_static and not only_agentic:
             for a in self._static:
                 tasks.append((a, "zero_shot", None, None))
@@ -241,22 +255,29 @@ class EvalController:
         skip_static: bool = False,
         skip_agentic: bool = False,
         only_agentic: bool = False,
+        hybrid_zero_shot_only: bool = False,
         artifact_filename: str | None = None,
         artifact_url: str | None = None,
         source_index_url: str | None = None,
         sample_role: str | None = None,
         attack_vector: str | None = None,
         resolver_policy: str | None = None,
+        record_package_name: str | None = None,
+        record_version: str | None = None,
+        result_details_extra: dict | None = None,
         on_tasks_prepared: Callable[[list[TaskDescriptor]], None] | None = None,
         on_result: Callable[[EvalDetectionResult, str, str], None] | None = None,
         quiet_console: bool = False,
         raw_log=None,
     ) -> list[EvalDetectionResult]:
+        record_package_name = record_package_name or pkg.name
+        record_version = record_version or pkg.version
         tasks = self._build_tasks(
             sast_only=sast_only,
             skip_static=skip_static,
             skip_agentic=skip_agentic,
             only_agentic=only_agentic,
+            hybrid_zero_shot_only=hybrid_zero_shot_only,
         )
         if on_tasks_prepared is not None:
             on_tasks_prepared([
@@ -268,14 +289,16 @@ class EvalController:
                 desc = _task_descriptor(adapter, strategy)
                 raw_log.emit(
                     "detector.schedule",
-                    package=pkg.name,
-                    version=pkg.version,
+                    package=record_package_name,
+                    version=record_version,
                     artifact_filename=artifact_filename or "",
                     detector=desc["detector"],
                     mode=desc["mode"],
                     strategy=strategy,
                     payload={
                         **_evidence_descriptor(adapter, pkg),
+                        "model_visible_package": pkg.name,
+                        "model_visible_version": pkg.version,
                         "artifact_url": artifact_url,
                         "source_index_url": source_index_url,
                         "sample_role": sample_role,
@@ -290,8 +313,8 @@ class EvalController:
             futures: dict = {}
             for a, strategy, sys_p, tpl in tasks:
                 trace_context = {
-                    "package": pkg.name,
-                    "version": pkg.version,
+                    "package": record_package_name,
+                    "version": record_version,
                     "artifact_filename": artifact_filename or "",
                     "detector": _adapter_name(a),
                     "mode": _adapter_mode(a),
@@ -330,6 +353,8 @@ class EvalController:
 
                 results.append(res)
                 res.details.setdefault("intended_mode", intended_mode)
+                if result_details_extra:
+                    res.details.update(dict(result_details_extra))
                 # Propagate extractor-level bad-password skips into the result details.
                 if pkg.bad_password_files:
                     res.details["skipped_bad_password"] = pkg.bad_password_files
@@ -337,8 +362,8 @@ class EvalController:
                     event_name = "detector.error" if res.experiment_mode == "error" else "detector.result"
                     raw_log.emit(
                         event_name,
-                        package=pkg.name,
-                        version=pkg.version,
+                        package=record_package_name,
+                        version=record_version,
                         artifact_filename=artifact_filename or "",
                         detector=res.detector,
                         mode=intended_mode,
@@ -349,8 +374,8 @@ class EvalController:
                     on_result(res, strategy, intended_mode)
                 db_payload = {
                     "run_id": run_id,
-                    "package_name": pkg.name,
-                    "version": pkg.version,
+                    "package_name": record_package_name,
+                    "version": record_version,
                     "experiment_mode": res.experiment_mode,
                     "prompt_strategy": strategy,
                     "detector": res.detector,
@@ -373,8 +398,8 @@ class EvalController:
                 if raw_log is not None:
                     raw_log.emit(
                         "db.insert_eval_result",
-                        package=pkg.name,
-                        version=pkg.version,
+                        package=record_package_name,
+                        version=record_version,
                         artifact_filename=artifact_filename or "",
                         detector=res.detector,
                         mode=res.experiment_mode,
