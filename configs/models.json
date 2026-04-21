@@ -6,9 +6,9 @@
     "gpt-5.4-nano":                                          [0.15,   0.60],
     "gpt-5.4-mini":                                          [0.15,   0.60],
     "gpt-5.4":                                               [2.50,  10.00],
-    "gemini-2.5-flash-lite":                                 [0.075,  0.30],
-    "gemini-3-flash-preview":                                [0.075,  0.30],
-    "gemini-3.1-pro-preview":                                [1.25,   5.00],
+    "gemini-2.5-flash-lite":                                 [0.10,   0.40],
+    "gemini-2.5-flash":                                      [0.30,   2.50],
+    "gemini-2.5-pro":                                        [1.25,  10.00],
     "together_ai/Qwen/Qwen3.5-9B":                           [0.20,   0.20],
     "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo":  [0.88,   0.88],
     "together_ai/Qwen/Qwen3.5-397B-A17B":                   [3.00,   3.00]
@@ -21,12 +21,12 @@
     "frontier": [
       { "provider": "OpenAI", "model": "gpt-5.4", "tier": "frontier" },
       { "provider": "Anthropic", "model": "claude-opus-4-6", "tier": "frontier" },
-      { "provider": "Google", "model": "gemini-3.1-pro-preview", "tier": "frontier" }
+      { "provider": "Google", "model": "gemini-2.5-pro", "tier": "frontier" }
     ],
     "medium": [
       { "provider": "OpenAI", "model": "gpt-5.4-mini", "tier": "medium" },
       { "provider": "Anthropic", "model": "claude-sonnet-4-6", "tier": "medium" },
-      { "provider": "Google", "model": "gemini-3-flash-preview", "tier": "medium" }
+      { "provider": "Google", "model": "gemini-2.5-flash", "tier": "medium" }
     ],
     "budget": [
       { "provider": "OpenAI", "model": "gpt-5.4-nano", "tier": "budget" },

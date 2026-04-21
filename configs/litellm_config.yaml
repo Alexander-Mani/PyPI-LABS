@@ -32,9 +32,9 @@ model_list:
     litellm_params:
       model: openai/gpt-5.4-mini
 
-  - model_name: gemini-3-flash-preview
+  - model_name: gemini-2.5-flash
     litellm_params:
-      model: gemini/gemini-3-flash-preview
+      model: gemini/gemini-2.5-flash
 
   - model_name: together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo
     litellm_params:
@@ -49,9 +49,9 @@ model_list:
     litellm_params:
       model: openai/gpt-5.4
 
-  - model_name: gemini-3.1-pro-preview
+  - model_name: gemini-2.5-pro
     litellm_params:
-      model: gemini/gemini-3.1-pro-preview
+      model: gemini/gemini-2.5-pro
 
   - model_name: together_ai/Qwen/Qwen3.5-397B-A17B
     litellm_params:
