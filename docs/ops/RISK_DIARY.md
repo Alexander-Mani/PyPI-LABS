@@ -360,7 +360,7 @@ capacity allocation.
 It is the current stable (non-preview) budget-tier Gemini model.
 `gemini-2.0-flash-lite` was considered first but returns HTTP 404 ("no longer
 available to new users") — Google sunset it between generations. The 2.5 variant
-is the newest GA flash-lite release. Its pricing ($0.075/$0.30 per 1M
+is the newest GA flash-lite release. Its pricing ($0.10/$0.40 per 1M
 input/output tokens) is comparable to the preview model and remains firmly in the
 budget tier.
 
@@ -503,3 +503,80 @@ Protocol-error rows are excluded from package-version metrics like other
 `experiment_mode="error"` rows. Report their count separately when discussing
 provider reliability, especially for agentic runs where long multi-turn calls
 are more likely to hit rate limits or truncation.
+
+---
+
+## Decision 13 — Temporary Pause on Broad Agentic Runs
+
+**Decision:**
+As of 2026-04-21, broad agentic experiment runs are paused until after the
+supervisor discussion following the Friday 2026-04-24 exam. Until that review,
+routine experiment execution should use static, `hybrid`, and `llm_raw` lanes
+only.
+
+**Why this pause was chosen:**
+Current observed spend is dominated by the agentic lane, and a large share of
+that spend is being burned on agentic rows that still end in `experiment_mode =
+"error"`. That makes broad tier-by-tier agentic execution hard to justify
+before the methodology and budget tradeoff are discussed explicitly.
+
+**Operational rule until the supervisor discussion:**
+- Do not include agentic runs in routine budget, medium, or frontier experiment
+  sweeps.
+- Treat existing agentic rows as exploratory evidence, not canonical thesis
+  comparison data.
+- Keep canonical pre-discussion comparison tables limited to static,
+  non-agentic `hybrid`, and non-agentic `llm_raw` conditions.
+
+**What resumes after the discussion:**
+After the supervisor review, either:
+1. agentic remains an appendix/sidecar condition on a small curated subset,
+2. agentic is redesigned to reduce cost and error burn before rerun, or
+3. agentic is approved for a bounded canonical run with an explicit budget cap.
+
+---
+
+## Decision 14 — Replace preview Gemini medium/frontier routes with stable 2.5 models
+
+**Decision:**
+As of 2026-04-21, the medium-tier Google route is changed from
+`gemini-3-flash-preview` to `gemini-2.5-flash`, and the frontier-tier Google
+route is changed from `gemini-3.1-pro-preview` to `gemini-2.5-pro`.
+
+**Why this change was made:**
+The preview Gemini identifiers were adding unnecessary operational risk to the
+Google lane. Even when the provider itself was reachable, preview routes are
+more likely to be renamed, throttled, or removed. For thesis runs, stable GA
+routes are preferable to preview names because they reduce avoidable 404/route
+failures and make the methodology easier to defend.
+
+**Source of truth used:**
+The replacement IDs were taken from Google's official Gemini Developer API
+model documentation. Pricing was refreshed from Google's official pricing page.
+
+**Controls applied:**
+- Updated analyzer configs:
+  `src/analyzer/configs/gemini_flash.yaml` -> `gemini-2.5-flash`
+  `src/analyzer/configs/gemini.yaml` -> `gemini-2.5-pro`
+- Updated `configs/litellm_config.yaml` so LiteLLM exposes the same stable
+  model names and routes them to `gemini/gemini-2.5-flash` and
+  `gemini/gemini-2.5-pro`.
+- Updated `configs/models.json` so the medium/frontier Google entries and token
+  pricing match the stable 2.5 models.
+- Updated smoke-test expectations and analyzer notes so the repo no longer
+  advertises the preview IDs as current.
+
+**Pricing note recorded in the repo:**
+- `gemini-2.5-flash-lite` -> `$0.10 / $0.40` per 1M input/output tokens
+- `gemini-2.5-flash` -> `$0.30 / $2.50`
+- `gemini-2.5-pro` -> `$1.25 / $10.00`
+
+The `gemini-2.5-pro` price uses the standard paid API row for prompts at or
+below 200k input tokens, which matches the analyzer's prompt sizes more closely
+than the >200k row.
+
+**Metric compatibility note:**
+Historical rows produced with `gemini-3-flash-preview` or
+`gemini-3.1-pro-preview` should not be mixed into canonical post-swap Google
+comparisons. Canonical runs must be re-run after the swap and queried
+separately from preview-era results.

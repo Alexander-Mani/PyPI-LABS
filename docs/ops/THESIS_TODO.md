@@ -7,6 +7,10 @@ Operator discipline for the final stretch through SM3. Report submission deadlin
 ### Pre-flight discipline before any canonical-v2 run
 
 1. **Per-tier LiteLLM smoke.** Run `python scripts/litellm_smoke.py --profile budget`, then `medium`, then `frontier`, then `all_models`, in order. Each smoke call is cheap and catches model-ID drift, provider-alias changes, and 5xx throttling before the tier burns real budget.
+   Canonical Google IDs after the 2026-04-21 swap are `gemini-2.5-flash-lite`
+   (budget), `gemini-2.5-flash` (medium), and `gemini-2.5-pro` (frontier).
+   Preview-era rows from `gemini-3-flash-preview` / `gemini-3.1-pro-preview`
+   are historical and should not be mixed into final post-swap tables.
 2. **DB archive between tiers.** Archive the current `eval_results.db` before each tier (e.g., using `scripts/archive_eval_db.py` or the Review TUI's DB section). This localises any mid-run routing bug to one tier's rows instead of the full canonical set.
 3. **Run-id prefix is mandatory.** Every canonical execution passes `--run-id-prefix canonical-v2` so the thesis metric filter `run_id LIKE 'canonical-v2-%'` captures exactly those rows. The Review TUI rewrites this automatically; manual CLI invocations must set it.
 4. **Confirm `include_controls` at the CLI.** The canonical profiles (`budget`, `budget_no_gemini`, `medium`, `frontier`, `all_models`) do NOT set `include_controls: true` in their YAML; only the `test` and `test_no_gemini` profiles do. Canonical-v2 runs that need benign control packages (boto3, botocore, etc.) must pass `--include-controls` explicitly. Resolution rule in `evaluate.py`: `include_controls=args.include_controls or bool(profile_include_controls)` — the CLI flag can enable but not disable the profile setting.

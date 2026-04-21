@@ -435,6 +435,15 @@ provider-specific LiteLLM routes. Evaluation model sets are selected through
 `configs/evaluation_profiles.yaml`; use `--gemini off` for temporary Gemini
 outages. `test` is the bounded smoke profile for cheap iteration.
 
+Current canonical Google routes are:
+- budget: `gemini-2.5-flash-lite`
+- medium: `gemini-2.5-flash`
+- frontier: `gemini-2.5-pro`
+
+Do not compare future canonical runs against older rows produced with
+`gemini-3-flash-preview` or `gemini-3.1-pro-preview` without an explicit note;
+those preview routes are historical and no longer the configured defaults.
+
 **Local dev:** Start LiteLLM manually with API keys in your environment:
 
 ```bash

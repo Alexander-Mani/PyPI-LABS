@@ -202,6 +202,15 @@ sudo -u pypi-runner bash -c "
 "
 ```
 
+At the time of writing, the deployed canonical Google routes should be:
+- `gemini-2.5-flash-lite` for budget
+- `gemini-2.5-flash` for medium
+- `gemini-2.5-pro` for frontier
+
+If the smoke dry-run still shows `gemini-3-flash-preview` or
+`gemini-3.1-pro-preview`, the deployed LiteLLM config is stale and the
+evaluation should not proceed.
+
 ### 7.2 PyPI Simulator
 ```bash
 sudo -u pypi-runner bash -c "

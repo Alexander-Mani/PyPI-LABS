@@ -66,7 +66,7 @@ Current confirmed model IDs per config:
 | `claude_opus.yaml` | `claude-opus-4-6` | frontier |
 | `claude_agentic.yaml` | `claude-opus-4-6` | frontier |
 | `gpt.yaml` | `gpt-5.4` | frontier |
-| `gemini.yaml` | `gemini-3.1-pro-preview` | frontier |
+| `gemini.yaml` | `gemini-2.5-pro` | frontier |
 | `together_frontier.yaml` | `together_ai/Qwen/Qwen3.5-397B-A17B` | frontier |
 
 **LiteLLM routing prefixes used by the adapter dispatch (`_call_api`):**
