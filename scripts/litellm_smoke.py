@@ -30,6 +30,11 @@ class SmokeOutcome:
     message: str
     retryable: bool
     category: str
+    status: str | None = None
+    status_code: int | None = None
+    diagnosis: str | None = None
+    detail: str | None = None
+    elapsed_s: float = 0.0
 
 
 def _load_profile_config_stems(profile_name: str) -> list[str]:
@@ -231,16 +236,24 @@ def _smoke_once(base_url: str, model: str, timeout: float, max_tokens: int) -> S
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read().decode("utf-8", errors="replace")
+            elapsed = time.monotonic() - t0
+            status = f"HTTP {getattr(resp, 'status', 200)}"
             return SmokeOutcome(
                 True,
-                f"OK {model}: HTTP {getattr(resp, 'status', 200)} {_truncate(body, 240)}",
+                f"OK {model}: {status} {_truncate(body, 240)}",
                 False,
                 "ok",
+                status=status,
+                status_code=getattr(resp, "status", 200),
+                detail=_truncate(body, 240),
+                elapsed_s=elapsed,
             )
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         category, diagnosis, retryable = _http_category(exc.code, body)
         detail = _error_detail(body)
+        elapsed = time.monotonic() - t0
+        status = f"HTTP {exc.code}"
         return SmokeOutcome(
             False,
             (
@@ -249,23 +262,59 @@ def _smoke_once(base_url: str, model: str, timeout: float, max_tokens: int) -> S
             ),
             retryable,
             category,
+            status=status,
+            status_code=exc.code,
+            diagnosis=diagnosis,
+            detail=detail,
+            elapsed_s=elapsed,
         )
     except urllib.error.URLError as exc:
         elapsed = time.monotonic() - t0
         if _is_timeout_reason(exc.reason):
-            return SmokeOutcome(False, _timeout_message(model, timeout, elapsed), True, "client_timeout")
+            return SmokeOutcome(
+                False,
+                _timeout_message(model, timeout, elapsed),
+                True,
+                "client_timeout",
+                status="timeout",
+                diagnosis="no HTTP response from LiteLLM before the smoke timeout",
+                detail=str(exc.reason),
+                elapsed_s=elapsed,
+            )
         category, diagnosis, retryable = _url_error_category(exc.reason)
         return SmokeOutcome(
             False,
             f"FAIL {model}: {category} retryable={str(retryable).lower()} diagnosis={diagnosis}; detail={exc.reason}",
             retryable,
             category,
+            status=type(exc.reason).__name__ if exc.reason is not None else "URLError",
+            diagnosis=diagnosis,
+            detail=str(exc.reason),
+            elapsed_s=elapsed,
         )
     except (TimeoutError, socket.timeout) as exc:
         elapsed = time.monotonic() - t0
-        return SmokeOutcome(False, _timeout_message(model, timeout, elapsed), True, "client_timeout")
+        return SmokeOutcome(
+            False,
+            _timeout_message(model, timeout, elapsed),
+            True,
+            "client_timeout",
+            status="timeout",
+            diagnosis="no HTTP response from LiteLLM before the smoke timeout",
+            detail=str(exc),
+            elapsed_s=elapsed,
+        )
     except Exception as exc:  # pragma: no cover - defensive fallback for urllib internals
-        return SmokeOutcome(False, f"FAIL {model}: unknown_error retryable=false detail={exc}", False, "unknown_error")
+        elapsed = time.monotonic() - t0
+        return SmokeOutcome(
+            False,
+            f"FAIL {model}: unknown_error retryable=false detail={exc}",
+            False,
+            "unknown_error",
+            status=type(exc).__name__,
+            detail=str(exc),
+            elapsed_s=elapsed,
+        )
 
 
 def smoke_model(

@@ -334,6 +334,24 @@ misses it, interpret that as identity sensitivity. For typosquats, package
 identity can itself be legitimate attack evidence, so alias misses are not proof
 of memorization.
 
+The Gemini stability probe is a separate operational sidecar for answering
+"when are the configured Google routes stable enough to run?" It writes
+append-only JSONL under `logs/gemini_stability_probe/` and does not touch
+`eval_results.db`.
+
+```bash
+# One pass over all configured Gemini routes.
+python scripts/gemini_stability_probe.py
+
+# Manual long run until Ctrl-C.
+python scripts/gemini_stability_probe.py --until-interrupt --interval-seconds 300
+
+# Summarize an existing JSONL probe log by UTC hour.
+python scripts/gemini_stability_probe.py --summarize logs/gemini_stability_probe/<file>.jsonl
+```
+
+Treat this as operator telemetry, not experiment data or thesis metrics.
+
 LKGR samples remain part of the dataset for provenance and baseline context, but
 canonical scoring uses only the latest labelled stable version per package. Old
 database rows may contain `sample_limits` in `resolver_policy`; canonical runs
