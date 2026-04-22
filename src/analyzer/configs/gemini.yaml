@@ -2,6 +2,11 @@ model_name: "gemini-2.5-pro"
 tier: "frontier"
 temperature: 0.0
 proxy_url: "http://127.0.0.1:4000"
+retry_attempts: 2
+retry_delay_seconds: 10
+retry_unparseable: true
+fallback_models:
+  - "gemini-3.1-pro-preview"
 
 system_prompt: |
   You are a security researcher specialising in PyPI supply chain attacks.

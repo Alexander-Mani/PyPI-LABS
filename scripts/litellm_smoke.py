@@ -102,10 +102,9 @@ def _filter_gemini_models(models: list[str], *, gemini_enabled: bool) -> list[st
     return [model for model in models if not _is_gemini_model(model)]
 
 
-def _load_all_litellm_models() -> list[str]:
-    # Keep the all-model dry-run usable even in minimal Python environments
-    # where PyYAML is not installed. The LiteLLM config shape we need is
-    # deliberately simple: repeated "- model_name: <name>" lines.
+def _load_proxy_route_models() -> list[str]:
+    # Keep the raw proxy-route parser available even in minimal Python
+    # environments where PyYAML is not installed.
     models: list[str] = []
     for raw_line in _LITELLM_CONFIG_FILE.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
@@ -117,6 +116,16 @@ def _load_all_litellm_models() -> list[str]:
     if not models:
         raise SystemExit(f"no models found in {_LITELLM_CONFIG_FILE}")
     return models
+
+
+def _load_all_litellm_models() -> list[str]:
+    # "All models" should mean the canonical experiment lineup, not every
+    # hidden proxy fallback alias. Fall back to the raw proxy model list only
+    # if the profile-driven path is unavailable.
+    try:
+        return _load_profile_models("all_models")
+    except SystemExit:
+        return _load_proxy_route_models()
 
 
 def _truncate(text: str, limit: int = 1000) -> str:

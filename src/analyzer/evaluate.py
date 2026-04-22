@@ -1137,31 +1137,46 @@ class EvaluationRunner:
                 "with zero token usage. Check LiteLLM proxy/model routing."
             )
 
-        missing_price_models = sorted(
-            {
-                str(r.details.get("model", ""))
-                for r in tokenized_llm_results
-                if str(r.details.get("model", "")) not in _TOKEN_PRICES
-            }
-        )
-        if missing_price_models:
-            raise SystemExit(
-                "HALT: missing token price configuration for model(s): "
-                + ", ".join(missing_price_models)
-            )
-
-        actual_total   = sum(r.api_cost_usd for r in results)
+        missing_price_models: set[str] = set()
+        actual_total = sum(r.api_cost_usd for r in results)
         expected_total = 0.0
         for r in results:
-            model = r.details.get("model", "")
-            if model in _TOKEN_PRICES:
-                pin, pout = _TOKEN_PRICES[model]
-                expected_total += (r.input_tokens * pin + r.output_tokens * pout) / 1_000_000
+            breakdown = r.details.get("pricing_breakdown")
+            if isinstance(breakdown, list) and breakdown:
+                for item in breakdown:
+                    if not isinstance(item, dict):
+                        continue
+                    model = str(item.get("model", ""))
+                    if model not in _TOKEN_PRICES:
+                        if model:
+                            missing_price_models.add(model)
+                        continue
+                    pin, pout = _TOKEN_PRICES[model]
+                    expected_total += (
+                        int(item.get("input_tokens", 0)) * pin
+                        + int(item.get("output_tokens", 0)) * pout
+                    ) / 1_000_000
+                continue
+
+            model = str(r.details.get("model", ""))
+            if model not in _TOKEN_PRICES:
+                if model:
+                    missing_price_models.add(model)
+                continue
+            pin, pout = _TOKEN_PRICES[model]
+            expected_total += (r.input_tokens * pin + r.output_tokens * pout) / 1_000_000
 
         log.info(
             f"Validation — actual cost: ${actual_total:.4f}  "
             f"expected: ${expected_total:.4f}"
         )
+
+        if missing_price_models:
+            log.warning(
+                "Missing token price configuration for fallback/preview model(s): "
+                + ", ".join(sorted(missing_price_models))
+                + "; excluding them from token-math estimate and relying on LiteLLM actual cost."
+            )
 
         if expected_total > 0 and actual_total > 0:
             divergence = abs(actual_total - expected_total) / expected_total

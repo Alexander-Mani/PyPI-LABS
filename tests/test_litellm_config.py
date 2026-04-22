@@ -79,6 +79,16 @@ def test_litellm_drop_params_uses_litellm_settings():
     assert not re.search(r"^general_settings:\s*\n\s+drop_params:", text, re.MULTILINE)
 
 
+def test_litellm_router_settings_define_same_provider_fallbacks():
+    text = _LITELLM_CONFIG.read_text(encoding="utf-8")
+
+    assert "router_settings:" in text
+    assert '"gemini-2.5-flash-lite": ["gemini-3.1-flash-lite-preview", "gemini-2.0-flash-lite"]' in text
+    assert '"gemini-2.5-flash": ["gemini-3-flash-preview", "gemini-2.0-flash"]' in text
+    assert '"gemini-2.5-pro": ["gemini-3.1-pro-preview"]' in text
+    assert '"together_ai/Qwen/Qwen3.5-397B-A17B": ["together_ai/moonshotai/Kimi-K2.5", "together_ai/zai-org/GLM-5.1"]' in text
+
+
 def test_evaluation_profiles_reference_existing_analyzer_configs():
     analyzer_stems = set(_analyzer_model_names_by_stem())
     missing = {

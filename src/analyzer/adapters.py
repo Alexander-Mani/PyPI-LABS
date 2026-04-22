@@ -70,6 +70,25 @@ class EvalDetectionResult:
     details: dict = field(default_factory=dict)
 
 
+@dataclass
+class ProxyCallResult:
+    text: str
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+    requested_model: str
+    actual_model: str
+    response_model: str | None = None
+    pricing_model: str | None = None
+    headers: dict[str, str] = field(default_factory=dict)
+
+    def __iter__(self):
+        yield self.text
+        yield self.input_tokens
+        yield self.output_tokens
+        yield self.cost_usd
+
+
 # ---------------------------------------------------------------------------
 # Abstract base
 # ---------------------------------------------------------------------------
@@ -215,6 +234,30 @@ def _emit_protocol_error(raw_log, event: str, ctx: dict, *, model: str, details:
     if raw is not None:
         payload["raw_response_ref"] = raw_log.blob_text("model_protocol_failure_raw", str(raw), suffix=".txt")
     raw_log.emit(event, **ctx, payload=payload)
+
+
+def _provider_family(model_name: str) -> str:
+    if model_name.startswith(("gemini-", "gemini/")):
+        return "gemini"
+    if model_name.startswith("together_ai/"):
+        return "together"
+    if model_name.startswith("claude-"):
+        return "anthropic"
+    if model_name.startswith(("gpt-", "o1-", "o3-")):
+        return "openai"
+    return "other"
+
+
+def _exception_details(exc: Exception) -> tuple[str, bool]:
+    text = " ".join(str(exc).split())
+    lower = text.lower()
+    if any(token in lower for token in ("invalid api key", "unauthorized", "authentication", "401")):
+        return text or exc.__class__.__name__, False
+    if any(token in lower for token in ("429", "rate limit", "quota")):
+        return text or exc.__class__.__name__, True
+    if any(token in lower for token in ("500", "502", "503", "504", "overloaded", "high demand", "unavailable", "timeout", "timed out", "connection")):
+        return text or exc.__class__.__name__, True
+    return text or exc.__class__.__name__, False
 
 
 def _resolve_tool_executable(tool: str) -> str:
@@ -731,6 +774,313 @@ class LLMAdapter(DetectorAdapter):
         self._user_template: str   = cfg.get("user_template", "{file_listing}")
         self._detector_name: str   = Path(config_path).stem   # e.g. "claude_opus"
         self._proxy_url: str | None = cfg.get("proxy_url") or None
+        self._request_params: dict = dict(cfg.get("request_params") or {})
+        self._retry_attempts: int = int(cfg.get("retry_attempts", 0))
+        self._retry_delay_seconds: float = float(cfg.get("retry_delay_seconds", 0.0))
+        self._retry_unparseable: bool = bool(cfg.get("retry_unparseable", False))
+        self._fallback_models: list[str] = [str(model) for model in cfg.get("fallback_models", [])]
+
+    def _mode_name(self) -> str:
+        return "hybrid"
+
+    def _build_listing(self, pkg: PackageInfo) -> tuple[str, bool]:
+        return self._build_file_listing(pkg)
+
+    def _is_protocol_retryable(self, details: dict, requested_model: str) -> bool:
+        if not _is_protocol_failure(details):
+            return False
+        error = str(details.get("error", ""))
+        if error == "empty_model_response":
+            return _provider_family(requested_model) in {"gemini", "together"}
+        if error == "unparseable_model_response":
+            return (
+                _provider_family(requested_model) in {"gemini", "together"}
+                and self._retry_unparseable
+            )
+        return False
+
+    def _retry_sleep(self) -> None:
+        delay = float(getattr(self, "_retry_delay_seconds", 0.0) or 0.0)
+        if delay > 0:
+            _time.sleep(delay)
+
+    def _attempt_models(self) -> list[str]:
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for model in [self._model_name, *getattr(self, "_fallback_models", [])]:
+            if model not in seen:
+                ordered.append(model)
+                seen.add(model)
+        return ordered
+
+    def _error_result(
+        self,
+        *,
+        pkg: PackageInfo,
+        mode: str,
+        t0: float,
+        details: dict,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float,
+    ) -> EvalDetectionResult:
+        return EvalDetectionResult(
+            detector=self._detector_name,
+            experiment_mode="error",
+            verdict=False,
+            confidence=None,
+            heuristic_flags=list(pkg.heuristic_flags),
+            exec_time_ms=int((_time.monotonic() - t0) * 1000),
+            api_cost_usd=cost_usd,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            details=details,
+        )
+
+    def _success_result(
+        self,
+        *,
+        pkg: PackageInfo,
+        mode: str,
+        t0: float,
+        verdict: bool,
+        confidence: float | None,
+        details: dict,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float,
+    ) -> EvalDetectionResult:
+        return EvalDetectionResult(
+            detector=self._detector_name,
+            experiment_mode=mode,
+            verdict=verdict,
+            confidence=confidence,
+            heuristic_flags=list(pkg.heuristic_flags),
+            exec_time_ms=int((_time.monotonic() - t0) * 1000),
+            api_cost_usd=cost_usd,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            details=details,
+        )
+
+    def _run_mode(
+        self,
+        pkg: PackageInfo,
+        *,
+        mode: str,
+        prompt_strategy: str,
+        system: str,
+        user: str,
+        truncated: bool,
+        raw_log=None,
+        trace_context: dict | None = None,
+    ) -> EvalDetectionResult:
+        ctx = _context(trace_context, pkg)
+        ctx.update({"detector": self._detector_name, "mode": mode, "strategy": prompt_strategy})
+        t0 = _time.monotonic()
+        total_in = 0
+        total_out = 0
+        total_cost = 0.0
+        attempts_summary: list[dict] = []
+        pricing_breakdown: list[dict] = []
+        last_protocol_details: dict | None = None
+        last_exception: str | None = None
+        last_requested_model = self._model_name
+        last_actual_model = self._model_name
+
+        for model_index, active_model in enumerate(self._attempt_models()):
+            max_attempts = int(getattr(self, "_retry_attempts", 0)) + 1
+            for attempt_index in range(max_attempts):
+                attempt_no = len(attempts_summary) + 1
+                try:
+                    call = self._call_api(
+                        system,
+                        user,
+                        raw_log=raw_log,
+                        trace_context=ctx,
+                        model_name=active_model,
+                        requested_model=self._model_name,
+                        attempt=attempt_no,
+                        mode=mode,
+                    )
+                    if not isinstance(call, ProxyCallResult):
+                        raw_text, in_tok, out_tok, cost = call
+                        call = ProxyCallResult(
+                            text=raw_text,
+                            input_tokens=in_tok,
+                            output_tokens=out_tok,
+                            cost_usd=cost,
+                            requested_model=self._model_name,
+                            actual_model=active_model,
+                            pricing_model=active_model,
+                        )
+                except Exception as exc:
+                    error_text, retryable = _exception_details(exc)
+                    last_exception = error_text
+                    attempts_summary.append({
+                        "attempt": attempt_no,
+                        "requested_model": self._model_name,
+                        "model": active_model,
+                        "error": error_text,
+                        "retryable": retryable,
+                        "phase": "transport",
+                    })
+                    if raw_log is not None:
+                        raw_log.emit(
+                            "llm.retry" if retryable else "llm.error",
+                            **ctx,
+                            payload={
+                                "attempt": attempt_no,
+                                "requested_model": self._model_name,
+                                "model": active_model,
+                                "error": error_text,
+                                "retryable": retryable,
+                                "phase": "transport",
+                            },
+                        )
+                    has_same_model_retry = retryable and attempt_index + 1 < max_attempts
+                    has_fallback = retryable and model_index + 1 < len(self._attempt_models())
+                    if has_same_model_retry or has_fallback:
+                        self._retry_sleep()
+                        continue
+                    details = {
+                        "error": error_text,
+                        "model": active_model,
+                        "requested_model": self._model_name,
+                        "actual_model": active_model,
+                        "fallback_used": active_model != self._model_name,
+                        "fallback_chain": self._attempt_models(),
+                        "attempt_count": attempt_no,
+                        "attempts": attempts_summary,
+                        "pricing_breakdown": pricing_breakdown,
+                    }
+                    return self._error_result(
+                        pkg=pkg,
+                        mode=mode,
+                        t0=t0,
+                        details=details,
+                        input_tokens=total_in,
+                        output_tokens=total_out,
+                        cost_usd=total_cost,
+                    )
+
+                total_in += call.input_tokens
+                total_out += call.output_tokens
+                total_cost += call.cost_usd
+                pricing_breakdown.append({
+                    "model": call.pricing_model or active_model,
+                    "input_tokens": call.input_tokens,
+                    "output_tokens": call.output_tokens,
+                })
+                last_requested_model = call.requested_model
+                last_actual_model = call.actual_model
+
+                verdict, confidence, details = self._parse_response(call.text)
+                details["model"] = call.pricing_model or active_model
+                details["requested_model"] = self._model_name
+                details["actual_model"] = call.actual_model
+                if call.response_model:
+                    details["response_model"] = call.response_model
+                if truncated:
+                    details["truncated"] = True
+                details["fallback_used"] = active_model != self._model_name
+                details["fallback_chain"] = self._attempt_models()
+                details["attempt_count"] = attempt_no
+                details["attempts"] = attempts_summary + [{
+                    "attempt": attempt_no,
+                    "requested_model": self._model_name,
+                    "model": active_model,
+                    "actual_model": call.actual_model,
+                    "response_model": call.response_model,
+                    "phase": "response",
+                    "result": details.get("error", "ok"),
+                    "retryable": details.get("retryable", False),
+                }]
+                details["pricing_breakdown"] = pricing_breakdown
+
+                if not _is_protocol_failure(details):
+                    return self._success_result(
+                        pkg=pkg,
+                        mode=mode,
+                        t0=t0,
+                        verdict=verdict,
+                        confidence=confidence,
+                        details=details,
+                        input_tokens=total_in,
+                        output_tokens=total_out,
+                        cost_usd=total_cost,
+                    )
+
+                last_protocol_details = dict(details)
+                retryable = self._is_protocol_retryable(details, self._model_name)
+                attempts_summary.append({
+                    "attempt": attempt_no,
+                    "requested_model": self._model_name,
+                    "model": active_model,
+                    "actual_model": call.actual_model,
+                    "response_model": call.response_model,
+                    "phase": "protocol",
+                    "error": details.get("error"),
+                    "retryable": retryable,
+                })
+                if raw_log is not None:
+                    raw_log.emit(
+                        "llm.retry" if retryable else "llm.protocol_error",
+                        **ctx,
+                        payload={
+                            "attempt": attempt_no,
+                            "requested_model": self._model_name,
+                            "model": active_model,
+                            "actual_model": call.actual_model,
+                            "error": details.get("error"),
+                            "retryable": retryable,
+                            "phase": "protocol",
+                        },
+                    )
+                has_same_model_retry = retryable and attempt_index + 1 < max_attempts
+                has_fallback = retryable and model_index + 1 < len(self._attempt_models())
+                if has_same_model_retry or has_fallback:
+                    self._retry_sleep()
+                    continue
+
+                details["intended_mode"] = mode
+                _emit_protocol_error(
+                    raw_log,
+                    "llm.protocol_error",
+                    ctx,
+                    model=active_model,
+                    details=details,
+                )
+                return self._error_result(
+                    pkg=pkg,
+                    mode=mode,
+                    t0=t0,
+                    details=details,
+                    input_tokens=total_in,
+                    output_tokens=total_out,
+                    cost_usd=total_cost,
+                )
+
+        fallback_details = dict(last_protocol_details or {})
+        fallback_details.setdefault("error", last_exception or "exhausted_retries")
+        fallback_details.setdefault("model", last_actual_model)
+        fallback_details["requested_model"] = self._model_name
+        fallback_details["actual_model"] = last_actual_model
+        fallback_details["fallback_used"] = last_requested_model != last_actual_model
+        fallback_details["fallback_chain"] = self._attempt_models()
+        fallback_details["attempt_count"] = len(attempts_summary)
+        fallback_details["attempts"] = attempts_summary
+        fallback_details["pricing_breakdown"] = pricing_breakdown
+        fallback_details["intended_mode"] = mode
+        return self._error_result(
+            pkg=pkg,
+            mode=mode,
+            t0=t0,
+            details=fallback_details,
+            input_tokens=total_in,
+            output_tokens=total_out,
+            cost_usd=total_cost,
+        )
 
     def run(
         self,
@@ -744,79 +1094,25 @@ class LLMAdapter(DetectorAdapter):
     ) -> EvalDetectionResult:
         system = system_prompt    if system_prompt    is not None else self._system_prompt
         tmpl   = template_override if template_override is not None else self._user_template
-        listing, truncated = self._build_file_listing(pkg)
+        listing, truncated = self._build_listing(pkg)
         user   = tmpl.format(
             package_name=pkg.name,
             version=pkg.version,
             file_listing=listing,
             heuristic_flags=", ".join(pkg.heuristic_flags) if pkg.heuristic_flags else "none",
         )
-        ctx = _context(trace_context, pkg)
-        ctx.update({"detector": self._detector_name, "mode": "hybrid", "strategy": prompt_strategy})
         log.debug(
             f"[{self._detector_name}] prompt ({len(user)} chars, truncated={truncated}):\n{user}"
         )
-        t0 = _time.monotonic()
-        try:
-            raw_text, in_tok, out_tok, cost = self._call_api(
-                system, user, raw_log=raw_log, trace_context=ctx
-            )
-            log.debug(
-                f"[{self._detector_name}] response "
-                f"(in={in_tok} out={out_tok} cost=${cost:.6f}):\n{raw_text}"
-            )
-            verdict, confidence, details = self._parse_response(raw_text)
-        except Exception as exc:
-            if raw_log is not None:
-                raw_log.emit("llm.error", **ctx, payload={"model": self._model_name, "error": str(exc)})
-            return EvalDetectionResult(
-                detector=self._detector_name,
-                experiment_mode="error",
-                verdict=False,
-                confidence=None,
-                heuristic_flags=list(pkg.heuristic_flags),
-                exec_time_ms=int((_time.monotonic() - t0) * 1000),
-                api_cost_usd=0.0,
-                input_tokens=0,
-                output_tokens=0,
-                details={"error": str(exc), "model": self._model_name},
-            )
-
-        details["model"] = self._model_name
-        if truncated:
-            details["truncated"] = True
-        if _is_protocol_failure(details):
-            details["intended_mode"] = "hybrid"
-            _emit_protocol_error(
-                raw_log,
-                "llm.protocol_error",
-                ctx,
-                model=self._model_name,
-                details=details,
-            )
-            return EvalDetectionResult(
-                detector=self._detector_name,
-                experiment_mode="error",
-                verdict=False,
-                confidence=None,
-                heuristic_flags=list(pkg.heuristic_flags),
-                exec_time_ms=int((_time.monotonic() - t0) * 1000),
-                api_cost_usd=cost,
-                input_tokens=in_tok,
-                output_tokens=out_tok,
-                details=details,
-            )
-        return EvalDetectionResult(
-            detector=self._detector_name,
-            experiment_mode="hybrid",
-            verdict=verdict,
-            confidence=confidence,
-            heuristic_flags=list(pkg.heuristic_flags),
-            exec_time_ms=int((_time.monotonic() - t0) * 1000),
-            api_cost_usd=cost,
-            input_tokens=in_tok,
-            output_tokens=out_tok,
-            details=details,
+        return self._run_mode(
+            pkg,
+            mode=self._mode_name(),
+            prompt_strategy=prompt_strategy,
+            system=system,
+            user=user,
+            truncated=truncated,
+            raw_log=raw_log,
+            trace_context=trace_context,
         )
 
     def _build_file_listing(self, pkg: PackageInfo) -> tuple[str, bool]:
@@ -839,14 +1135,45 @@ class LLMAdapter(DetectorAdapter):
         *,
         raw_log=None,
         trace_context: dict | None = None,
-    ) -> tuple[str, int, int, float]:
-        m = self._model_name
+        model_name: str | None = None,
+        requested_model: str | None = None,
+        attempt: int | None = None,
+        mode: str | None = None,
+    ) -> ProxyCallResult:
+        m = model_name or self._model_name
         if m.startswith("claude-"):
-            return self._call_anthropic(system, user, raw_log=raw_log, trace_context=trace_context)
+            return self._call_anthropic(
+                system,
+                user,
+                raw_log=raw_log,
+                trace_context=trace_context,
+                model_name=m,
+                requested_model=requested_model,
+                attempt=attempt,
+                mode=mode,
+            )
         if m.startswith(("gpt-", "o1-", "o3-", "together_ai/")):
-            return self._call_openai(system, user, raw_log=raw_log, trace_context=trace_context)
+            return self._call_openai(
+                system,
+                user,
+                raw_log=raw_log,
+                trace_context=trace_context,
+                model_name=m,
+                requested_model=requested_model,
+                attempt=attempt,
+                mode=mode,
+            )
         if m.startswith(("gemini-", "gemini/")):
-            return self._call_gemini(system, user, raw_log=raw_log, trace_context=trace_context)
+            return self._call_gemini(
+                system,
+                user,
+                raw_log=raw_log,
+                trace_context=trace_context,
+                model_name=m,
+                requested_model=requested_model,
+                attempt=attempt,
+                mode=mode,
+            )
         raise ValueError(f"Unknown model prefix for: {m}")
 
     def _call_via_proxy(
@@ -856,25 +1183,35 @@ class LLMAdapter(DetectorAdapter):
         *,
         raw_log=None,
         trace_context: dict | None = None,
-    ) -> tuple[str, int, int, float]:
-        """Route through LiteLLM; returns (text, input_tokens, output_tokens, cost_usd)."""
+        model_name: str | None = None,
+        requested_model: str | None = None,
+        attempt: int | None = None,
+        mode: str | None = None,
+    ) -> ProxyCallResult:
+        """Route through LiteLLM."""
         import openai as _openai
+        active_model = model_name or self._model_name
+        requested = requested_model or self._model_name
         messages = [
             {"role": "system", "content": system},
             {"role": "user",   "content": user},
         ]
         request_payload = {
-            "model": self._model_name,
+            "model": active_model,
             "temperature": self._temperature,
             "max_tokens": 512,
             "messages": messages,
         }
+        request_payload.update(dict(getattr(self, "_request_params", {}) or {}))
         if raw_log is not None:
             raw_log.emit(
                 "llm.request",
                 **(trace_context or {}),
                 payload={
-                    "model": self._model_name,
+                    "model": active_model,
+                    "requested_model": requested,
+                    "attempt": attempt,
+                    "mode": mode,
                     "proxy_url": self._proxy_url,
                     "system_prompt_ref": raw_log.blob_text("llm_system_prompt", system, suffix=".txt"),
                     "user_prompt_ref": raw_log.blob_text("llm_user_prompt", user, suffix=".txt"),
@@ -886,11 +1223,14 @@ class LLMAdapter(DetectorAdapter):
             api_key="no-key-needed",
         )
         http_resp = client.with_raw_response.chat.completions.create(**request_payload)
-        cost = float(http_resp.headers.get("x-litellm-response-cost") or 0.0)
+        headers = dict(http_resp.headers)
+        cost = float(headers.get("x-litellm-response-cost") or 0.0)
         resp = http_resp.parse()
         text = resp.choices[0].message.content or ""
         in_tok  = resp.usage.prompt_tokens     if resp.usage else 0
         out_tok = resp.usage.completion_tokens if resp.usage else 0
+        response_model = getattr(resp, "model", None)
+        actual_model = str(headers.get("x-litellm-model-id") or response_model or active_model)
         if raw_log is not None:
             if hasattr(resp, "model_dump"):
                 response_payload = resp.model_dump(mode="json")
@@ -900,8 +1240,13 @@ class LLMAdapter(DetectorAdapter):
                 "llm.response",
                 **(trace_context or {}),
                 payload={
-                    "model": self._model_name,
-                    "headers": dict(http_resp.headers),
+                    "model": active_model,
+                    "requested_model": requested,
+                    "actual_model": actual_model,
+                    "response_model": response_model,
+                    "attempt": attempt,
+                    "mode": mode,
+                    "headers": headers,
                     "assistant_text_ref": raw_log.blob_text("llm_assistant_text", text, suffix=".txt"),
                     "response_json_ref": raw_log.blob_json("llm_response", response_payload),
                     "input_tokens": in_tok,
@@ -909,13 +1254,32 @@ class LLMAdapter(DetectorAdapter):
                     "cost_usd": cost,
                 },
             )
-        return text, in_tok, out_tok, cost
+        return ProxyCallResult(
+            text=text,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            cost_usd=cost,
+            requested_model=requested,
+            actual_model=actual_model,
+            response_model=str(response_model) if response_model is not None else None,
+            pricing_model=active_model,
+            headers=headers,
+        )
 
     def _call_anthropic(
-        self, system: str, user: str, *, raw_log=None, trace_context: dict | None = None
-    ) -> tuple[str, int, int, float]:
+        self, system: str, user: str, *, raw_log=None, trace_context: dict | None = None, model_name: str | None = None, requested_model: str | None = None, attempt: int | None = None, mode: str | None = None
+    ) -> ProxyCallResult:
         if self._proxy_url:
-            return self._call_via_proxy(system, user, raw_log=raw_log, trace_context=trace_context)
+            return self._call_via_proxy(
+                system,
+                user,
+                raw_log=raw_log,
+                trace_context=trace_context,
+                model_name=model_name,
+                requested_model=requested_model,
+                attempt=attempt,
+                mode=mode,
+            )
         raise RuntimeError(
             f"proxy_url not set in '{self._detector_name}' config - direct API calls "
             "bypass key isolation (RISK_DIARY.md Decision 5). Add proxy_url to the "
@@ -923,10 +1287,19 @@ class LLMAdapter(DetectorAdapter):
         )
 
     def _call_openai(
-        self, system: str, user: str, *, raw_log=None, trace_context: dict | None = None
-    ) -> tuple[str, int, int, float]:
+        self, system: str, user: str, *, raw_log=None, trace_context: dict | None = None, model_name: str | None = None, requested_model: str | None = None, attempt: int | None = None, mode: str | None = None
+    ) -> ProxyCallResult:
         if self._proxy_url:
-            return self._call_via_proxy(system, user, raw_log=raw_log, trace_context=trace_context)
+            return self._call_via_proxy(
+                system,
+                user,
+                raw_log=raw_log,
+                trace_context=trace_context,
+                model_name=model_name,
+                requested_model=requested_model,
+                attempt=attempt,
+                mode=mode,
+            )
         raise RuntimeError(
             f"proxy_url not set in '{self._detector_name}' config - direct API calls "
             "bypass key isolation (RISK_DIARY.md Decision 5). Add proxy_url to the "
@@ -934,10 +1307,19 @@ class LLMAdapter(DetectorAdapter):
         )
 
     def _call_gemini(
-        self, system: str, user: str, *, raw_log=None, trace_context: dict | None = None
-    ) -> tuple[str, int, int, float]:
+        self, system: str, user: str, *, raw_log=None, trace_context: dict | None = None, model_name: str | None = None, requested_model: str | None = None, attempt: int | None = None, mode: str | None = None
+    ) -> ProxyCallResult:
         if self._proxy_url:
-            return self._call_via_proxy(system, user, raw_log=raw_log, trace_context=trace_context)
+            return self._call_via_proxy(
+                system,
+                user,
+                raw_log=raw_log,
+                trace_context=trace_context,
+                model_name=model_name,
+                requested_model=requested_model,
+                attempt=attempt,
+                mode=mode,
+            )
         raise RuntimeError(
             f"proxy_url not set in '{self._detector_name}' config - direct API calls "
             "bypass key isolation (RISK_DIARY.md Decision 5). Add proxy_url to the "
@@ -1501,6 +1883,12 @@ class LLMRawAdapter(LLMAdapter):
     Produces experiment_mode="llm_raw" rows in the DB.
     """
 
+    def _mode_name(self) -> str:
+        return "llm_raw"
+
+    def _build_listing(self, pkg: PackageInfo) -> tuple[str, bool]:
+        return self._build_file_listing_raw(pkg)
+
     def run(
         self,
         pkg: PackageInfo,
@@ -1513,79 +1901,25 @@ class LLMRawAdapter(LLMAdapter):
     ) -> EvalDetectionResult:
         system = system_prompt     if system_prompt     is not None else self._system_prompt
         tmpl   = template_override if template_override is not None else self._user_template
-        listing, truncated = self._build_file_listing_raw(pkg)
+        listing, truncated = self._build_listing(pkg)
         user   = tmpl.format(
             package_name=pkg.name,
             version=pkg.version,
             file_listing=listing,
             heuristic_flags=", ".join(pkg.heuristic_flags) if pkg.heuristic_flags else "none",
         )
-        ctx = _context(trace_context, pkg)
-        ctx.update({"detector": self._detector_name, "mode": "llm_raw", "strategy": prompt_strategy})
         log.debug(
             f"[{self._detector_name}/raw] prompt ({len(user)} chars, truncated={truncated}):\n{user}"
         )
-        t0 = _time.monotonic()
-        try:
-            raw_text, in_tok, out_tok, cost = self._call_api(
-                system, user, raw_log=raw_log, trace_context=ctx
-            )
-            log.debug(
-                f"[{self._detector_name}/raw] response "
-                f"(in={in_tok} out={out_tok} cost=${cost:.6f}):\n{raw_text}"
-            )
-            verdict, confidence, details = self._parse_response(raw_text)
-        except Exception as exc:
-            if raw_log is not None:
-                raw_log.emit("llm.error", **ctx, payload={"model": self._model_name, "error": str(exc)})
-            return EvalDetectionResult(
-                detector=self._detector_name,
-                experiment_mode="error",
-                verdict=False,
-                confidence=None,
-                heuristic_flags=list(pkg.heuristic_flags),
-                exec_time_ms=int((_time.monotonic() - t0) * 1000),
-                api_cost_usd=0.0,
-                input_tokens=0,
-                output_tokens=0,
-                details={"error": str(exc), "model": self._model_name},
-            )
-
-        details["model"] = self._model_name
-        if truncated:
-            details["truncated"] = True
-        if _is_protocol_failure(details):
-            details["intended_mode"] = "llm_raw"
-            _emit_protocol_error(
-                raw_log,
-                "llm.protocol_error",
-                ctx,
-                model=self._model_name,
-                details=details,
-            )
-            return EvalDetectionResult(
-                detector=self._detector_name,
-                experiment_mode="error",
-                verdict=False,
-                confidence=None,
-                heuristic_flags=list(pkg.heuristic_flags),
-                exec_time_ms=int((_time.monotonic() - t0) * 1000),
-                api_cost_usd=cost,
-                input_tokens=in_tok,
-                output_tokens=out_tok,
-                details=details,
-            )
-        return EvalDetectionResult(
-            detector=self._detector_name,
-            experiment_mode="llm_raw",
-            verdict=verdict,
-            confidence=confidence,
-            heuristic_flags=list(pkg.heuristic_flags),
-            exec_time_ms=int((_time.monotonic() - t0) * 1000),
-            api_cost_usd=cost,
-            input_tokens=in_tok,
-            output_tokens=out_tok,
-            details=details,
+        return self._run_mode(
+            pkg,
+            mode=self._mode_name(),
+            prompt_strategy=prompt_strategy,
+            system=system,
+            user=user,
+            truncated=truncated,
+            raw_log=raw_log,
+            trace_context=trace_context,
         )
 
     def _build_file_listing_raw(self, pkg: PackageInfo) -> tuple[str, bool]:

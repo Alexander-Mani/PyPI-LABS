@@ -2,6 +2,15 @@ model_name: "together_ai/Qwen/Qwen3.5-397B-A17B"
 tier: "frontier"
 temperature: 0.0
 proxy_url: "http://127.0.0.1:4000"
+retry_attempts: 1
+retry_delay_seconds: 5
+retry_unparseable: true
+request_params:
+  reasoning:
+    enabled: false
+fallback_models:
+  - "together_ai/moonshotai/Kimi-K2.5"
+  - "together_ai/zai-org/GLM-5.1"
 
 system_prompt: |
   You are a security researcher specialising in PyPI supply chain attacks.

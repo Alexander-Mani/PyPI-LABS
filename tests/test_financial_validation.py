@@ -146,3 +146,33 @@ def test_financial_validation_halts_when_selected_detector_all_errors():
     assert "gemini-2.5-flash-lite" in message
     assert "503 high demand" in message
     assert "--profile budget_no_gemini" in message
+
+
+def test_financial_validation_uses_actual_cost_when_fallback_price_is_unknown():
+    class Controller:
+        def expected_non_static_detectors(self, **kwargs):
+            return {"gemini_flash"}
+
+        def run(self, **kwargs):
+            return [
+                EvalDetectionResult(
+                    detector="gemini_flash",
+                    experiment_mode="hybrid",
+                    verdict=False,
+                    confidence=0.9,
+                    heuristic_flags=[],
+                    exec_time_ms=1,
+                    api_cost_usd=0.004,
+                    input_tokens=220,
+                    output_tokens=50,
+                    details={
+                        "model": "gemini-3.1-pro-preview",
+                        "pricing_breakdown": [
+                            {"model": "gemini-2.5-flash", "input_tokens": 100, "output_tokens": 20},
+                            {"model": "gemini-3.1-pro-preview", "input_tokens": 120, "output_tokens": 30},
+                        ],
+                    },
+                ),
+            ]
+
+    _runner_with_controller(Controller())._validate_financial_airgap()

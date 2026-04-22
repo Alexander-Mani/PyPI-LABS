@@ -2,3 +2,12 @@ model_name: "together_ai/Qwen/Qwen3.5-9B"
 tier: "budget"
 temperature: 0.0
 proxy_url: "http://127.0.0.1:4000"
+retry_attempts: 1
+retry_delay_seconds: 5
+retry_unparseable: true
+request_params:
+  reasoning:
+    enabled: false
+fallback_models:
+  - "together_ai/meta-llama/Meta-Llama-3-8B-Instruct-Lite"
+  - "together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo"

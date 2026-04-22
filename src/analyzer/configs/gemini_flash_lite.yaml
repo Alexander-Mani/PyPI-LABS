@@ -2,3 +2,9 @@ model_name: "gemini-2.5-flash-lite"
 tier: "budget"
 temperature: 0.0
 proxy_url: "http://127.0.0.1:4000"
+retry_attempts: 2
+retry_delay_seconds: 10
+retry_unparseable: true
+fallback_models:
+  - "gemini-3.1-flash-lite-preview"
+  - "gemini-2.0-flash-lite"

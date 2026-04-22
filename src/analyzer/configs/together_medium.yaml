@@ -2,3 +2,9 @@ model_name: "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"
 tier: "medium"
 temperature: 0.0
 proxy_url: "http://127.0.0.1:4000"
+retry_attempts: 1
+retry_delay_seconds: 5
+retry_unparseable: true
+fallback_models:
+  - "together_ai/deepseek-ai/DeepSeek-V3.1"
+  - "together_ai/MiniMaxAI/MiniMax-M2.5"

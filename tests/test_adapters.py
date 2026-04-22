@@ -9,7 +9,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_REPO_ROOT / "src" / "analyzer"))
 
-from adapters import AgenticAdapter, LLMAdapter, LLMRawAdapter  # noqa: E402
+from adapters import AgenticAdapter, LLMAdapter, LLMRawAdapter, ProxyCallResult  # noqa: E402
 from entry_extractor import PackageInfo  # noqa: E402
 
 
@@ -31,6 +31,7 @@ class _FakeChoice:
 class _FakeParsedResponse:
     usage = _FakeUsage()
     choices = [_FakeChoice()]
+    model = "gpt-5.4-nano"
 
 
 class _FakeLegacyAPIResponse:
@@ -123,6 +124,11 @@ def _make_llm_adapter() -> LLMAdapter:
     adapter._user_template = "{file_listing}"
     adapter._detector_name = "gpt_nano"
     adapter._proxy_url = "http://127.0.0.1:4000"
+    adapter._request_params = {}
+    adapter._retry_attempts = 0
+    adapter._retry_delay_seconds = 0.0
+    adapter._retry_unparseable = False
+    adapter._fallback_models = []
     return adapter
 
 
@@ -195,6 +201,11 @@ def test_llm_raw_protocol_failure_preserves_cost_and_mode(monkeypatch):
     adapter._user_template = "{file_listing}"
     adapter._detector_name = "gpt_nano"
     adapter._proxy_url = "http://127.0.0.1:4000"
+    adapter._request_params = {}
+    adapter._retry_attempts = 0
+    adapter._retry_delay_seconds = 0.0
+    adapter._retry_unparseable = False
+    adapter._fallback_models = []
     monkeypatch.setattr(adapter, "_call_api", lambda *args, **kwargs: ("", 21, 4, 0.002))
 
     result = adapter.run(_pkg(), prompt_strategy="role_based")
@@ -205,6 +216,56 @@ def test_llm_raw_protocol_failure_preserves_cost_and_mode(monkeypatch):
     assert result.api_cost_usd == 0.002
     assert result.details["error"] == "empty_model_response"
     assert result.details["intended_mode"] == "llm_raw"
+
+
+def test_llm_proxy_request_params_are_forwarded(monkeypatch):
+    completions = _install_fake_openai(monkeypatch)
+    adapter = _make_llm_adapter()
+    adapter._model_name = "together_ai/Qwen/Qwen3.5-9B"
+    adapter._request_params = {"reasoning": {"enabled": False}}
+
+    call = adapter._call_via_proxy("system prompt", "user prompt")
+
+    assert call.requested_model == "together_ai/Qwen/Qwen3.5-9B"
+    assert completions.calls[0]["reasoning"] == {"enabled": False}
+
+
+def test_llm_protocol_failure_can_fallback_to_secondary_model(monkeypatch):
+    adapter = _make_llm_adapter()
+    adapter._model_name = "gemini-2.5-flash"
+    adapter._retry_attempts = 0
+    adapter._retry_delay_seconds = 0.0
+    adapter._retry_unparseable = True
+    adapter._fallback_models = ["gemini-3-flash-preview"]
+    calls = []
+
+    def fake_call_api(*args, **kwargs):
+        calls.append(kwargs["model_name"])
+        if kwargs["model_name"] == "gemini-2.5-flash":
+            return ("", 10, 2, 0.001)
+        return ProxyCallResult(
+            text='{"verdict":"benign","confidence":0.7}',
+            input_tokens=12,
+            output_tokens=4,
+            cost_usd=0.002,
+            requested_model=kwargs["requested_model"],
+            actual_model=kwargs["model_name"],
+            pricing_model=kwargs["model_name"],
+        )
+
+    monkeypatch.setattr(adapter, "_call_api", fake_call_api)
+
+    result = adapter.run(_pkg(), prompt_strategy="zero_shot")
+
+    assert calls == ["gemini-2.5-flash", "gemini-3-flash-preview"]
+    assert result.experiment_mode == "hybrid"
+    assert result.details["requested_model"] == "gemini-2.5-flash"
+    assert result.details["actual_model"] == "gemini-3-flash-preview"
+    assert result.details["fallback_used"] is True
+    assert result.details["pricing_breakdown"] == [
+        {"model": "gemini-2.5-flash", "input_tokens": 10, "output_tokens": 2},
+        {"model": "gemini-3-flash-preview", "input_tokens": 12, "output_tokens": 4},
+    ]
 
 
 def test_agentic_proxy_raw_response_is_not_context_manager(monkeypatch):
