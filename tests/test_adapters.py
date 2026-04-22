@@ -9,7 +9,13 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_REPO_ROOT / "src" / "analyzer"))
 
-from adapters import AgenticAdapter, LLMAdapter, LLMRawAdapter, ProxyCallResult  # noqa: E402
+from adapters import (  # noqa: E402
+    AgenticAdapter,
+    LLMAdapter,
+    LLMRawAdapter,
+    ProxyCallResult,
+    _protocol_details_from_response,
+)
 from entry_extractor import PackageInfo  # noqa: E402
 
 
@@ -65,6 +71,47 @@ def _install_fake_openai(monkeypatch):
     monkeypatch.setitem(sys.modules, "openai", fake_module)
     _FakeOpenAIClient.completions.calls.clear()
     return _FakeOpenAIClient.completions
+
+
+class _FakeResponseWithHeaders:
+    def __init__(self, parsed, headers):
+        self._parsed = parsed
+        self.headers = headers
+
+    def parse(self):
+        return self._parsed
+
+
+class _ResponseWithNoChoices:
+    usage = _FakeUsage()
+    choices = []
+    model = "claude-opus-4-6"
+
+
+class _ResponseWithMissingMessage:
+    usage = _FakeUsage()
+    choices = [type("Choice", (), {"message": None, "finish_reason": "stop"})()]
+    model = "claude-opus-4-6"
+
+
+class _ResponseWithNullContent:
+    usage = _FakeUsage()
+    choices = [type(
+        "Choice",
+        (),
+        {"message": type("Message", (), {"content": None, "tool_calls": None, "refusal": None})(), "finish_reason": "stop"},
+    )()]
+    model = "claude-opus-4-6"
+
+
+class _ResponseWithToolCallsOnly:
+    usage = _FakeUsage()
+    choices = [type(
+        "Choice",
+        (),
+        {"message": type("Message", (), {"content": None, "tool_calls": [{"id": "call-1"}], "refusal": None})(), "finish_reason": "tool_calls"},
+    )()]
+    model = "claude-opus-4-6"
 
 
 def test_agentic_adapter_llm_failure_returns_error_not_benign(monkeypatch):
@@ -147,18 +194,21 @@ def _pkg() -> PackageInfo:
 
 def test_llm_protocol_failure_empty_response_is_final_error_without_protocol_retry(monkeypatch):
     adapter = _make_llm_adapter()
+    monkeypatch.setattr(adapter, "_generic_protocol_retry_sleep", lambda: None)
     monkeypatch.setattr(adapter, "_call_api", lambda *args, **kwargs: ("", 101, 3, 0.0042))
 
     result = adapter.run(_pkg(), prompt_strategy="few_shot")
 
     assert result.experiment_mode == "error"
     assert result.verdict is False
-    assert result.input_tokens == 101
-    assert result.output_tokens == 3
-    assert result.api_cost_usd == 0.0042
+    assert result.input_tokens == 202
+    assert result.output_tokens == 6
+    assert result.api_cost_usd == 0.0084
     assert result.details["error"] == "empty_model_response"
+    assert result.details["protocol_category"] == "empty_blank_content"
     assert result.details["retryable"] is False
     assert result.details["protocol_failure"] is True
+    assert result.details["attempt_count"] == 2
     assert result.details["intended_mode"] == "hybrid"
 
 
@@ -212,15 +262,18 @@ def test_llm_raw_protocol_failure_preserves_cost_and_mode(monkeypatch):
     adapter._retry_transport_categories = set()
     adapter._retry_protocol_errors = set()
     adapter._fallback_models = []
+    monkeypatch.setattr(adapter, "_generic_protocol_retry_sleep", lambda: None)
     monkeypatch.setattr(adapter, "_call_api", lambda *args, **kwargs: ("", 21, 4, 0.002))
 
     result = adapter.run(_pkg(), prompt_strategy="role_based")
 
     assert result.experiment_mode == "error"
-    assert result.input_tokens == 21
-    assert result.output_tokens == 4
-    assert result.api_cost_usd == 0.002
+    assert result.input_tokens == 42
+    assert result.output_tokens == 8
+    assert result.api_cost_usd == 0.004
     assert result.details["error"] == "empty_model_response"
+    assert result.details["protocol_category"] == "empty_blank_content"
+    assert result.details["attempt_count"] == 2
     assert result.details["intended_mode"] == "llm_raw"
 
 
@@ -261,15 +314,17 @@ def test_llm_protocol_failure_can_fallback_to_secondary_model(monkeypatch):
         )
 
     monkeypatch.setattr(adapter, "_call_api", fake_call_api)
+    monkeypatch.setattr(adapter, "_generic_protocol_retry_sleep", lambda: None)
 
     result = adapter.run(_pkg(), prompt_strategy="zero_shot")
 
-    assert calls == ["gemini-2.5-flash", "gemini-3-flash-preview"]
+    assert calls == ["gemini-2.5-flash", "gemini-2.5-flash", "gemini-3-flash-preview"]
     assert result.experiment_mode == "hybrid"
     assert result.details["requested_model"] == "gemini-2.5-flash"
     assert result.details["actual_model"] == "gemini-3-flash-preview"
     assert result.details["fallback_used"] is True
     assert result.details["pricing_breakdown"] == [
+        {"model": "gemini-2.5-flash", "input_tokens": 10, "output_tokens": 2},
         {"model": "gemini-2.5-flash", "input_tokens": 10, "output_tokens": 2},
         {"model": "gemini-3-flash-preview", "input_tokens": 12, "output_tokens": 4},
     ]
@@ -307,6 +362,88 @@ def test_llm_transport_rate_limit_retries_when_category_is_enabled(monkeypatch):
     assert result.details["requested_model"] == "gemini-2.5-flash"
     assert result.details["actual_model"] == "gemini-2.5-flash"
     assert result.details["attempt_count"] == 3
+
+
+def test_protocol_response_classifier_splits_empty_categories():
+    expectations = [
+        (_ResponseWithNoChoices(), "empty_no_choices"),
+        (_ResponseWithMissingMessage(), "empty_missing_message"),
+        (_ResponseWithNullContent(), "empty_null_content"),
+        (_ResponseWithToolCallsOnly(), "empty_tool_calls_only"),
+    ]
+
+    for response, expected_category in expectations:
+        text, details, metadata = _protocol_details_from_response(response)
+
+        assert text == ""
+        assert details is not None
+        assert details["error"] == "empty_model_response"
+        assert details["protocol_category"] == expected_category
+        assert metadata["content_shape"] is not None
+
+
+def test_llm_proxy_prefers_public_model_group_over_litellm_hash(monkeypatch):
+    class _Client:
+        def __init__(self, base_url, api_key):
+            _ = (base_url, api_key)
+            response = _FakeResponseWithHeaders(
+                _FakeParsedResponse(),
+                {
+                    "x-litellm-response-cost": "0.0012",
+                    "x-litellm-model-id": "e57d05fb8aaf4343cf4a64dac944b41c897ae5059406d346edcdacb127431aa2",
+                    "x-litellm-model-group": "gpt-5.4-nano",
+                },
+            )
+            completions = type("Completions", (), {"create": lambda self, **kwargs: response})()
+            chat = type("Chat", (), {"completions": completions})()
+            self.with_raw_response = type("Raw", (), {"chat": chat})()
+
+    fake_module = type("OpenAIModule", (), {"OpenAI": _Client})()
+    monkeypatch.setitem(sys.modules, "openai", fake_module)
+
+    adapter = _make_llm_adapter()
+    call = adapter._call_via_proxy("system prompt", "user prompt")
+
+    assert call.actual_model == "gpt-5.4-nano"
+    assert call.pricing_model == "gpt-5.4-nano"
+    assert call.litellm_model_group == "gpt-5.4-nano"
+    assert call.litellm_model_id == "e57d05fb8aaf4343cf4a64dac944b41c897ae5059406d346edcdacb127431aa2"
+
+
+def test_llm_non_retryable_empty_protocol_failure_fails_immediately(monkeypatch):
+    adapter = _make_llm_adapter()
+    calls = {"count": 0}
+
+    def fake_call_api(*args, **kwargs):
+        calls["count"] += 1
+        return ProxyCallResult(
+            text="",
+            input_tokens=12,
+            output_tokens=4,
+            cost_usd=0.002,
+            requested_model=kwargs["requested_model"],
+            actual_model="claude-opus-4-6",
+            selected_model=kwargs["model_name"],
+            pricing_model="claude-opus-4-6",
+            protocol_details={
+                "error": "empty_model_response",
+                "protocol_category": "empty_tool_calls_only",
+                "protocol_failure": True,
+                "retryable": False,
+                "has_tool_calls": True,
+                "content_shape": "null",
+            },
+        )
+
+    monkeypatch.setattr(adapter, "_call_api", fake_call_api)
+    monkeypatch.setattr(adapter, "_generic_protocol_retry_sleep", lambda: None)
+
+    result = adapter.run(_pkg(), prompt_strategy="zero_shot")
+
+    assert calls["count"] == 1
+    assert result.experiment_mode == "error"
+    assert result.details["protocol_category"] == "empty_tool_calls_only"
+    assert result.details["attempt_count"] == 1
 
 
 def test_agentic_proxy_raw_response_is_not_context_manager(monkeypatch):

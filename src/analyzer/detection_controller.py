@@ -34,6 +34,9 @@ def _summarize_error(details: dict | None, limit: int = 500) -> str:
     if not details:
         return "no error details"
     message = str(details.get("error") or details)
+    qualifier = str(details.get("protocol_category") or details.get("parse_error") or "").strip()
+    if qualifier:
+        message = f"{message} ({qualifier})"
     collapsed = " ".join(message.split())
     if len(collapsed) <= limit:
         return collapsed

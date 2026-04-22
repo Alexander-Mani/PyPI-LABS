@@ -146,3 +146,57 @@ def test_progress_refresh_is_throttled(monkeypatch):
     progress.refresh()
 
     assert calls == ["refresh", "refresh"]
+
+
+def test_progress_record_result_uses_public_model_for_cost_bucket():
+    from progress_ui import AnalyzerProgress
+
+    progress = AnalyzerProgress(enabled=True, total_samples=1, run_id="run", run_label="profile:test")
+    progress.set_detector_tasks([{"detector": "gpt", "mode": "hybrid", "strategy": "zero_shot"}])
+
+    result = EvalDetectionResult(
+        detector="gpt",
+        experiment_mode="hybrid",
+        verdict=True,
+        confidence=0.9,
+        heuristic_flags=[],
+        exec_time_ms=100,
+        api_cost_usd=0.5,
+        details={
+            "model": "gpt-5.4",
+            "actual_model": "gpt-5.4",
+            "litellm_model_id": "e57d05fb8aaf4343cf4a64dac944b41c897ae5059406d346edcdacb127431aa2",
+        },
+    )
+
+    progress.record_result(result, "zero_shot", "hybrid")
+
+    row = progress._rows[("gpt", "hybrid", "zero_shot")]
+    assert row.model == "gpt-5.4"
+    assert round(progress._costs.totals["openai"], 6) == 0.5
+    assert round(progress._costs.totals["other"], 6) == 0.0
+
+
+def test_progress_live_uses_manual_refresh(monkeypatch):
+    from progress_ui import AnalyzerProgress
+    import progress_ui
+
+    captured: dict[str, object] = {}
+
+    class LiveStub:
+        def __init__(self, *args, **kwargs):
+            captured.update(kwargs)
+
+        def start(self):
+            return None
+
+        def stop(self):
+            return None
+
+    monkeypatch.setattr(progress_ui, "Live", LiveStub)
+    progress = AnalyzerProgress(enabled=True, total_samples=1, run_id="run", run_label="profile:test")
+
+    with progress:
+        pass
+
+    assert captured["auto_refresh"] is False

@@ -231,6 +231,9 @@ def _apply_gemini_toggle(stems: set[str], *, gemini_enabled: bool) -> set[str]:
 
 def _collapse_error(details: dict, limit: int = 300) -> str:
     message = str(details.get("error") or details)
+    qualifier = str(details.get("protocol_category") or details.get("parse_error") or "").strip()
+    if qualifier:
+        message = f"{message} ({qualifier})"
     collapsed = " ".join(message.split())
     if len(collapsed) <= limit:
         return collapsed
@@ -829,6 +832,7 @@ class EvaluationRunner:
                 skip_agentic=skip_agentic,
                 only_agentic=only_agentic,
             )
+            log.info("Starting main artifact evaluation.")
 
         raw_log = None
         package_failures = 0

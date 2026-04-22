@@ -78,8 +78,15 @@ class ProxyCallResult:
     cost_usd: float
     requested_model: str
     actual_model: str
+    selected_model: str | None = None
+    litellm_model_group: str | None = None
+    litellm_model_id: str | None = None
     response_model: str | None = None
     pricing_model: str | None = None
+    finish_reason: str | None = None
+    content_shape: str | None = None
+    has_tool_calls: bool = False
+    protocol_details: dict | None = None
     headers: dict[str, str] = field(default_factory=dict)
 
     def __iter__(self):
@@ -92,6 +99,14 @@ class ProxyCallResult:
 # ---------------------------------------------------------------------------
 # Abstract base
 # ---------------------------------------------------------------------------
+
+_TRANSIENT_EMPTY_PROTOCOL_CATEGORIES = {
+    "empty_no_choices",
+    "empty_missing_message",
+    "empty_null_content",
+    "empty_blank_content",
+}
+_GENERIC_EMPTY_PROTOCOL_RETRY_DELAY_SECONDS = 2.0
 
 class DetectorAdapter(ABC):
     """
@@ -150,13 +165,52 @@ def _static_error_result(
     )
 
 
+def _empty_protocol_failure_details(
+    *,
+    category: str,
+    raw: str | None = None,
+    finish_reason: str | None = None,
+    content_shape: str | None = None,
+    has_tool_calls: bool = False,
+    parse_error: str | None = None,
+    raw_content: object | None = None,
+    refusal: object | None = None,
+) -> dict:
+    details: dict[str, object] = {
+        "error": "empty_model_response",
+        "protocol_category": category,
+        "protocol_failure": True,
+        "retryable": False,
+        "raw": raw or "",
+        "has_tool_calls": bool(has_tool_calls),
+    }
+    if finish_reason is not None:
+        details["finish_reason"] = finish_reason
+    if content_shape is not None:
+        details["content_shape"] = content_shape
+    if parse_error:
+        details["parse_error"] = parse_error
+    if raw_content is not None:
+        details["raw_content"] = raw_content
+    if refusal not in (None, ""):
+        details["refusal"] = refusal
+    return details
+
+
 def _protocol_failure_details(raw: str | None, *, reason: str | None = None) -> dict:
     raw_text = raw or ""
-    error = "empty_model_response" if not raw_text.strip() else "unparseable_model_response"
+    if not raw_text.strip():
+        return _empty_protocol_failure_details(
+            category="empty_blank_content",
+            raw=raw_text,
+            content_shape="str_blank",
+            parse_error=reason,
+        )
+
     details = {
-        "error": error,
+        "error": "unparseable_model_response",
         "protocol_failure": True,
-        "retryable": error == "empty_model_response",
+        "retryable": False,
         "raw": raw_text,
     }
     if reason:
@@ -227,13 +281,152 @@ def _emit_protocol_error(raw_log, event: str, ctx: dict, *, model: str, details:
     payload = {
         "model": model,
         "error": details.get("error"),
+        "protocol_category": details.get("protocol_category"),
         "retryable": details.get("retryable", False),
         "protocol_failure": True,
+        "finish_reason": details.get("finish_reason"),
+        "content_shape": details.get("content_shape"),
+        "has_tool_calls": details.get("has_tool_calls", False),
+        "litellm_model_group": details.get("litellm_model_group"),
+        "litellm_model_id": details.get("litellm_model_id"),
     }
     raw = details.get("raw")
     if raw is not None:
         payload["raw_response_ref"] = raw_log.blob_text("model_protocol_failure_raw", str(raw), suffix=".txt")
     raw_log.emit(event, **ctx, payload=payload)
+
+
+def _coerce_text_value(value: object) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("text", "value", "content"):
+            candidate = value.get(key)
+            if isinstance(candidate, str):
+                return candidate
+    return None
+
+
+def _extract_message_text(content: object) -> tuple[str, str, object | None]:
+    if content is None:
+        return "", "null", None
+    if isinstance(content, str):
+        return content, ("str_text" if content.strip() else "str_blank"), None
+    if isinstance(content, dict):
+        lowered_type = str(content.get("type", "")).lower()
+        refusal = content if lowered_type in {"refusal", "content_filter"} else None
+        text = _coerce_text_value(content)
+        if text is not None:
+            return text, ("dict_text" if text.strip() else "dict_blank"), refusal
+        return "", ("dict_refusal" if refusal is not None else "dict_nontext"), refusal
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        saw_text = False
+        saw_refusal = False
+        refusal_items: list[object] = []
+        for item in content:
+            if isinstance(item, str):
+                saw_text = True
+                text_parts.append(item)
+                continue
+            if isinstance(item, dict):
+                lowered_type = str(item.get("type", "")).lower()
+                if lowered_type in {"refusal", "content_filter"}:
+                    saw_refusal = True
+                    refusal_items.append(item)
+                text = _coerce_text_value(item)
+                if text is not None:
+                    saw_text = True
+                    text_parts.append(text)
+                continue
+            text = _coerce_text_value(getattr(item, "text", None))
+            if text is not None:
+                saw_text = True
+                text_parts.append(text)
+        joined = "\n".join(part for part in text_parts if isinstance(part, str))
+        if joined.strip():
+            return joined, "list_text", refusal_items if saw_refusal else None
+        if saw_text:
+            return joined, "list_blank", refusal_items if saw_refusal else None
+        if saw_refusal:
+            return "", "list_refusal", refusal_items
+        return "", "list_nontext", None
+    return "", f"nonstandard_{type(content).__name__}", None
+
+
+def _protocol_details_from_response(resp) -> tuple[str, dict | None, dict]:
+    response_meta: dict[str, object] = {
+        "finish_reason": None,
+        "content_shape": None,
+        "has_tool_calls": False,
+    }
+    choices = getattr(resp, "choices", None)
+    if not choices:
+        details = _empty_protocol_failure_details(
+            category="empty_no_choices",
+            content_shape="missing_choices",
+        )
+        response_meta.update({
+            "content_shape": "missing_choices",
+        })
+        return "", details, response_meta
+
+    choice = choices[0]
+    finish_reason = getattr(choice, "finish_reason", None)
+    response_meta["finish_reason"] = finish_reason
+    message = getattr(choice, "message", None)
+    if message is None:
+        details = _empty_protocol_failure_details(
+            category="empty_missing_message",
+            finish_reason=finish_reason,
+            content_shape="missing_message",
+        )
+        response_meta["content_shape"] = "missing_message"
+        return "", details, response_meta
+
+    tool_calls = getattr(message, "tool_calls", None)
+    has_tool_calls = bool(tool_calls)
+    response_meta["has_tool_calls"] = has_tool_calls
+    refusal = getattr(message, "refusal", None)
+    content = getattr(message, "content", None)
+    text, content_shape, refusal_from_content = _extract_message_text(content)
+    response_meta["content_shape"] = content_shape
+    refusal_payload = refusal if refusal not in (None, "") else refusal_from_content
+
+    if text.strip():
+        return text, None, response_meta
+
+    raw_content = None
+    if hasattr(message, "model_dump"):
+        raw_content = message.model_dump(mode="json")
+    elif content is not None:
+        raw_content = content
+
+    if has_tool_calls:
+        category = "empty_tool_calls_only"
+    elif refusal_payload not in (None, "") or content_shape in {"list_refusal", "dict_refusal"}:
+        category = "empty_refusal_only"
+    elif finish_reason == "length":
+        category = "empty_finish_reason_length"
+    elif content is None:
+        category = "empty_null_content"
+    elif content_shape in {"str_blank", "dict_blank", "list_blank"}:
+        category = "empty_blank_content"
+    elif content_shape in {"list_nontext", "dict_nontext"} or content_shape.startswith("nonstandard_"):
+        category = "empty_nontext_content"
+    else:
+        category = "empty_unknown_shape"
+
+    details = _empty_protocol_failure_details(
+        category=category,
+        raw=text,
+        finish_reason=finish_reason,
+        content_shape=content_shape,
+        has_tool_calls=has_tool_calls,
+        raw_content=raw_content,
+        refusal=refusal_payload,
+    )
+    return text, details, response_meta
 
 
 def _provider_family(model_name: str) -> str:
@@ -820,6 +1013,10 @@ class LLMAdapter(DetectorAdapter):
         error = str(details.get("error", ""))
         return error in set(getattr(self, "_retry_protocol_errors", set()) or [])
 
+    @staticmethod
+    def _is_generic_empty_retryable(details: dict) -> bool:
+        return str(details.get("protocol_category") or "") in _TRANSIENT_EMPTY_PROTOCOL_CATEGORIES
+
     def _is_transport_retryable(self, category: str) -> bool:
         configured = set(getattr(self, "_retry_transport_categories", set()) or [])
         if configured:
@@ -835,6 +1032,10 @@ class LLMAdapter(DetectorAdapter):
         delay = float(getattr(self, "_retry_delay_seconds", 0.0) or 0.0)
         if delay > 0:
             _time.sleep(delay)
+
+    @staticmethod
+    def _generic_protocol_retry_sleep() -> None:
+        _time.sleep(_GENERIC_EMPTY_PROTOCOL_RETRY_DELAY_SECONDS)
 
     def _attempt_models(self) -> list[str]:
         seen: set[str] = set()
@@ -919,10 +1120,15 @@ class LLMAdapter(DetectorAdapter):
         last_exception: str | None = None
         last_requested_model = self._model_name
         last_actual_model = self._model_name
+        last_selected_model = self._model_name
+        attempt_models = self._attempt_models()
 
-        for model_index, active_model in enumerate(self._attempt_models()):
-            max_attempts = int(getattr(self, "_retry_attempts", 0)) + 1
-            for attempt_index in range(max_attempts):
+        for model_index, active_model in enumerate(attempt_models):
+            transport_retries_used = 0
+            generic_protocol_retries_used = 0
+            configured_protocol_retries_used = 0
+            advance_to_next_model = False
+            while True:
                 attempt_no = len(attempts_summary) + 1
                 try:
                     call = self._call_api(
@@ -944,6 +1150,7 @@ class LLMAdapter(DetectorAdapter):
                             cost_usd=cost,
                             requested_model=self._model_name,
                             actual_model=active_model,
+                            selected_model=active_model,
                             pricing_model=active_model,
                         )
                 except Exception as exc:
@@ -953,7 +1160,8 @@ class LLMAdapter(DetectorAdapter):
                     attempts_summary.append({
                         "attempt": attempt_no,
                         "requested_model": self._model_name,
-                        "model": active_model,
+                        "selected_model": active_model,
+                        "actual_model": active_model,
                         "error": error_text,
                         "error_category": error_category,
                         "retryable": retryable,
@@ -966,26 +1174,33 @@ class LLMAdapter(DetectorAdapter):
                             payload={
                                 "attempt": attempt_no,
                                 "requested_model": self._model_name,
-                                "model": active_model,
+                                "selected_model": active_model,
+                                "actual_model": active_model,
                                 "error": error_text,
                                 "error_category": error_category,
                                 "retryable": retryable,
                                 "phase": "transport",
                             },
                         )
-                    has_same_model_retry = retryable and attempt_index + 1 < max_attempts
-                    has_fallback = retryable and model_index + 1 < len(self._attempt_models())
-                    if has_same_model_retry or has_fallback:
+                    has_same_model_retry = retryable and transport_retries_used < int(getattr(self, "_retry_attempts", 0))
+                    has_fallback = retryable and model_index + 1 < len(attempt_models)
+                    if has_same_model_retry:
+                        transport_retries_used += 1
                         self._retry_sleep()
                         continue
+                    if has_fallback:
+                        self._retry_sleep()
+                        advance_to_next_model = True
+                        break
                     details = {
                         "error": error_text,
                         "error_category": error_category,
                         "model": active_model,
                         "requested_model": self._model_name,
+                        "selected_model": active_model,
                         "actual_model": active_model,
                         "fallback_used": active_model != self._model_name,
-                        "fallback_chain": self._attempt_models(),
+                        "fallback_chain": attempt_models,
                         "attempt_count": attempt_no,
                         "attempts": attempts_summary,
                         "pricing_breakdown": pricing_breakdown,
@@ -999,35 +1214,58 @@ class LLMAdapter(DetectorAdapter):
                         output_tokens=total_out,
                         cost_usd=total_cost,
                     )
+                if advance_to_next_model:
+                    break
 
                 total_in += call.input_tokens
                 total_out += call.output_tokens
                 total_cost += call.cost_usd
                 pricing_breakdown.append({
-                    "model": call.pricing_model or active_model,
+                    "model": call.pricing_model or call.actual_model or active_model,
                     "input_tokens": call.input_tokens,
                     "output_tokens": call.output_tokens,
                 })
                 last_requested_model = call.requested_model
                 last_actual_model = call.actual_model
+                last_selected_model = call.selected_model or active_model
 
-                verdict, confidence, details = self._parse_response(call.text)
-                details["model"] = call.pricing_model or active_model
+                if call.protocol_details is not None:
+                    verdict, confidence, details = False, None, dict(call.protocol_details)
+                else:
+                    verdict, confidence, details = self._parse_response(call.text)
+                details["model"] = call.pricing_model or call.actual_model or active_model
                 details["requested_model"] = self._model_name
+                details["selected_model"] = call.selected_model or active_model
                 details["actual_model"] = call.actual_model
                 if call.response_model:
                     details["response_model"] = call.response_model
+                if call.litellm_model_group:
+                    details["litellm_model_group"] = call.litellm_model_group
+                if call.litellm_model_id:
+                    details["litellm_model_id"] = call.litellm_model_id
+                if call.finish_reason is not None and "finish_reason" not in details:
+                    details["finish_reason"] = call.finish_reason
+                if call.content_shape is not None and "content_shape" not in details:
+                    details["content_shape"] = call.content_shape
+                details["has_tool_calls"] = bool(
+                    details.get("has_tool_calls", False) or call.has_tool_calls
+                )
                 if truncated:
                     details["truncated"] = True
-                details["fallback_used"] = active_model != self._model_name
-                details["fallback_chain"] = self._attempt_models()
+                details["fallback_used"] = (call.selected_model or active_model) != self._model_name
+                details["fallback_chain"] = attempt_models
                 details["attempt_count"] = attempt_no
                 details["attempts"] = attempts_summary + [{
                     "attempt": attempt_no,
                     "requested_model": self._model_name,
-                    "model": active_model,
+                    "selected_model": call.selected_model or active_model,
                     "actual_model": call.actual_model,
                     "response_model": call.response_model,
+                    "litellm_model_group": call.litellm_model_group,
+                    "litellm_model_id": call.litellm_model_id,
+                    "finish_reason": call.finish_reason,
+                    "content_shape": call.content_shape,
+                    "has_tool_calls": call.has_tool_calls,
                     "phase": "response",
                     "result": details.get("error", "ok"),
                     "retryable": details.get("retryable", False),
@@ -1049,39 +1287,69 @@ class LLMAdapter(DetectorAdapter):
 
                 last_protocol_details = dict(details)
                 details["error_category"] = "protocol_failure"
-                retryable = self._is_protocol_retryable(details, self._model_name)
+                generic_retryable = (
+                    self._is_generic_empty_retryable(details)
+                    and generic_protocol_retries_used < 1
+                )
+                configured_retryable = self._is_protocol_retryable(details, self._model_name)
+                retryable = generic_retryable or configured_retryable
                 details["retryable"] = retryable
                 attempts_summary.append({
                     "attempt": attempt_no,
                     "requested_model": self._model_name,
-                    "model": active_model,
+                    "selected_model": call.selected_model or active_model,
                     "actual_model": call.actual_model,
                     "response_model": call.response_model,
+                    "litellm_model_group": call.litellm_model_group,
+                    "litellm_model_id": call.litellm_model_id,
+                    "finish_reason": details.get("finish_reason"),
+                    "content_shape": details.get("content_shape"),
+                    "has_tool_calls": details.get("has_tool_calls", False),
                     "phase": "protocol",
                     "error": details.get("error"),
                     "error_category": "protocol_failure",
+                    "protocol_category": details.get("protocol_category"),
                     "retryable": retryable,
                 })
                 if raw_log is not None:
                     raw_log.emit(
                         "llm.retry" if retryable else "llm.protocol_error",
                         **ctx,
-                        payload={
-                            "attempt": attempt_no,
-                            "requested_model": self._model_name,
-                            "model": active_model,
-                            "actual_model": call.actual_model,
-                            "error": details.get("error"),
-                            "error_category": "protocol_failure",
-                            "retryable": retryable,
-                            "phase": "protocol",
-                        },
-                    )
-                has_same_model_retry = retryable and attempt_index + 1 < max_attempts
-                has_fallback = retryable and model_index + 1 < len(self._attempt_models())
-                if has_same_model_retry or has_fallback:
-                    self._retry_sleep()
+                            payload={
+                                "attempt": attempt_no,
+                                "requested_model": self._model_name,
+                                "selected_model": call.selected_model or active_model,
+                                "actual_model": call.actual_model,
+                                "error": details.get("error"),
+                                "error_category": "protocol_failure",
+                                "protocol_category": details.get("protocol_category"),
+                                "retryable": retryable,
+                                "phase": "protocol",
+                                "finish_reason": details.get("finish_reason"),
+                                "content_shape": details.get("content_shape"),
+                                "has_tool_calls": details.get("has_tool_calls", False),
+                                "litellm_model_group": call.litellm_model_group,
+                                "litellm_model_id": call.litellm_model_id,
+                            },
+                        )
+                configured_same_model_retry = (
+                    configured_retryable
+                    and configured_protocol_retries_used < int(getattr(self, "_retry_attempts", 0))
+                )
+                has_same_model_retry = generic_retryable or configured_same_model_retry
+                has_fallback = retryable and model_index + 1 < len(attempt_models)
+                if has_same_model_retry:
+                    if generic_retryable:
+                        generic_protocol_retries_used += 1
+                        self._generic_protocol_retry_sleep()
+                    else:
+                        configured_protocol_retries_used += 1
+                        self._retry_sleep()
                     continue
+                if has_fallback:
+                    self._retry_sleep()
+                    advance_to_next_model = True
+                    break
 
                 details["intended_mode"] = mode
                 _emit_protocol_error(
@@ -1100,6 +1368,8 @@ class LLMAdapter(DetectorAdapter):
                     output_tokens=total_out,
                     cost_usd=total_cost,
                 )
+            if advance_to_next_model:
+                continue
 
         fallback_details = dict(last_protocol_details or {})
         fallback_details.setdefault("error", last_exception or "exhausted_retries")
@@ -1109,9 +1379,10 @@ class LLMAdapter(DetectorAdapter):
         )
         fallback_details.setdefault("model", last_actual_model)
         fallback_details["requested_model"] = self._model_name
+        fallback_details["selected_model"] = last_selected_model
         fallback_details["actual_model"] = last_actual_model
-        fallback_details["fallback_used"] = last_requested_model != last_actual_model
-        fallback_details["fallback_chain"] = self._attempt_models()
+        fallback_details["fallback_used"] = last_selected_model != self._model_name
+        fallback_details["fallback_chain"] = attempt_models
         fallback_details["attempt_count"] = len(attempts_summary)
         fallback_details["attempts"] = attempts_summary
         fallback_details["pricing_breakdown"] = pricing_breakdown
@@ -1273,11 +1544,17 @@ class LLMAdapter(DetectorAdapter):
         headers = dict(http_resp.headers)
         cost = float(headers.get("x-litellm-response-cost") or 0.0)
         resp = http_resp.parse()
-        text = resp.choices[0].message.content or ""
+        text, protocol_details, response_meta = _protocol_details_from_response(resp)
         in_tok  = resp.usage.prompt_tokens     if resp.usage else 0
         out_tok = resp.usage.completion_tokens if resp.usage else 0
         response_model = getattr(resp, "model", None)
-        actual_model = str(headers.get("x-litellm-model-id") or response_model or active_model)
+        litellm_model_group = str(
+            headers.get("x-litellm-model-group")
+            or headers.get("x-litellm-model")
+            or ""
+        ).strip() or None
+        litellm_model_id = str(headers.get("x-litellm-model-id") or "").strip() or None
+        public_model = str(litellm_model_group or active_model)
         if raw_log is not None:
             if hasattr(resp, "model_dump"):
                 response_payload = resp.model_dump(mode="json")
@@ -1289,11 +1566,17 @@ class LLMAdapter(DetectorAdapter):
                 payload={
                     "model": active_model,
                     "requested_model": requested,
-                    "actual_model": actual_model,
+                    "selected_model": active_model,
+                    "actual_model": public_model,
+                    "litellm_model_group": litellm_model_group,
+                    "litellm_model_id": litellm_model_id,
                     "response_model": response_model,
                     "attempt": attempt,
                     "mode": mode,
                     "headers": headers,
+                    "finish_reason": response_meta.get("finish_reason"),
+                    "content_shape": response_meta.get("content_shape"),
+                    "has_tool_calls": response_meta.get("has_tool_calls", False),
                     "assistant_text_ref": raw_log.blob_text("llm_assistant_text", text, suffix=".txt"),
                     "response_json_ref": raw_log.blob_json("llm_response", response_payload),
                     "input_tokens": in_tok,
@@ -1307,9 +1590,16 @@ class LLMAdapter(DetectorAdapter):
             output_tokens=out_tok,
             cost_usd=cost,
             requested_model=requested,
-            actual_model=actual_model,
+            actual_model=public_model,
+            selected_model=active_model,
+            litellm_model_group=litellm_model_group,
+            litellm_model_id=litellm_model_id,
             response_model=str(response_model) if response_model is not None else None,
-            pricing_model=actual_model,
+            pricing_model=public_model,
+            finish_reason=str(response_meta.get("finish_reason")) if response_meta.get("finish_reason") is not None else None,
+            content_shape=str(response_meta.get("content_shape")) if response_meta.get("content_shape") is not None else None,
+            has_tool_calls=bool(response_meta.get("has_tool_calls", False)),
+            protocol_details=protocol_details,
             headers=headers,
         )
 

@@ -56,7 +56,7 @@ def provider_for_model(model_name: str | None) -> str:
     lowered = model.lower()
     if lowered.startswith("claude-") or lowered.startswith("anthropic/"):
         return "anthropic"
-    if lowered.startswith("gpt-") or lowered.startswith("openai/"):
+    if lowered.startswith(("gpt-", "o1-", "o3-")) or lowered.startswith("openai/"):
         return "openai"
     if lowered.startswith("gemini-") or lowered.startswith("google/") or lowered.startswith("gemini/"):
         return "google"
@@ -137,7 +137,7 @@ class AnalyzerProgress:
             self._live = Live(
                 self,
                 console=self._console,
-                refresh_per_second=1,
+                auto_refresh=False,
                 transient=False,
                 vertical_overflow="ellipsis",
             )
@@ -212,12 +212,19 @@ class AnalyzerProgress:
     def record_result(self, result: Any, strategy: str, intended_mode: str) -> None:
         if not self.enabled:
             return
-        model = str(result.details.get("model") or "")
+        model = str(
+            result.details.get("model")
+            or result.details.get("actual_model")
+            or result.details.get("selected_model")
+            or ""
+        )
+        litellm_model_id = str(result.details.get("litellm_model_id") or "")
         provider, first_unknown = self._costs.add(model, float(result.api_cost_usd or 0.0))
         if first_unknown:
             log.bind(file_only=True).warning(
                 f"Analyzer progress cost provider fallback: model={model!r} "
-                f"mapped to provider={provider!r}"
+                f"mapped to provider={provider!r} "
+                f"(litellm_model_id={litellm_model_id or 'n/a'})"
             )
 
         key = self._key(result.detector, intended_mode, strategy)
@@ -389,6 +396,9 @@ class AnalyzerProgress:
     @staticmethod
     def _collapse_error(details: dict, limit: int = 80) -> str:
         message = str(details.get("error") or details)
+        qualifier = str(details.get("protocol_category") or details.get("parse_error") or "").strip()
+        if qualifier:
+            message = f"{message} ({qualifier})"
         collapsed = " ".join(message.split())
         if len(collapsed) <= limit:
             return collapsed
