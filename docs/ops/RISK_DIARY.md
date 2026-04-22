@@ -370,8 +370,9 @@ budget tier.
 - Updated `src/analyzer/configs/gemini_flash_lite.yaml` (detector model name).
 - Updated all test references (`test_analyzer_progress.py`,
   `test_litellm_smoke.py`, `test_financial_validation.py`).
-- Verified zero remaining references to `gemini-3.1-flash-lite-preview` or
-  `gemini-2.0-flash-lite` in the repository.
+- Verified zero remaining active runtime references to
+  `gemini-3.1-flash-lite-preview` or `gemini-2.0-flash-lite`; any remaining
+  mentions are historical notes only.
 
 **Residual risk:**
 `gemini-2.5-flash-lite` is an older-generation model than the 3.1 preview.
@@ -586,32 +587,35 @@ separately from preview-era results.
 ## Decision 15 — Add same-provider fallback ladders for Gemini and Together
 
 **Decision:**
-As of 2026-04-22, LiteLLM routing and the analyzer runtime now support
-same-provider fallback ladders for the Google and Together lanes. Requested
-detector identity remains unchanged, but the runtime may retry or route to a
-same-category backup model when the primary route returns a provider failure or
-an empty protocol-level response.
+As of 2026-04-22, the previous Google/Together fallback design is replaced with
+two narrower controls:
+- Google uses stable 2.5 primaries only in mixed-provider runs, plus dedicated
+  non-agentic `gemini_only` / `gemini_only_test` profiles for long 429/high-
+  demand retry handling.
+- Together frontier no longer uses `Qwen/Qwen3.5-397B-A17B` as the canonical
+  primary; it is replaced by `together_ai/moonshotai/Kimi-K2.5`, with
+  `together_ai/zai-org/GLM-5.1` as the same-provider fallback.
 
 **Why this change was made:**
-The frontier runs were failing for two different reasons:
-- Google routes were intermittently unstable and preview availability remains
-  volatile even after switching the canonical primaries to stable 2.5 IDs.
-- Together Qwen routes were returning `empty_model_response` on structured JSON
-  classification tasks, which is consistent with reasoning-model request-shape
-  mismatch rather than a clean benign/malicious judgment.
+The live deployment on 2026-04-22 surfaced two hard failures that overruled the
+earlier design assumptions:
+- `gemini-2.0-flash*` fallback targets now return HTTP 404 ("no longer
+  available to new users") in this runtime and therefore cannot stay in active
+  routing logic.
+- Passing `reasoning={"enabled": false}` through the OpenAI-compatible client
+  path for Together produced `Completions.create() got an unexpected keyword
+  argument 'reasoning'`, so that request-shape fix was invalid as implemented.
 
-The project needs a reliability control that preserves provider identity and
-budget/medium/frontier categories instead of silently collapsing into another
-vendor or a smaller class of model.
+The project still needs a reliability control that preserves provider identity
+and tier semantics, but it must be grounded in the live deployment rather than
+stale fallback assumptions.
 
 **Routing policy adopted:**
-- Gemini budget:
-  `gemini-2.5-flash-lite` -> `gemini-3.1-flash-lite-preview` ->
-  `gemini-2.0-flash-lite`
-- Gemini medium:
-  `gemini-2.5-flash` -> `gemini-3-flash-preview` -> `gemini-2.0-flash`
-- Gemini frontier:
-  `gemini-2.5-pro` -> `gemini-3.1-pro-preview`
+- Mixed-provider Google runs use only the stable canonical routes:
+  `gemini-2.5-flash-lite`, `gemini-2.5-flash`, and `gemini-2.5-pro`
+- Dedicated `gemini_only` and `gemini_only_test` profiles run only
+  `gemini-2.5-flash` and `gemini-2.5-pro`, with 30-second backoff and up to 15
+  attempts on `rate_limit` / `provider_overload`
 - Together budget:
   `together_ai/Qwen/Qwen3.5-9B` ->
   `together_ai/meta-llama/Meta-Llama-3-8B-Instruct-Lite` ->
@@ -621,28 +625,26 @@ vendor or a smaller class of model.
   `together_ai/deepseek-ai/DeepSeek-V3.1` ->
   `together_ai/MiniMaxAI/MiniMax-M2.5`
 - Together frontier:
-  `together_ai/Qwen/Qwen3.5-397B-A17B` ->
   `together_ai/moonshotai/Kimi-K2.5` ->
   `together_ai/zai-org/GLM-5.1`
 
 **Methodology constraints:**
 - Fallback is same-provider only.
-- Fallback is category-preserving according to the project's
-  budget/medium/frontier groupings.
-- `gemini-2.0-flash` and `gemini-2.0-flash-lite` are emergency-only because
-  Google's deprecation page schedules shutdown on 2026-06-01.
+- The Gemini-only retry lane is non-agentic and non-static by design; it is a
+  provider-stability lane, not a replacement for mixed-tier canonical runs.
 - Requested and actual routed models must both be recorded in the result row
   and raw experiment log.
 
 **Together request-shape control:**
-The Together Qwen budget/frontier routes now send
-`reasoning: {"enabled": false}`. This follows Together's own chat examples and
-reduces the chance that a reasoning model returns no assistant body while the
-analyzer is expecting a JSON verdict in `message.content`.
+Together routes now request structured output with
+`response_format={"type":"json_object"}`. This is compatible with the
+OpenAI-style client used by the analyzer. The broken top-level `reasoning`
+kwarg path is removed.
 
 **Cost-accounting control:**
 Fallback can change the priced model actually used. Financial validation now
 prefers LiteLLM's actual reported cost and uses `pricing_breakdown` to compute
-token-math estimates when model-level pricing is known. Missing preview/fallback
-price rows are logged as warnings instead of halting the run, because actual
-LiteLLM cost is the authoritative budget value.
+token-math estimates when model-level pricing is known. Validation still halts
+if a detector exhausts its configured retry/fallback policy, but the
+`gemini_only*` profiles now emit Google-specific guidance instead of suggesting
+`--gemini off`.

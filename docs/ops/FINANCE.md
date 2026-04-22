@@ -19,7 +19,7 @@ This funds the primary detection engine. The frontier tier uses `claude-opus-4-6
 This funds the deep reasoning baseline. The frontier tier uses `gpt-5.4`. The medium tier uses `gpt-5.4-mini`. The budget tier uses `gpt-5.4-nano` for high-volume development runs.
 
 ### Together AI ($25)
-This funds the open-source baseline. The frontier tier uses `Qwen/Qwen3.5-397B-A17B` and `deepseek-ai/DeepSeek-V3.2-Exp`. The medium tier uses `meta-llama/Llama-3.3-70B-Instruct-Turbo` and `mistralai/Mistral-Small-3.1-24B-Instruct-2503`. The budget tier uses `Qwen/Qwen3.5-9B`. All accessed via Together AI's OpenAI-compatible API through LiteLLM.
+This funds the open-source baseline. The frontier tier uses `moonshotai/Kimi-K2.5` with `zai-org/GLM-5.1` as the same-provider fallback. The medium tier uses `meta-llama/Llama-3.3-70B-Instruct-Turbo`. The budget tier uses `Qwen/Qwen3.5-9B`. All accessed via Together AI's OpenAI-compatible API through LiteLLM.
 
 ### Google Cloud ($15)
 This funds the massive context safety net. The pipeline routes complex dependency confusion attacks to Gemini 2.5 Pro. This provides the necessary context window to process multiple files simultaneously without truncation.

@@ -67,7 +67,7 @@ Current confirmed model IDs per config:
 | `claude_agentic.yaml` | `claude-opus-4-6` | frontier |
 | `gpt.yaml` | `gpt-5.4` | frontier |
 | `gemini.yaml` | `gemini-2.5-pro` | frontier |
-| `together_frontier.yaml` | `together_ai/Qwen/Qwen3.5-397B-A17B` | frontier |
+| `together_frontier.yaml` | `together_ai/moonshotai/Kimi-K2.5` | frontier |
 
 **LiteLLM routing prefixes used by the adapter dispatch (`_call_api`):**
 - `claude-` → Anthropic
@@ -364,12 +364,12 @@ row keeps `requested_model`, `actual_model`, `fallback_used`,
 `fallback_chain`, `attempt_count`, and `pricing_breakdown` so fallbacked runs
 remain auditable rather than silently changing detector identity.
 
-**Together-specific note:** The Together Qwen budget/frontier routes are sent
-with `reasoning.enabled=false` because the evaluation requires short JSON
-classifications in `message.content`. If a reasoning model returns only hidden
-reasoning blocks and no assistant body, that is still a protocol failure for
-this methodology. The request shape is corrected first; fallback is only the
-second line of defence.
+**Together-specific note:** The Together routes now use
+`response_format={"type":"json_object"}` for structured verdicts. The earlier
+attempt to pass provider-specific reasoning kwargs through the OpenAI-compatible
+client path was invalid for this runtime and produced immediate argument errors.
+The active frontier primary is `together_ai/moonshotai/Kimi-K2.5`, with
+`together_ai/zai-org/GLM-5.1` as the same-provider fallback.
 
 **Historical cleanup:** Run `scripts/normalize_llm_protocol_failures.py` against
 older databases before interpreting them. The script dry-runs by default, checks
