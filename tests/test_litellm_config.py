@@ -83,10 +83,9 @@ def test_litellm_router_settings_define_same_provider_fallbacks():
     text = _LITELLM_CONFIG.read_text(encoding="utf-8")
 
     assert "router_settings:" in text
-    assert '"gemini-2.5-flash-lite": ["gemini-3.1-flash-lite-preview", "gemini-2.0-flash-lite"]' in text
-    assert '"gemini-2.5-flash": ["gemini-3-flash-preview", "gemini-2.0-flash"]' in text
-    assert '"gemini-2.5-pro": ["gemini-3.1-pro-preview"]' in text
-    assert '"together_ai/Qwen/Qwen3.5-397B-A17B": ["together_ai/moonshotai/Kimi-K2.5", "together_ai/zai-org/GLM-5.1"]' in text
+    assert "gemini-2.0-flash" not in text
+    assert "gemini-2.0-flash-lite" not in text
+    assert '"together_ai/moonshotai/Kimi-K2.5": ["together_ai/zai-org/GLM-5.1"]' in text
 
 
 def test_evaluation_profiles_reference_existing_analyzer_configs():
@@ -126,6 +125,8 @@ def test_test_profiles_have_expected_gemini_split():
 
     assert "gemini_flash_lite" in profiles["test"]
     assert "gemini_flash_lite" not in profiles["test_no_gemini"]
+    assert profiles["gemini_only"] == {"gemini_resilient_flash", "gemini_resilient_pro"}
+    assert profiles["gemini_only_test"] == {"gemini_resilient_flash", "gemini_resilient_pro"}
 
 
 def test_medium_profile_uses_medium_analyzer_configs():
@@ -138,6 +139,13 @@ def test_frontier_profile_uses_frontier_analyzer_configs():
     profiles = _profile_config_stems()
 
     assert {"claude_opus", "gpt", "gemini", "together_frontier", "claude_agentic"} <= profiles["frontier"]
+
+
+def test_frontier_together_primary_is_kimi():
+    text = (_ANALYZER_CONFIGS / "together_frontier.yaml").read_text(encoding="utf-8")
+
+    assert 'model_name: "together_ai/moonshotai/Kimi-K2.5"' in text
+    assert "Qwen3.5-397B-A17B" not in text
 
 
 def test_all_models_profile_includes_budget_medium_and_frontier_profiles():

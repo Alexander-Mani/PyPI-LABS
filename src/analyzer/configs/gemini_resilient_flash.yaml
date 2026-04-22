@@ -1,9 +1,10 @@
-model_name: "gemini-2.5-flash-lite"
-tier: "budget"
+model_name: "gemini-2.5-flash"
+tier: "gemini_only"
 temperature: 0.0
 proxy_url: "http://127.0.0.1:4000"
-retry_attempts: 1
-retry_delay_seconds: 10
+retry_attempts: 14
+retry_delay_seconds: 30
 retry_transport_categories:
   - "rate_limit"
   - "provider_overload"
+

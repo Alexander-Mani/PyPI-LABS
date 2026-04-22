@@ -1124,12 +1124,23 @@ class EvaluationRunner:
                     continue
                 model = str(error_row.details.get("model") or "unknown-model")
                 details.append(f"{detector} ({model}): {_collapse_error(error_row.details)}")
+            if self._profile and self._profile.startswith("gemini_only"):
+                guidance = (
+                    "The Gemini-only profile already retries 429/high-demand failures "
+                    "with the configured long backoff. Rerun later only if the exhausted "
+                    "attempts still point to temporary Google-side instability."
+                )
+            else:
+                guidance = (
+                    "If this is a temporary provider outage, rerun with "
+                    "--gemini off or a reduced profile such as --profile budget_no_gemini."
+                )
             raise SystemExit(
                 "HALT: financial validation failed for selected model profile "
                 f"{self._run_label}: "
                 + " | ".join(details)
-                + ". If this is a temporary provider outage, rerun with "
-                "--gemini off or a reduced profile such as --profile budget_no_gemini."
+                + ". "
+                + guidance
             )
         if not tokenized_llm_results:
             raise SystemExit(

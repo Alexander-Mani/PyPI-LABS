@@ -248,16 +248,24 @@ def _provider_family(model_name: str) -> str:
     return "other"
 
 
-def _exception_details(exc: Exception) -> tuple[str, bool]:
+def _exception_details(exc: Exception) -> tuple[str, str]:
     text = " ".join(str(exc).split())
     lower = text.lower()
-    if any(token in lower for token in ("invalid api key", "unauthorized", "authentication", "401")):
-        return text or exc.__class__.__name__, False
-    if any(token in lower for token in ("429", "rate limit", "quota")):
-        return text or exc.__class__.__name__, True
-    if any(token in lower for token in ("500", "502", "503", "504", "overloaded", "high demand", "unavailable", "timeout", "timed out", "connection")):
-        return text or exc.__class__.__name__, True
-    return text or exc.__class__.__name__, False
+    if any(token in lower for token in ("invalid api key", "unauthorized", "authentication", "401", "403")):
+        return text or exc.__class__.__name__, "auth_error"
+    if any(token in lower for token in ("429", "rate limit", "quota", "resource_exhausted", "too many requests")):
+        return text or exc.__class__.__name__, "rate_limit"
+    if any(token in lower for token in ("high demand", "overloaded", "unavailable", "resource exhausted")):
+        return text or exc.__class__.__name__, "provider_overload"
+    if any(token in lower for token in ("timeout", "timed out")):
+        return text or exc.__class__.__name__, "client_timeout"
+    if any(token in lower for token in ("500", "502", "503", "504")):
+        return text or exc.__class__.__name__, "provider_or_proxy_transient"
+    if any(token in lower for token in ("connection refused", "connection reset", "cannot connect", "connection error")):
+        return text or exc.__class__.__name__, "provider_or_proxy_transient"
+    if any(token in lower for token in ("404", "not found")):
+        return text or exc.__class__.__name__, "http_error"
+    return text or exc.__class__.__name__, "unknown_error"
 
 
 def _resolve_tool_executable(tool: str) -> str:
@@ -774,10 +782,30 @@ class LLMAdapter(DetectorAdapter):
         self._user_template: str   = cfg.get("user_template", "{file_listing}")
         self._detector_name: str   = Path(config_path).stem   # e.g. "claude_opus"
         self._proxy_url: str | None = cfg.get("proxy_url") or None
-        self._request_params: dict = dict(cfg.get("request_params") or {})
+        self._response_format = cfg.get("response_format")
+        self._extra_body = cfg.get("extra_body")
+        legacy_request_params = dict(cfg.get("request_params") or {})
+        if legacy_request_params:
+            if self._response_format is None and "response_format" in legacy_request_params:
+                self._response_format = legacy_request_params.pop("response_format")
+            if self._extra_body is None and "extra_body" in legacy_request_params:
+                self._extra_body = legacy_request_params.pop("extra_body")
+            if legacy_request_params:
+                raise ValueError(
+                    f"Unsupported request_params keys in {config_path}: "
+                    + ", ".join(sorted(legacy_request_params))
+                )
         self._retry_attempts: int = int(cfg.get("retry_attempts", 0))
         self._retry_delay_seconds: float = float(cfg.get("retry_delay_seconds", 0.0))
         self._retry_unparseable: bool = bool(cfg.get("retry_unparseable", False))
+        self._retry_transport_categories: set[str] = {
+            str(item) for item in cfg.get("retry_transport_categories", [])
+        }
+        self._retry_protocol_errors: set[str] = {
+            str(item) for item in cfg.get("retry_protocol_errors", [])
+        }
+        if self._retry_unparseable:
+            self._retry_protocol_errors.add("unparseable_model_response")
         self._fallback_models: list[str] = [str(model) for model in cfg.get("fallback_models", [])]
 
     def _mode_name(self) -> str:
@@ -790,14 +818,18 @@ class LLMAdapter(DetectorAdapter):
         if not _is_protocol_failure(details):
             return False
         error = str(details.get("error", ""))
-        if error == "empty_model_response":
-            return _provider_family(requested_model) in {"gemini", "together"}
-        if error == "unparseable_model_response":
-            return (
-                _provider_family(requested_model) in {"gemini", "together"}
-                and self._retry_unparseable
-            )
-        return False
+        return error in set(getattr(self, "_retry_protocol_errors", set()) or [])
+
+    def _is_transport_retryable(self, category: str) -> bool:
+        configured = set(getattr(self, "_retry_transport_categories", set()) or [])
+        if configured:
+            return category in configured
+        return category in {
+            "rate_limit",
+            "provider_overload",
+            "provider_or_proxy_transient",
+            "client_timeout",
+        }
 
     def _retry_sleep(self) -> None:
         delay = float(getattr(self, "_retry_delay_seconds", 0.0) or 0.0)
@@ -915,13 +947,15 @@ class LLMAdapter(DetectorAdapter):
                             pricing_model=active_model,
                         )
                 except Exception as exc:
-                    error_text, retryable = _exception_details(exc)
+                    error_text, error_category = _exception_details(exc)
+                    retryable = self._is_transport_retryable(error_category)
                     last_exception = error_text
                     attempts_summary.append({
                         "attempt": attempt_no,
                         "requested_model": self._model_name,
                         "model": active_model,
                         "error": error_text,
+                        "error_category": error_category,
                         "retryable": retryable,
                         "phase": "transport",
                     })
@@ -934,6 +968,7 @@ class LLMAdapter(DetectorAdapter):
                                 "requested_model": self._model_name,
                                 "model": active_model,
                                 "error": error_text,
+                                "error_category": error_category,
                                 "retryable": retryable,
                                 "phase": "transport",
                             },
@@ -945,6 +980,7 @@ class LLMAdapter(DetectorAdapter):
                         continue
                     details = {
                         "error": error_text,
+                        "error_category": error_category,
                         "model": active_model,
                         "requested_model": self._model_name,
                         "actual_model": active_model,
@@ -1012,7 +1048,9 @@ class LLMAdapter(DetectorAdapter):
                     )
 
                 last_protocol_details = dict(details)
+                details["error_category"] = "protocol_failure"
                 retryable = self._is_protocol_retryable(details, self._model_name)
+                details["retryable"] = retryable
                 attempts_summary.append({
                     "attempt": attempt_no,
                     "requested_model": self._model_name,
@@ -1021,6 +1059,7 @@ class LLMAdapter(DetectorAdapter):
                     "response_model": call.response_model,
                     "phase": "protocol",
                     "error": details.get("error"),
+                    "error_category": "protocol_failure",
                     "retryable": retryable,
                 })
                 if raw_log is not None:
@@ -1033,6 +1072,7 @@ class LLMAdapter(DetectorAdapter):
                             "model": active_model,
                             "actual_model": call.actual_model,
                             "error": details.get("error"),
+                            "error_category": "protocol_failure",
                             "retryable": retryable,
                             "phase": "protocol",
                         },
@@ -1063,6 +1103,10 @@ class LLMAdapter(DetectorAdapter):
 
         fallback_details = dict(last_protocol_details or {})
         fallback_details.setdefault("error", last_exception or "exhausted_retries")
+        fallback_details.setdefault(
+            "error_category",
+            "protocol_failure" if last_protocol_details is not None else "unknown_error",
+        )
         fallback_details.setdefault("model", last_actual_model)
         fallback_details["requested_model"] = self._model_name
         fallback_details["actual_model"] = last_actual_model
@@ -1202,7 +1246,10 @@ class LLMAdapter(DetectorAdapter):
             "max_tokens": 512,
             "messages": messages,
         }
-        request_payload.update(dict(getattr(self, "_request_params", {}) or {}))
+        if getattr(self, "_response_format", None) is not None:
+            request_payload["response_format"] = self._response_format
+        if getattr(self, "_extra_body", None) is not None:
+            request_payload["extra_body"] = self._extra_body
         if raw_log is not None:
             raw_log.emit(
                 "llm.request",
@@ -1262,7 +1309,7 @@ class LLMAdapter(DetectorAdapter):
             requested_model=requested,
             actual_model=actual_model,
             response_model=str(response_model) if response_model is not None else None,
-            pricing_model=active_model,
+            pricing_model=actual_model,
             headers=headers,
         )
 

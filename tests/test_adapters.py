@@ -124,10 +124,13 @@ def _make_llm_adapter() -> LLMAdapter:
     adapter._user_template = "{file_listing}"
     adapter._detector_name = "gpt_nano"
     adapter._proxy_url = "http://127.0.0.1:4000"
-    adapter._request_params = {}
+    adapter._response_format = None
+    adapter._extra_body = None
     adapter._retry_attempts = 0
     adapter._retry_delay_seconds = 0.0
     adapter._retry_unparseable = False
+    adapter._retry_transport_categories = set()
+    adapter._retry_protocol_errors = set()
     adapter._fallback_models = []
     return adapter
 
@@ -142,7 +145,7 @@ def _pkg() -> PackageInfo:
     )
 
 
-def test_llm_protocol_failure_empty_response_is_retryable_error(monkeypatch):
+def test_llm_protocol_failure_empty_response_is_final_error_without_protocol_retry(monkeypatch):
     adapter = _make_llm_adapter()
     monkeypatch.setattr(adapter, "_call_api", lambda *args, **kwargs: ("", 101, 3, 0.0042))
 
@@ -154,7 +157,7 @@ def test_llm_protocol_failure_empty_response_is_retryable_error(monkeypatch):
     assert result.output_tokens == 3
     assert result.api_cost_usd == 0.0042
     assert result.details["error"] == "empty_model_response"
-    assert result.details["retryable"] is True
+    assert result.details["retryable"] is False
     assert result.details["protocol_failure"] is True
     assert result.details["intended_mode"] == "hybrid"
 
@@ -201,10 +204,13 @@ def test_llm_raw_protocol_failure_preserves_cost_and_mode(monkeypatch):
     adapter._user_template = "{file_listing}"
     adapter._detector_name = "gpt_nano"
     adapter._proxy_url = "http://127.0.0.1:4000"
-    adapter._request_params = {}
+    adapter._response_format = None
+    adapter._extra_body = None
     adapter._retry_attempts = 0
     adapter._retry_delay_seconds = 0.0
     adapter._retry_unparseable = False
+    adapter._retry_transport_categories = set()
+    adapter._retry_protocol_errors = set()
     adapter._fallback_models = []
     monkeypatch.setattr(adapter, "_call_api", lambda *args, **kwargs: ("", 21, 4, 0.002))
 
@@ -218,16 +224,17 @@ def test_llm_raw_protocol_failure_preserves_cost_and_mode(monkeypatch):
     assert result.details["intended_mode"] == "llm_raw"
 
 
-def test_llm_proxy_request_params_are_forwarded(monkeypatch):
+def test_llm_proxy_response_format_is_forwarded(monkeypatch):
     completions = _install_fake_openai(monkeypatch)
     adapter = _make_llm_adapter()
     adapter._model_name = "together_ai/Qwen/Qwen3.5-9B"
-    adapter._request_params = {"reasoning": {"enabled": False}}
+    adapter._response_format = {"type": "json_object"}
 
     call = adapter._call_via_proxy("system prompt", "user prompt")
 
     assert call.requested_model == "together_ai/Qwen/Qwen3.5-9B"
-    assert completions.calls[0]["reasoning"] == {"enabled": False}
+    assert completions.calls[0]["response_format"] == {"type": "json_object"}
+    assert "reasoning" not in completions.calls[0]
 
 
 def test_llm_protocol_failure_can_fallback_to_secondary_model(monkeypatch):
@@ -235,7 +242,7 @@ def test_llm_protocol_failure_can_fallback_to_secondary_model(monkeypatch):
     adapter._model_name = "gemini-2.5-flash"
     adapter._retry_attempts = 0
     adapter._retry_delay_seconds = 0.0
-    adapter._retry_unparseable = True
+    adapter._retry_protocol_errors = {"empty_model_response"}
     adapter._fallback_models = ["gemini-3-flash-preview"]
     calls = []
 
@@ -266,6 +273,40 @@ def test_llm_protocol_failure_can_fallback_to_secondary_model(monkeypatch):
         {"model": "gemini-2.5-flash", "input_tokens": 10, "output_tokens": 2},
         {"model": "gemini-3-flash-preview", "input_tokens": 12, "output_tokens": 4},
     ]
+
+
+def test_llm_transport_rate_limit_retries_when_category_is_enabled(monkeypatch):
+    adapter = _make_llm_adapter()
+    adapter._model_name = "gemini-2.5-flash"
+    adapter._retry_attempts = 14
+    adapter._retry_delay_seconds = 30.0
+    adapter._retry_transport_categories = {"rate_limit", "provider_overload"}
+    calls = {"count": 0}
+
+    def fake_call_api(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] < 3:
+            raise RuntimeError("Error code: 429 - quota exceeded")
+        return ProxyCallResult(
+            text='{"verdict":"benign","confidence":0.7}',
+            input_tokens=12,
+            output_tokens=4,
+            cost_usd=0.002,
+            requested_model=kwargs["requested_model"],
+            actual_model=kwargs["model_name"],
+            pricing_model=kwargs["model_name"],
+        )
+
+    monkeypatch.setattr(adapter, "_call_api", fake_call_api)
+    monkeypatch.setattr(adapter, "_retry_sleep", lambda: None)
+
+    result = adapter.run(_pkg(), prompt_strategy="zero_shot")
+
+    assert calls["count"] == 3
+    assert result.experiment_mode == "hybrid"
+    assert result.details["requested_model"] == "gemini-2.5-flash"
+    assert result.details["actual_model"] == "gemini-2.5-flash"
+    assert result.details["attempt_count"] == 3
 
 
 def test_agentic_proxy_raw_response_is_not_context_manager(monkeypatch):

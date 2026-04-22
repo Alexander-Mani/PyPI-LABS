@@ -55,6 +55,24 @@ profiles:
       - together_frontier
       - claude_agentic
 
+  gemini_only:
+    tier: frontier
+    configs:
+      - gemini_resilient_flash
+      - gemini_resilient_pro
+
+  gemini_only_test:
+    tier: frontier
+    configs:
+      - gemini_resilient_flash
+      - gemini_resilient_pro
+    resolver:
+      include_controls: true
+      package_limits:
+        malicious: 2
+        control: 2
+        benign: 0
+
   test:
     tier: budget
     configs:

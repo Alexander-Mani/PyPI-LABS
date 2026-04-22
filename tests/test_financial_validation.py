@@ -33,6 +33,7 @@ class _FakeFilter:
 def _runner_with_controller(controller):
     runner = EvaluationRunner.__new__(EvaluationRunner)
     runner._tier = "budget"
+    runner._profile = "budget"
     runner._run_label = "profile:budget"
     runner._db = _FakeDB()
     runner._extractor = _FakeExtractor()
@@ -176,3 +177,43 @@ def test_financial_validation_uses_actual_cost_when_fallback_price_is_unknown():
             ]
 
     _runner_with_controller(Controller())._validate_financial_airgap()
+
+
+def test_gemini_only_financial_validation_uses_gemini_specific_guidance():
+    class Controller:
+        def expected_non_static_detectors(self, **kwargs):
+            return {"gemini_resilient_flash"}
+
+        def run(self, **kwargs):
+            return [
+                EvalDetectionResult(
+                    detector="gemini_resilient_flash",
+                    experiment_mode="error",
+                    verdict=False,
+                    confidence=None,
+                    heuristic_flags=[],
+                    exec_time_ms=1,
+                    api_cost_usd=0.0,
+                    details={
+                        "model": "gemini-2.5-flash",
+                        "error": "429 quota",
+                        "attempt_count": 15,
+                    },
+                )
+            ]
+
+    runner = _runner_with_controller(Controller())
+    runner._profile = "gemini_only"
+    runner._run_label = "profile:gemini_only"
+
+    try:
+        runner._validate_financial_airgap()
+    except SystemExit as exc:
+        message = str(exc)
+    else:  # pragma: no cover - defensive failure path
+        raise AssertionError("gemini-only validation should halt")
+
+    assert "gemini_resilient_flash" in message
+    assert "gemini-2.5-flash" in message
+    assert "configured long backoff" in message
+    assert "--profile budget_no_gemini" not in message

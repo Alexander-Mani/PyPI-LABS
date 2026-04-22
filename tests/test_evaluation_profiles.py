@@ -92,6 +92,7 @@ def test_medium_frontier_and_all_model_profiles_are_declared():
     medium_block = _profile_block("medium")
     frontier_block = _profile_block("frontier")
     all_models_block = _profile_block("all_models")
+    gemini_only_block = _profile_block("gemini_only")
 
     for stem in ("claude_sonnet", "gpt_mini", "gemini_flash", "together_medium", "claude_sonnet_agentic"):
         assert f"- {stem}" in medium_block
@@ -99,6 +100,8 @@ def test_medium_frontier_and_all_model_profiles_are_declared():
     for stem in ("claude_opus", "gpt", "gemini", "together_frontier", "claude_agentic"):
         assert f"- {stem}" in frontier_block
         assert f"- {stem}" in all_models_block
+    for stem in ("gemini_resilient_flash", "gemini_resilient_pro"):
+        assert f"- {stem}" in gemini_only_block
 
 
 def test_gemini_toggle_filters_gemini_configs_only(monkeypatch):
@@ -151,6 +154,17 @@ def test_profile_loader_accepts_package_limits(monkeypatch):
 
     assert profile.include_controls is True
     assert profile.package_limits == {"malicious": 2, "control": 2, "benign": 0}
+
+
+def test_gemini_only_test_profile_uses_expected_limits_and_configs():
+    block = _profile_block("gemini_only_test")
+
+    assert "- gemini_resilient_flash" in block
+    assert "- gemini_resilient_pro" in block
+    assert "include_controls: true" in block
+    assert "malicious: 2" in block
+    assert "control: 2" in block
+    assert "benign: 0" in block
 
 
 def test_profile_loader_rejects_invalid_resolver(monkeypatch):

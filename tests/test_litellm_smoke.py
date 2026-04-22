@@ -178,7 +178,7 @@ def test_smoke_main_dry_run_all_models_reads_litellm_config(monkeypatch, capsys)
     assert "configs/litellm_config.yaml" in captured.out
     assert "DRY-RUN claude-haiku-4-5" in captured.out
     assert "DRY-RUN gpt-5.4-nano" in captured.out
-    assert "DRY-RUN together_ai/Qwen/Qwen3.5-397B-A17B" in captured.out
+    assert "DRY-RUN together_ai/moonshotai/Kimi-K2.5" in captured.out
     assert captured.err == ""
 
 
