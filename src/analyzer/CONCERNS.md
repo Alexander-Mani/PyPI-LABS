@@ -356,6 +356,21 @@ are marked `details.retryable=false` unless a later retry policy explicitly
 decides otherwise. Token counts and LiteLLM-reported costs are preserved so
 provider reliability and spend can still be audited.
 
+**Current runtime policy:** Gemini and Together now use provider-scoped protocol
+rescue on top of that accounting fix. Empty responses are retried and can
+advance through same-provider fallback chains; malformed non-empty outputs can
+also be retried when the model YAML explicitly enables that policy. The final
+row keeps `requested_model`, `actual_model`, `fallback_used`,
+`fallback_chain`, `attempt_count`, and `pricing_breakdown` so fallbacked runs
+remain auditable rather than silently changing detector identity.
+
+**Together-specific note:** The Together Qwen budget/frontier routes are sent
+with `reasoning.enabled=false` because the evaluation requires short JSON
+classifications in `message.content`. If a reasoning model returns only hidden
+reasoning blocks and no assistant body, that is still a protocol failure for
+this methodology. The request shape is corrected first; fallback is only the
+second line of defence.
+
 **Historical cleanup:** Run `scripts/normalize_llm_protocol_failures.py` against
 older databases before interpreting them. The script dry-runs by default, checks
 for unique-key collisions, and creates a timestamped backup before applying.

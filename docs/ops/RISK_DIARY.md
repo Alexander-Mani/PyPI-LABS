@@ -580,3 +580,69 @@ Historical rows produced with `gemini-3-flash-preview` or
 `gemini-3.1-pro-preview` should not be mixed into canonical post-swap Google
 comparisons. Canonical runs must be re-run after the swap and queried
 separately from preview-era results.
+
+---
+
+## Decision 15 — Add same-provider fallback ladders for Gemini and Together
+
+**Decision:**
+As of 2026-04-22, LiteLLM routing and the analyzer runtime now support
+same-provider fallback ladders for the Google and Together lanes. Requested
+detector identity remains unchanged, but the runtime may retry or route to a
+same-category backup model when the primary route returns a provider failure or
+an empty protocol-level response.
+
+**Why this change was made:**
+The frontier runs were failing for two different reasons:
+- Google routes were intermittently unstable and preview availability remains
+  volatile even after switching the canonical primaries to stable 2.5 IDs.
+- Together Qwen routes were returning `empty_model_response` on structured JSON
+  classification tasks, which is consistent with reasoning-model request-shape
+  mismatch rather than a clean benign/malicious judgment.
+
+The project needs a reliability control that preserves provider identity and
+budget/medium/frontier categories instead of silently collapsing into another
+vendor or a smaller class of model.
+
+**Routing policy adopted:**
+- Gemini budget:
+  `gemini-2.5-flash-lite` -> `gemini-3.1-flash-lite-preview` ->
+  `gemini-2.0-flash-lite`
+- Gemini medium:
+  `gemini-2.5-flash` -> `gemini-3-flash-preview` -> `gemini-2.0-flash`
+- Gemini frontier:
+  `gemini-2.5-pro` -> `gemini-3.1-pro-preview`
+- Together budget:
+  `together_ai/Qwen/Qwen3.5-9B` ->
+  `together_ai/meta-llama/Meta-Llama-3-8B-Instruct-Lite` ->
+  `together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo`
+- Together medium:
+  `together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo` ->
+  `together_ai/deepseek-ai/DeepSeek-V3.1` ->
+  `together_ai/MiniMaxAI/MiniMax-M2.5`
+- Together frontier:
+  `together_ai/Qwen/Qwen3.5-397B-A17B` ->
+  `together_ai/moonshotai/Kimi-K2.5` ->
+  `together_ai/zai-org/GLM-5.1`
+
+**Methodology constraints:**
+- Fallback is same-provider only.
+- Fallback is category-preserving according to the project's
+  budget/medium/frontier groupings.
+- `gemini-2.0-flash` and `gemini-2.0-flash-lite` are emergency-only because
+  Google's deprecation page schedules shutdown on 2026-06-01.
+- Requested and actual routed models must both be recorded in the result row
+  and raw experiment log.
+
+**Together request-shape control:**
+The Together Qwen budget/frontier routes now send
+`reasoning: {"enabled": false}`. This follows Together's own chat examples and
+reduces the chance that a reasoning model returns no assistant body while the
+analyzer is expecting a JSON verdict in `message.content`.
+
+**Cost-accounting control:**
+Fallback can change the priced model actually used. Financial validation now
+prefers LiteLLM's actual reported cost and uses `pricing_breakdown` to compute
+token-math estimates when model-level pricing is known. Missing preview/fallback
+price rows are logged as warnings instead of halting the run, because actual
+LiteLLM cost is the authoritative budget value.

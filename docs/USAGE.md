@@ -458,6 +458,18 @@ Current canonical Google routes are:
 - medium: `gemini-2.5-flash`
 - frontier: `gemini-2.5-pro`
 
+Current canonical open-weight Together routes are:
+- budget: `together_ai/Qwen/Qwen3.5-9B`
+- medium: `together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo`
+- frontier: `together_ai/Qwen/Qwen3.5-397B-A17B`
+
+The proxy now carries same-provider fallback ladders for both Google and
+Together. The analyzer also records `requested_model` and `actual_model` on
+fallbacked rows so a rescued run stays auditable. Together Qwen routes are sent
+with `reasoning.enabled=false` for JSON classification tasks, because the
+evaluation expects a structured verdict in assistant content rather than
+reasoning-only output.
+
 Do not compare future canonical runs against older rows produced with
 `gemini-3-flash-preview` or `gemini-3.1-pro-preview` without an explicit note;
 those preview routes are historical and no longer the configured defaults.
