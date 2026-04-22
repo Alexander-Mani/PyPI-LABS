@@ -64,10 +64,14 @@ def test_action_registry_contains_expected_sectioned_actions(tmp_path):
         "experiment-dry-run-medium",
         "experiment-dry-run-frontier",
         "experiment-dry-run-all-models",
+        "experiment-dry-run-gemini-only",
+        "experiment-dry-run-gemini-only-test",
         "experiment-full-budget",
         "experiment-full-medium",
         "experiment-full-frontier",
         "experiment-full-all-models",
+        "experiment-gemini-only-full",
+        "experiment-gemini-only-test",
         "deployment-setup",
         "deployment-setup-no-upload",
         "deployment-smoke-test",
@@ -218,6 +222,22 @@ def test_experiment_suite_has_deduplicated_lanes(tmp_path):
     assert "--skip-static" in non_agentic.command
     assert "--skip-agentic" in non_agentic.command
     assert "--only-agentic" in agentic.command
+
+
+def test_gemini_only_actions_force_gemini_and_skip_static_agentic(tmp_path):
+    actions = review_tui.build_actions(tmp_path, python_executable="/py", gemini_enabled=False)
+
+    full = review_tui.action_by_id("experiment-gemini-only-full", actions)
+    tiny = review_tui.action_by_id("experiment-gemini-only-test", actions)
+    dry_run = review_tui.action_by_id("experiment-dry-run-gemini-only", actions)
+
+    for action in (full, tiny, dry_run):
+        assert action.command[action.command.index("--gemini") + 1] == "on"
+    assert "--skip-static" in full.command
+    assert "--skip-agentic" in full.command
+    assert "--skip-static" in tiny.command
+    assert "--skip-agentic" in tiny.command
+    assert "--dry-run-resolution" in dry_run.command
 
 
 def test_identity_alias_probe_is_standalone_all_models_action(tmp_path):
