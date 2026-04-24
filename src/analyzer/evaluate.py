@@ -12,6 +12,7 @@ labels are stored at insert time and never passed to extractors or adapters.
 Usage:
     python src/analyzer/evaluate.py [--config PATH] [--profile budget]
                                     [--tier budget|medium|frontier]
+                                    [--max-tokens N]
                                     [--gemini on|off]
                                     [--skip-validation] [--sast-only]
                                     [--skip-static] [--skip-agentic]
@@ -333,6 +334,7 @@ class EvaluationRunner:
         gemini_enabled: bool = True,
         raw_experiment_log: bool = True,
         identity_alias_probe: bool = False,
+        max_tokens_override: int | None = None,
         cli_args: dict | None = None,
     ):
         self._cfg  = config
@@ -347,6 +349,7 @@ class EvaluationRunner:
         self._run_id_prefix = run_id_prefix
         self._raw_experiment_log = raw_experiment_log
         self._identity_alias_probe = identity_alias_probe
+        self._max_tokens_override = max_tokens_override
         self._identity_aliases: dict[tuple[str, str], tuple[str, str]] = {}
         self._raw_log = None
         self._cli_args = cli_args or {}
@@ -359,6 +362,7 @@ class EvaluationRunner:
             db=self._db,
             tier=tier,
             model_config_stems=model_config_stems,
+            max_tokens_override=max_tokens_override,
         )
         self._samples_root = _REPO_ROOT / "samples"
         self._simulator_url = config.get("simulator", {}).get("base_url", "http://127.0.0.1:8080")
@@ -1134,6 +1138,12 @@ class EvaluationRunner:
                     "with the configured long backoff. Rerun later only if the exhausted "
                     "attempts still point to temporary Google-side instability."
                 )
+            elif self._profile == "frontier_together_bakeoff":
+                guidance = (
+                    "The frontier Together bake-off is a response-contract gate. "
+                    "Treat this as a candidate validation failure unless the logged "
+                    "error is clearly a transient transport/provider outage."
+                )
             else:
                 guidance = (
                     "If this is a temporary provider outage, rerun with "
@@ -1359,6 +1369,12 @@ if __name__ == "__main__":
         help="Live analyzer progress display: auto, always, or never",
     )
     parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=None,
+        help="Override max_tokens for selected non-agentic LLM adapters in this run.",
+    )
+    parser.add_argument(
         "--verbose", action="store_true",
         help="Enable DEBUG-level logging (raw prompts, responses, per-file extraction)",
     )
@@ -1447,6 +1463,7 @@ if __name__ == "__main__":
         gemini_enabled=gemini_enabled,
         raw_experiment_log=args.raw_experiment_log == "on",
         identity_alias_probe=args.identity_alias_probe,
+        max_tokens_override=args.max_tokens,
         cli_args=vars(args),
     ).run(
         skip_validation=args.skip_validation,

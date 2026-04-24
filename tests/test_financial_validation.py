@@ -217,3 +217,43 @@ def test_gemini_only_financial_validation_uses_gemini_specific_guidance():
     assert "gemini-2.5-flash" in message
     assert "configured long backoff" in message
     assert "--profile budget_no_gemini" not in message
+
+
+def test_frontier_together_bakeoff_validation_uses_candidate_specific_guidance():
+    class Controller:
+        def expected_non_static_detectors(self, **kwargs):
+            return {"together_frontier_qwen397b_bench"}
+
+        def run(self, **kwargs):
+            return [
+                EvalDetectionResult(
+                    detector="together_frontier_qwen397b_bench",
+                    experiment_mode="error",
+                    verdict=False,
+                    confidence=None,
+                    heuristic_flags=[],
+                    exec_time_ms=1,
+                    api_cost_usd=0.0,
+                    details={
+                        "model": "together_ai/Qwen/Qwen3.5-397B-A17B",
+                        "error": "empty_model_response",
+                        "protocol_category": "empty_finish_reason_length",
+                    },
+                )
+            ]
+
+    runner = _runner_with_controller(Controller())
+    runner._profile = "frontier_together_bakeoff"
+    runner._run_label = "profile:frontier_together_bakeoff:gemini-off"
+
+    try:
+        runner._validate_financial_airgap()
+    except SystemExit as exc:
+        message = str(exc)
+    else:  # pragma: no cover - defensive failure path
+        raise AssertionError("frontier bake-off validation should halt")
+
+    assert "together_frontier_qwen397b_bench" in message
+    assert "together_ai/Qwen/Qwen3.5-397B-A17B" in message
+    assert "candidate validation failure" in message
+    assert "--profile budget_no_gemini" not in message

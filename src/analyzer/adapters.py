@@ -1703,6 +1703,7 @@ class AgenticAdapter(DetectorAdapter):
             "Investigate package '{package_name}' v{version}.",
         )
         self._max_turns: int         = int(cfg.get("max_turns", 5))
+        self._max_tokens: int        = int(cfg.get("max_tokens", 1024))
         self._temperature: float     = float(cfg.get("temperature", 0.0))
         self._proxy_url: str | None  = cfg.get("proxy_url") or None
         self._agentic_flow: str      = str(cfg.get("agentic_flow", "legacy_tool_loop"))
@@ -1904,7 +1905,7 @@ class AgenticAdapter(DetectorAdapter):
             request_payload = {
                 "model": self._model_name,
                 "temperature": self._temperature,
-                "max_tokens": 1024,
+                "max_tokens": int(getattr(self, "_max_tokens", 1024) or 1024),
                 "messages": oai_messages,
             }
             if tools_enabled:

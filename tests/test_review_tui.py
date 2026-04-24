@@ -252,6 +252,8 @@ def test_frontier_bakeoff_actions_force_gemini_off_and_skip_static_agentic(tmp_p
         assert action.command[action.command.index("--gemini") + 1] == "off"
         assert "--skip-static" in action.command
         assert "--skip-agentic" in action.command
+        assert "--max-tokens" in action.command
+        assert action.command[action.command.index("--max-tokens") + 1] == "4096"
         assert action.command[action.command.index("--profile") + 1] == "frontier_together_bakeoff"
     assert "--dry-run-resolution" in dry_run.command
     assert "--run-id-prefix" in run.command

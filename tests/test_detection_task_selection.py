@@ -64,3 +64,20 @@ def test_task_selection_rejects_impossible_agentic_combination():
         raise AssertionError("task selection should reject only_agentic + skip_agentic")
 
     assert "only_agentic" in message
+
+
+def test_runtime_max_tokens_override_updates_non_agentic_llm_lanes():
+    class _FakeAdapter:
+        def __init__(self, value):
+            self._max_tokens = value
+
+    controller = EvalController.__new__(EvalController)
+    controller._llm = [_FakeAdapter(256)]
+    controller._llm_raw = [_FakeAdapter(384)]
+    controller._agentic = [_FakeAdapter(512)]
+
+    controller._apply_runtime_overrides(max_tokens_override=4096)
+
+    assert controller._llm[0]._max_tokens == 4096
+    assert controller._llm_raw[0]._max_tokens == 4096
+    assert controller._agentic[0]._max_tokens == 4096

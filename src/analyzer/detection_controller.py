@@ -134,6 +134,7 @@ class EvalController:
         db,
         tier: str = "budget",
         model_config_stems: set[str] | None = None,
+        max_tokens_override: int | None = None,
     ):
         # Lazy import to avoid cross-package issues at module load time.
         from src.data.db_manager import DBManager  # noqa: F401 (type reference)
@@ -179,6 +180,16 @@ class EvalController:
                     "Model profile references missing analyzer config(s): "
                     + ", ".join(missing)
                 )
+
+        self._apply_runtime_overrides(max_tokens_override=max_tokens_override)
+
+    def _apply_runtime_overrides(self, *, max_tokens_override: int | None = None) -> None:
+        if max_tokens_override is None:
+            return
+        override = int(max_tokens_override)
+        for adapter in [*self._llm, *self._llm_raw, *self._agentic]:
+            if hasattr(adapter, "_max_tokens"):
+                adapter._max_tokens = override
 
     def expected_non_static_detectors(
         self,

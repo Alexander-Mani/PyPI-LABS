@@ -550,12 +550,33 @@ def test_agentic_protocol_failure_preserves_cost_and_mode(monkeypatch):
     assert adapter._current_pkg is None
 
 
+def test_agentic_proxy_max_tokens_override_is_forwarded(monkeypatch):
+    completions = _install_fake_openai(monkeypatch)
+    adapter = AgenticAdapter.__new__(AgenticAdapter)
+    adapter._model_name = "gpt-5.4-nano"
+    adapter._system_prompt = "system"
+    adapter._temperature = 0.0
+    adapter._proxy_url = "http://127.0.0.1:4000"
+    adapter._max_tokens = 4096
+
+    response = adapter._make_api_call(
+        [{"role": "user", "content": "Investigate package"}],
+        tools_enabled=False,
+    )
+
+    assert response["input_tokens"] == 11
+    assert response["output_tokens"] == 7
+    assert completions.calls[0]["max_tokens"] == 4096
+    assert "tools" not in completions.calls[0]
+
+
 def _make_agentic_adapter_for_plan_tests() -> AgenticAdapter:
     adapter = AgenticAdapter.__new__(AgenticAdapter)
     adapter._model_name = "claude-haiku-4-5"
     adapter._system_prompt = "system"
     adapter._initial_template = "Investigate {package_name} {version}"
     adapter._max_turns = 5
+    adapter._max_tokens = 1024
     adapter._temperature = 0.0
     adapter._proxy_url = "http://127.0.0.1:4000"
     adapter._agentic_flow = "plan_then_execute"
