@@ -167,6 +167,22 @@ def test_gemini_only_test_profile_uses_expected_limits_and_configs():
     assert "benign: 0" in block
 
 
+def test_frontier_together_bakeoff_profile_uses_expected_limits_and_configs():
+    block = _profile_block("frontier_together_bakeoff")
+
+    for stem in (
+        "together_frontier_kimi_bench",
+        "together_frontier_glm51_bench",
+        "together_frontier_qwen397b_bench",
+        "together_frontier_minimax25_bench",
+    ):
+        assert f"- {stem}" in block
+    assert "include_controls: true" in block
+    assert "malicious: 2" in block
+    assert "control: 2" in block
+    assert "benign: 0" in block
+
+
 def test_profile_loader_rejects_invalid_resolver(monkeypatch):
     _patch_profile(monkeypatch, {
         "tier": "budget",

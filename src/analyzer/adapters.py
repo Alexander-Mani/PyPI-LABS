@@ -197,6 +197,16 @@ def _empty_protocol_failure_details(
     return details
 
 
+def _raw_preview(raw: str | None, limit: int = 400) -> str | None:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[:limit] + "..."
+
+
 def _protocol_failure_details(raw: str | None, *, reason: str | None = None) -> dict:
     raw_text = raw or ""
     if not raw_text.strip():
@@ -213,6 +223,9 @@ def _protocol_failure_details(raw: str | None, *, reason: str | None = None) -> 
         "retryable": False,
         "raw": raw_text,
     }
+    preview = _raw_preview(raw_text)
+    if preview:
+        details["raw_preview"] = preview
     if reason:
         details["parse_error"] = reason
     return details
@@ -289,6 +302,7 @@ def _emit_protocol_error(raw_log, event: str, ctx: dict, *, model: str, details:
         "has_tool_calls": details.get("has_tool_calls", False),
         "litellm_model_group": details.get("litellm_model_group"),
         "litellm_model_id": details.get("litellm_model_id"),
+        "raw_preview": details.get("raw_preview"),
     }
     raw = details.get("raw")
     if raw is not None:
@@ -975,14 +989,18 @@ class LLMAdapter(DetectorAdapter):
         self._user_template: str   = cfg.get("user_template", "{file_listing}")
         self._detector_name: str   = Path(config_path).stem   # e.g. "claude_opus"
         self._proxy_url: str | None = cfg.get("proxy_url") or None
+        self._max_tokens: int = int(cfg.get("max_tokens", 512))
         self._response_format = cfg.get("response_format")
         self._extra_body = cfg.get("extra_body")
+        self._reasoning_effort = cfg.get("reasoning_effort")
         legacy_request_params = dict(cfg.get("request_params") or {})
         if legacy_request_params:
             if self._response_format is None and "response_format" in legacy_request_params:
                 self._response_format = legacy_request_params.pop("response_format")
             if self._extra_body is None and "extra_body" in legacy_request_params:
                 self._extra_body = legacy_request_params.pop("extra_body")
+            if self._reasoning_effort is None and "reasoning_effort" in legacy_request_params:
+                self._reasoning_effort = legacy_request_params.pop("reasoning_effort")
             if legacy_request_params:
                 raise ValueError(
                     f"Unsupported request_params keys in {config_path}: "
@@ -1514,13 +1532,15 @@ class LLMAdapter(DetectorAdapter):
         request_payload = {
             "model": active_model,
             "temperature": self._temperature,
-            "max_tokens": 512,
+            "max_tokens": int(getattr(self, "_max_tokens", 512) or 512),
             "messages": messages,
         }
         if getattr(self, "_response_format", None) is not None:
             request_payload["response_format"] = self._response_format
         if getattr(self, "_extra_body", None) is not None:
             request_payload["extra_body"] = self._extra_body
+        if getattr(self, "_reasoning_effort", None) is not None:
+            request_payload["reasoning_effort"] = self._reasoning_effort
         if raw_log is not None:
             raw_log.emit(
                 "llm.request",

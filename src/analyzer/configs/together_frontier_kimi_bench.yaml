@@ -1,0 +1,47 @@
+model_name: "together_ai/moonshotai/Kimi-K2.5"
+tier: "frontier"
+temperature: 0.0
+max_tokens: 1024
+proxy_url: "http://127.0.0.1:4000"
+retry_attempts: 1
+retry_delay_seconds: 5
+retry_transport_categories:
+  - "rate_limit"
+  - "provider_overload"
+response_format:
+  type: "json_schema"
+  json_schema:
+    name: "supply_chain_verdict"
+    schema:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "verdict"
+        - "confidence"
+        - "reasoning"
+      properties:
+        verdict:
+          type: "string"
+          enum:
+            - "malicious"
+            - "benign"
+        confidence:
+          type: "number"
+        reasoning:
+          type: "string"
+
+system_prompt: |
+  You are a security researcher specialising in PyPI supply chain attacks.
+  Analyse the provided Python package source files for malicious behaviour.
+  Look for: network exfiltration, shell execution, obfuscated payloads,
+  credential harvesting, persistence mechanisms, and C2 callbacks.
+  Respond ONLY with valid JSON in this exact format:
+  {"verdict": "malicious" or "benign", "confidence": 0.0-1.0, "reasoning": "one sentence"}
+
+user_template: |
+  Package: {package_name}  Version: {version}
+
+  Source files:
+  {file_listing}
+
+  Analyse this package for supply chain attack indicators and respond with JSON.

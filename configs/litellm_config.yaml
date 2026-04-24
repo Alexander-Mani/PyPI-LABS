@@ -73,6 +73,10 @@ model_list:
     litellm_params:
       model: together_ai/moonshotai/Kimi-K2.5
 
+  - model_name: together_ai/Qwen/Qwen3.5-397B-A17B
+    litellm_params:
+      model: together_ai/Qwen/Qwen3.5-397B-A17B
+
   - model_name: together_ai/zai-org/GLM-5.1
     litellm_params:
       model: together_ai/zai-org/GLM-5.1

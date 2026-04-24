@@ -66,12 +66,14 @@ def test_action_registry_contains_expected_sectioned_actions(tmp_path):
         "experiment-dry-run-all-models",
         "experiment-dry-run-gemini-only",
         "experiment-dry-run-gemini-only-test",
+        "experiment-dry-run-frontier-bakeoff",
         "experiment-full-budget",
         "experiment-full-medium",
         "experiment-full-frontier",
         "experiment-full-all-models",
         "experiment-gemini-only-full",
         "experiment-gemini-only-test",
+        "experiment-frontier-bakeoff",
         "deployment-setup",
         "deployment-setup-no-upload",
         "deployment-smoke-test",
@@ -238,6 +240,22 @@ def test_gemini_only_actions_force_gemini_and_skip_static_agentic(tmp_path):
     assert "--skip-static" in tiny.command
     assert "--skip-agentic" in tiny.command
     assert "--dry-run-resolution" in dry_run.command
+
+
+def test_frontier_bakeoff_actions_force_gemini_off_and_skip_static_agentic(tmp_path):
+    actions = review_tui.build_actions(tmp_path, python_executable="/py", gemini_enabled=True)
+
+    dry_run = review_tui.action_by_id("experiment-dry-run-frontier-bakeoff", actions)
+    run = review_tui.action_by_id("experiment-frontier-bakeoff", actions)
+
+    for action in (dry_run, run):
+        assert action.command[action.command.index("--gemini") + 1] == "off"
+        assert "--skip-static" in action.command
+        assert "--skip-agentic" in action.command
+        assert action.command[action.command.index("--profile") + 1] == "frontier_together_bakeoff"
+    assert "--dry-run-resolution" in dry_run.command
+    assert "--run-id-prefix" in run.command
+    assert "frontier-bakeoff" in run.command
 
 
 def test_identity_alias_probe_is_standalone_all_models_action(tmp_path):

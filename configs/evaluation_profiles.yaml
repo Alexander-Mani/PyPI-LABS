@@ -73,6 +73,20 @@ profiles:
         control: 2
         benign: 0
 
+  frontier_together_bakeoff:
+    tier: frontier
+    configs:
+      - together_frontier_kimi_bench
+      - together_frontier_glm51_bench
+      - together_frontier_qwen397b_bench
+      - together_frontier_minimax25_bench
+    resolver:
+      include_controls: true
+      package_limits:
+        malicious: 2
+        control: 2
+        benign: 0
+
   test:
     tier: budget
     configs:

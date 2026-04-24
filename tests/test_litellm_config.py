@@ -127,6 +127,12 @@ def test_test_profiles_have_expected_gemini_split():
     assert "gemini_flash_lite" not in profiles["test_no_gemini"]
     assert profiles["gemini_only"] == {"gemini_resilient_flash", "gemini_resilient_pro"}
     assert profiles["gemini_only_test"] == {"gemini_resilient_flash", "gemini_resilient_pro"}
+    assert profiles["frontier_together_bakeoff"] == {
+        "together_frontier_kimi_bench",
+        "together_frontier_glm51_bench",
+        "together_frontier_qwen397b_bench",
+        "together_frontier_minimax25_bench",
+    }
 
 
 def test_medium_profile_uses_medium_analyzer_configs():
@@ -146,6 +152,45 @@ def test_frontier_together_primary_is_kimi():
 
     assert 'model_name: "together_ai/moonshotai/Kimi-K2.5"' in text
     assert "Qwen3.5-397B-A17B" not in text
+
+
+def test_frontier_bakeoff_configs_use_json_schema_and_1024_tokens():
+    stems = (
+        "together_frontier_kimi_bench",
+        "together_frontier_glm51_bench",
+        "together_frontier_qwen397b_bench",
+        "together_frontier_minimax25_bench",
+    )
+
+    for stem in stems:
+        text = (_ANALYZER_CONFIGS / f"{stem}.yaml").read_text(encoding="utf-8")
+        assert 'max_tokens: 1024' in text
+        assert 'type: "json_schema"' in text
+        assert 'name: "supply_chain_verdict"' in text
+        assert "fallback_models" not in text
+
+
+def test_frontier_bakeoff_models_are_routable_through_litellm():
+    litellm_names = _litellm_model_names()
+
+    assert "together_ai/Qwen/Qwen3.5-397B-A17B" in litellm_names
+    assert "together_ai/moonshotai/Kimi-K2.5" in litellm_names
+    assert "together_ai/zai-org/GLM-5.1" in litellm_names
+    assert "together_ai/MiniMaxAI/MiniMax-M2.5" in litellm_names
+
+
+def test_gemini_resilient_configs_use_schema_and_reasoning_controls():
+    flash_text = (_ANALYZER_CONFIGS / "gemini_resilient_flash.yaml").read_text(encoding="utf-8")
+    pro_text = (_ANALYZER_CONFIGS / "gemini_resilient_pro.yaml").read_text(encoding="utf-8")
+
+    for text in (flash_text, pro_text):
+        assert 'max_tokens: 1024' in text
+        assert 'type: "json_schema"' in text
+        assert 'name: "supply_chain_verdict"' in text
+        assert "fallback_models" not in text
+
+    assert 'reasoning_effort: "none"' in flash_text
+    assert 'reasoning_effort: "minimal"' in pro_text
 
 
 def test_all_models_profile_includes_budget_medium_and_frontier_profiles():

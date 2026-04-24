@@ -167,12 +167,14 @@ def _make_llm_adapter() -> LLMAdapter:
     adapter = LLMAdapter.__new__(LLMAdapter)
     adapter._model_name = "gpt-5.4-nano"
     adapter._temperature = 0.0
+    adapter._max_tokens = 512
     adapter._system_prompt = "system"
     adapter._user_template = "{file_listing}"
     adapter._detector_name = "gpt_nano"
     adapter._proxy_url = "http://127.0.0.1:4000"
     adapter._response_format = None
     adapter._extra_body = None
+    adapter._reasoning_effort = None
     adapter._retry_attempts = 0
     adapter._retry_delay_seconds = 0.0
     adapter._retry_unparseable = False
@@ -222,6 +224,7 @@ def test_llm_protocol_failure_non_json_response_is_unparseable_error(monkeypatch
     assert result.details["error"] == "unparseable_model_response"
     assert result.details["retryable"] is False
     assert result.details["raw"] == "I think this is safe."
+    assert result.details["raw_preview"] == "I think this is safe."
 
 
 def test_llm_protocol_failure_missing_verdict_is_error(monkeypatch):
@@ -256,6 +259,7 @@ def test_llm_raw_protocol_failure_preserves_cost_and_mode(monkeypatch):
     adapter._proxy_url = "http://127.0.0.1:4000"
     adapter._response_format = None
     adapter._extra_body = None
+    adapter._reasoning_effort = None
     adapter._retry_attempts = 0
     adapter._retry_delay_seconds = 0.0
     adapter._retry_unparseable = False
@@ -281,13 +285,57 @@ def test_llm_proxy_response_format_is_forwarded(monkeypatch):
     completions = _install_fake_openai(monkeypatch)
     adapter = _make_llm_adapter()
     adapter._model_name = "together_ai/Qwen/Qwen3.5-9B"
-    adapter._response_format = {"type": "json_object"}
+    adapter._max_tokens = 1024
+    adapter._response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "supply_chain_verdict",
+            "schema": {
+                "type": "object",
+                "required": ["verdict"],
+                "properties": {"verdict": {"type": "string"}},
+            },
+        },
+    }
 
     call = adapter._call_via_proxy("system prompt", "user prompt")
 
     assert call.requested_model == "together_ai/Qwen/Qwen3.5-9B"
-    assert completions.calls[0]["response_format"] == {"type": "json_object"}
+    assert completions.calls[0]["response_format"]["type"] == "json_schema"
+    assert completions.calls[0]["response_format"]["json_schema"]["name"] == "supply_chain_verdict"
+    assert completions.calls[0]["max_tokens"] == 1024
     assert "reasoning" not in completions.calls[0]
+    assert "reasoning_effort" not in completions.calls[0]
+
+
+def test_llm_proxy_reasoning_effort_is_forwarded_when_configured(monkeypatch):
+    completions = _install_fake_openai(monkeypatch)
+    adapter = _make_llm_adapter()
+    adapter._model_name = "gemini-2.5-flash"
+    adapter._max_tokens = 1024
+    adapter._response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "supply_chain_verdict",
+            "schema": {
+                "type": "object",
+                "required": ["verdict", "confidence", "reasoning"],
+                "properties": {
+                    "verdict": {"type": "string"},
+                    "confidence": {"type": "number"},
+                    "reasoning": {"type": "string"},
+                },
+            },
+        },
+    }
+    adapter._reasoning_effort = "none"
+
+    call = adapter._call_via_proxy("system prompt", "user prompt")
+
+    assert call.requested_model == "gemini-2.5-flash"
+    assert completions.calls[0]["response_format"]["type"] == "json_schema"
+    assert completions.calls[0]["reasoning_effort"] == "none"
+    assert completions.calls[0]["max_tokens"] == 1024
 
 
 def test_llm_protocol_failure_can_fallback_to_secondary_model(monkeypatch):
