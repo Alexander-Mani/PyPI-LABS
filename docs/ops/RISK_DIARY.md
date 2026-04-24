@@ -616,6 +616,14 @@ stale fallback assumptions.
 - Dedicated `gemini_only` and `gemini_only_test` profiles run only
   `gemini-2.5-flash` and `gemini-2.5-pro`, with 30-second backoff and up to 15
   attempts on `rate_limit` / `provider_overload`
+- As of 2026-04-24, the dedicated `gemini_only*` lane is hardened further
+  without changing the mixed-provider Google configs: both resilient Gemini
+  configs now request JSON-schema structured output with `max_tokens: 1024`,
+  `gemini_resilient_flash` sends `reasoning_effort="none"`, and
+  `gemini_resilient_pro` sends `reasoning_effort="minimal"`. This change is
+  driven by the observed `gemini_only` failure split on 2026-04-23:
+  Flash returning `unparseable_model_response (no_json_object)` and Pro
+  returning `empty_model_response (empty_finish_reason_length)`.
 - Together budget:
   `together_ai/Qwen/Qwen3.5-9B` ->
   `together_ai/meta-llama/Meta-Llama-3-8B-Instruct-Lite` ->

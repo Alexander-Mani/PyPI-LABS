@@ -467,6 +467,10 @@ Google is now handled in two modes:
 - normal mixed-provider runs keep the stable 2.5 routes with short retry logic
 - dedicated `gemini_only` / `gemini_only_test` profiles run only the medium and
   frontier Gemini models with a much longer 429/high-demand retry budget
+- the dedicated `gemini_only*` lane also hardens output handling:
+  `gemini_resilient_flash` and `gemini_resilient_pro` now request JSON-schema
+  structured output with `max_tokens: 1024`; Flash uses
+  `reasoning_effort="none"` while Pro uses `reasoning_effort="minimal"`
 
 The analyzer records `requested_model` and `actual_model` on fallbacked rows so
 a rescued run stays auditable. Together routes now use

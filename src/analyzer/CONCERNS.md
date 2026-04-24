@@ -364,6 +364,15 @@ row keeps `requested_model`, `actual_model`, `fallback_used`,
 `fallback_chain`, `attempt_count`, and `pricing_breakdown` so fallbacked runs
 remain auditable rather than silently changing detector identity.
 
+**Gemini-only lane note:** As of 2026-04-24, the dedicated `gemini_only` /
+`gemini_only_test` profiles are hardened separately from mixed-provider Google
+configs. `gemini_resilient_flash` and `gemini_resilient_pro` now request
+JSON-schema structured output with `max_tokens: 1024`; Flash sends
+`reasoning_effort="none"` while Pro sends `reasoning_effort="minimal"`. This
+was added after a live `gemini_only` run on 2026-04-23 showed Flash drifting to
+`unparseable_model_response (no_json_object)` and Pro truncating with
+`empty_model_response (empty_finish_reason_length)`.
+
 **Together-specific note:** The Together routes now use
 `response_format={"type":"json_object"}` for structured verdicts. The earlier
 attempt to pass provider-specific reasoning kwargs through the OpenAI-compatible
