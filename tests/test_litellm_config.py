@@ -188,6 +188,17 @@ def test_frontier_together_configs_use_kimi_and_qwen_frontier_models():
         assert "fallback_models" not in text
 
 
+def test_budget_and_medium_together_configs_use_hardened_schema_contract():
+    budget_text = (_ANALYZER_CONFIGS / "together_budget.yaml").read_text(encoding="utf-8")
+    medium_text = (_ANALYZER_CONFIGS / "together_medium.yaml").read_text(encoding="utf-8")
+
+    for text in (budget_text, medium_text):
+        assert 'max_tokens: 8192' in text
+        assert 'type: "json_schema"' in text
+        assert 'name: "supply_chain_verdict"' in text
+        assert 'type: "json_object"' not in text
+
+
 def test_frontier_bakeoff_configs_use_json_schema_and_1024_tokens():
     stems = (
         "together_frontier_kimi_bench",
