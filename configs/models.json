@@ -43,7 +43,7 @@
   "open_source_llms_via_together": {
     "frontier": [
       { "provider": "Moonshot", "model": "moonshotai/Kimi-K2.5", "tier": "frontier" },
-      { "provider": "Z.ai", "model": "zai-org/GLM-5.1", "tier": "frontier" }
+      { "provider": "Qwen", "model": "Qwen/Qwen3.5-397B-A17B", "tier": "frontier" }
     ],
     "medium": [
       { "provider": "Meta", "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo", "tier": "medium" },

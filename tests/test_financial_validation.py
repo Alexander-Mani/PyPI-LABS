@@ -257,3 +257,96 @@ def test_frontier_together_bakeoff_validation_uses_candidate_specific_guidance()
     assert "together_ai/Qwen/Qwen3.5-397B-A17B" in message
     assert "candidate validation failure" in message
     assert "--profile budget_no_gemini" not in message
+
+
+def test_frontier_shadow_detector_failure_does_not_halt_validation():
+    class Controller:
+        def expected_non_static_detectors(self, **kwargs):
+            return {"together_frontier", "together_frontier_qwen"}
+
+        def run(self, **kwargs):
+            return [
+                EvalDetectionResult(
+                    detector="together_frontier",
+                    experiment_mode="hybrid",
+                    verdict=False,
+                    confidence=0.9,
+                    heuristic_flags=[],
+                    exec_time_ms=1,
+                    api_cost_usd=0.001,
+                    input_tokens=10,
+                    output_tokens=5,
+                    details={"model": "together_ai/moonshotai/Kimi-K2.5"},
+                ),
+                EvalDetectionResult(
+                    detector="together_frontier_qwen",
+                    experiment_mode="error",
+                    verdict=False,
+                    confidence=None,
+                    heuristic_flags=[],
+                    exec_time_ms=1,
+                    api_cost_usd=0.0,
+                    details={
+                        "model": "together_ai/Qwen/Qwen3.5-397B-A17B",
+                        "error": "empty_model_response",
+                    },
+                ),
+            ]
+
+    runner = _runner_with_controller(Controller())
+    runner._profile = "frontier"
+    runner._run_label = "profile:frontier"
+    runner._shadow_detector_stems = {"together_frontier_qwen"}
+
+    runner._validate_financial_airgap()
+
+
+def test_frontier_required_kimi_failure_still_halts_even_if_qwen_succeeds():
+    class Controller:
+        def expected_non_static_detectors(self, **kwargs):
+            return {"together_frontier", "together_frontier_qwen"}
+
+        def run(self, **kwargs):
+            return [
+                EvalDetectionResult(
+                    detector="together_frontier",
+                    experiment_mode="error",
+                    verdict=False,
+                    confidence=None,
+                    heuristic_flags=[],
+                    exec_time_ms=1,
+                    api_cost_usd=0.0,
+                    details={
+                        "model": "together_ai/moonshotai/Kimi-K2.5",
+                        "error": "empty_model_response",
+                    },
+                ),
+                EvalDetectionResult(
+                    detector="together_frontier_qwen",
+                    experiment_mode="hybrid",
+                    verdict=False,
+                    confidence=0.9,
+                    heuristic_flags=[],
+                    exec_time_ms=1,
+                    api_cost_usd=0.001,
+                    input_tokens=10,
+                    output_tokens=5,
+                    details={"model": "together_ai/Qwen/Qwen3.5-397B-A17B"},
+                ),
+            ]
+
+    runner = _runner_with_controller(Controller())
+    runner._profile = "frontier"
+    runner._run_label = "profile:frontier"
+    runner._shadow_detector_stems = {"together_frontier_qwen"}
+
+    try:
+        runner._validate_financial_airgap()
+    except SystemExit as exc:
+        message = str(exc)
+    else:  # pragma: no cover - defensive failure path
+        raise AssertionError("frontier validation should halt when Kimi fails")
+
+    assert "together_frontier" in message
+    assert "Kimi-K2.5" in message
+    assert "together_frontier_qwen" not in message

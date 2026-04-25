@@ -34,7 +34,10 @@ profiles:
       - gpt
       - gemini
       - together_frontier
+      - together_frontier_qwen
       - claude_agentic
+    shadow_detector_stems:
+      - together_frontier_qwen
 
   all_models:
     tier: frontier
@@ -53,7 +56,10 @@ profiles:
       - gpt
       - gemini
       - together_frontier
+      - together_frontier_qwen
       - claude_agentic
+    shadow_detector_stems:
+      - together_frontier_qwen
 
   gemini_only:
     tier: frontier

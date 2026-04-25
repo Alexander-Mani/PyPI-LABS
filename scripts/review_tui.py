@@ -696,12 +696,15 @@ def build_actions(
     for profile, label in EXPERIMENT_PROFILES:
         slug = _profile_slug(profile)
         high_cost = profile in HIGH_COST_PROFILES
+        smoke_args: list[str] = ["--profile", profile, "--retries", "3", "--retry-delay", "20"]
+        if profile in {"frontier", "all_models"}:
+            smoke_args.extend(["--max-tokens", "8192"])
         actions.append(ReviewAction(
             id=f"models-smoke-{slug}",
             section=SECTION_DEPLOYMENT,
             title=f"Smoke {label} profile",
             description=f"Check routing for the {profile} profile; Gemini follows toggle.",
-            command=smoke("--profile", profile, "--retries", "3", "--retry-delay", "20"),
+            command=smoke(*smoke_args),
             safety=SAFETY_API_COST,
             confirm=True,
         ))
@@ -820,7 +823,7 @@ def build_actions(
                 "--skip-static",
                 "--skip-agentic",
                 "--max-tokens",
-                "4096",
+                "8192",
                 "--dry-run-resolution",
                 "--skip-validation",
             ),
@@ -887,7 +890,7 @@ def build_actions(
                 "--skip-static",
                 "--skip-agentic",
                 "--max-tokens",
-                "4096",
+                "8192",
                 "--run-id-prefix",
                 "frontier-bakeoff",
                 "--progress",

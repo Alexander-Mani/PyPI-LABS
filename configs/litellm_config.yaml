@@ -89,7 +89,6 @@ router_settings:
   fallbacks:
     - {"together_ai/Qwen/Qwen3.5-9B": ["together_ai/meta-llama/Meta-Llama-3-8B-Instruct-Lite", "together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo"]}
     - {"together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo": ["together_ai/deepseek-ai/DeepSeek-V3.1", "together_ai/MiniMaxAI/MiniMax-M2.5"]}
-    - {"together_ai/moonshotai/Kimi-K2.5": ["together_ai/zai-org/GLM-5.1"]}
 
 litellm_settings:
   drop_params: true

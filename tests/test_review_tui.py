@@ -253,11 +253,25 @@ def test_frontier_bakeoff_actions_force_gemini_off_and_skip_static_agentic(tmp_p
         assert "--skip-static" in action.command
         assert "--skip-agentic" in action.command
         assert "--max-tokens" in action.command
-        assert action.command[action.command.index("--max-tokens") + 1] == "4096"
+        assert action.command[action.command.index("--max-tokens") + 1] == "8192"
         assert action.command[action.command.index("--profile") + 1] == "frontier_together_bakeoff"
     assert "--dry-run-resolution" in dry_run.command
     assert "--run-id-prefix" in run.command
     assert "frontier-bakeoff" in run.command
+
+
+def test_frontier_and_all_models_smoke_actions_use_8192_tokens(tmp_path):
+    actions = review_tui.build_actions(tmp_path, python_executable="/py")
+
+    frontier = review_tui.action_by_id("models-smoke-frontier", actions)
+    all_models = review_tui.action_by_id("models-smoke-all-models", actions)
+    medium = review_tui.action_by_id("models-smoke-medium", actions)
+
+    for action in (frontier, all_models):
+        assert "--max-tokens" in action.command
+        assert action.command[action.command.index("--max-tokens") + 1] == "8192"
+
+    assert "--max-tokens" not in medium.command
 
 
 def test_identity_alias_probe_is_standalone_all_models_action(tmp_path):

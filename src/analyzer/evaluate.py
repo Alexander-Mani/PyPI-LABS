@@ -98,6 +98,7 @@ class EvaluationProfile:
     name: str
     tier: str
     config_stems: set[str]
+    shadow_detector_stems: set[str]
     include_controls: bool | None = None
     package_limits: dict[str, int] | None = None
 
@@ -145,6 +146,20 @@ def _load_evaluation_profile(profile_name: str) -> EvaluationProfile:
         )
     if not configs:
         raise SystemExit(f"HALT: evaluation profile '{profile_name}' selects no model configs.")
+    shadow_detector_stems = profile.get("shadow_detector_stems") or []
+    if not isinstance(shadow_detector_stems, list) or not all(isinstance(item, str) for item in shadow_detector_stems):
+        raise SystemExit(
+            f"HALT: evaluation profile '{profile_name}' shadow_detector_stems "
+            "must be a list of analyzer config stems."
+        )
+    shadow_detector_set = set(shadow_detector_stems)
+    unknown_shadow = sorted(shadow_detector_set - set(configs))
+    if unknown_shadow:
+        raise SystemExit(
+            f"HALT: evaluation profile '{profile_name}' shadow_detector_stems "
+            "must be included in configs: "
+            + ", ".join(unknown_shadow)
+        )
 
     resolver_cfg = profile.get("resolver", {})
     if not isinstance(resolver_cfg, dict):
@@ -186,6 +201,7 @@ def _load_evaluation_profile(profile_name: str) -> EvaluationProfile:
         name=profile_name,
         tier=tier,
         config_stems=set(configs),
+        shadow_detector_stems=shadow_detector_set,
         include_controls=include_controls,
         package_limits=package_limits,
     )
@@ -335,6 +351,7 @@ class EvaluationRunner:
         raw_experiment_log: bool = True,
         identity_alias_probe: bool = False,
         max_tokens_override: int | None = None,
+        shadow_detector_stems: set[str] | None = None,
         cli_args: dict | None = None,
     ):
         self._cfg  = config
@@ -350,6 +367,7 @@ class EvaluationRunner:
         self._raw_experiment_log = raw_experiment_log
         self._identity_alias_probe = identity_alias_probe
         self._max_tokens_override = max_tokens_override
+        self._shadow_detector_stems = set(shadow_detector_stems or set())
         self._identity_aliases: dict[tuple[str, str], tuple[str, str]] = {}
         self._raw_log = None
         self._cli_args = cli_args or {}
@@ -1115,8 +1133,10 @@ class EvaluationRunner:
             skip_agentic=skip_agentic,
             only_agentic=only_agentic,
         )
+        shadow_detectors = set(getattr(self, "_shadow_detector_stems", set()) or set())
+        required_detectors = expected_detectors - shadow_detectors
         successful_detectors = {r.detector for r in successful_llm_results}
-        failed_detectors = sorted(expected_detectors - successful_detectors)
+        failed_detectors = sorted(required_detectors - successful_detectors)
         if failed_detectors:
             details: list[str] = []
             for detector in failed_detectors:
@@ -1415,11 +1435,13 @@ if __name__ == "__main__":
     model_config_stems: set[str] | None = None
     profile_include_controls: bool | None = None
     profile_package_limits: dict[str, int] | None = None
+    profile_shadow_detector_stems: set[str] | None = None
     if profile_name is not None:
         profile = _load_evaluation_profile(profile_name)
         model_config_stems = profile.config_stems
         profile_include_controls = profile.include_controls
         profile_package_limits = profile.package_limits
+        profile_shadow_detector_stems = profile.shadow_detector_stems
         if tier is not None and tier != profile.tier:
             raise SystemExit(
                 f"HALT: --tier {tier} conflicts with --profile {profile_name} "
@@ -1433,6 +1455,7 @@ if __name__ == "__main__":
         model_config_stems = profile.config_stems
         profile_include_controls = profile.include_controls
         profile_package_limits = profile.package_limits
+        profile_shadow_detector_stems = profile.shadow_detector_stems
 
     gemini_enabled = args.gemini == "on"
     if not gemini_enabled:
@@ -1464,6 +1487,7 @@ if __name__ == "__main__":
         raw_experiment_log=args.raw_experiment_log == "on",
         identity_alias_probe=args.identity_alias_probe,
         max_tokens_override=args.max_tokens,
+        shadow_detector_stems=profile_shadow_detector_stems,
         cli_args=vars(args),
     ).run(
         skip_validation=args.skip_validation,

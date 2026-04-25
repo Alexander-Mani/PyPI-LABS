@@ -1,4 +1,4 @@
-model_name: "together_ai/moonshotai/Kimi-K2.5"
+model_name: "together_ai/Qwen/Qwen3.5-397B-A17B"
 tier: "frontier"
 temperature: 0.0
 max_tokens: 8192
