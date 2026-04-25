@@ -207,6 +207,15 @@ At the time of writing, the deployed canonical Google routes should be:
 - `gemini-2.5-flash` for medium
 - `gemini-2.5-pro` for frontier
 
+As of 2026-04-25, the canonical mixed-provider medium/frontier Google configs
+also changed from plain YAML defaults to the hardened output contract used by
+the proven `gemini_only` lane: `gemini_flash.yaml` and `gemini.yaml` now
+request JSON-schema structured output with `max_tokens: 1024`,
+`reasoning_effort="none"` for Flash, and `reasoning_effort="minimal"` for Pro.
+This was promoted because a live mixed-provider `medium` validation still
+showed `gemini_flash -> unparseable_model_response (no_json_object)` while the
+Gemini-only hardened lane passed.
+
 If the smoke dry-run still shows `gemini-2.0-flash`, `gemini-2.0-flash-lite`,
 or `together_ai/Qwen/Qwen3.5-397B-A17B` as active canonical routes, the
 deployed LiteLLM config is stale and the evaluation should not proceed.

@@ -2,8 +2,29 @@ model_name: "gemini-2.5-flash"
 tier: "medium"
 temperature: 0.0
 proxy_url: "http://127.0.0.1:4000"
+max_tokens: 1024
+reasoning_effort: "none"
 retry_attempts: 1
 retry_delay_seconds: 10
 retry_transport_categories:
   - "rate_limit"
   - "provider_overload"
+response_format:
+  type: "json_schema"
+  json_schema:
+    name: "supply_chain_verdict"
+    schema:
+      type: "object"
+      required:
+        - "verdict"
+        - "confidence"
+        - "reasoning"
+      properties:
+        verdict:
+          type: "string"
+          enum: ["malicious", "benign"]
+        confidence:
+          type: "number"
+        reasoning:
+          type: "string"
+      additionalProperties: false

@@ -60,6 +60,31 @@ def _profile_config_stems() -> dict[str, set[str]]:
     return profiles
 
 
+def _profile_shadow_stems() -> dict[str, set[str]]:
+    profiles: dict[str, set[str]] = {}
+    current_profile: str | None = None
+    in_shadow = False
+
+    for line in _PROFILE_CONFIG.read_text(encoding="utf-8").splitlines():
+        profile_match = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
+        if profile_match:
+            current_profile = profile_match.group(1)
+            profiles[current_profile] = set()
+            in_shadow = False
+            continue
+        if current_profile and re.match(r"^    shadow_detector_stems:\s*$", line):
+            in_shadow = True
+            continue
+        shadow_match = re.match(r"^      - ([A-Za-z0-9_-]+)\s*$", line)
+        if current_profile and in_shadow and shadow_match:
+            profiles[current_profile].add(shadow_match.group(1))
+            continue
+        if in_shadow and line.startswith("    ") and line.strip() and not line.startswith("      "):
+            in_shadow = False
+
+    return profiles
+
+
 def test_litellm_config_covers_analyzer_model_names():
     """Every analyzer model name must be routable through the proxy."""
     litellm_names = _litellm_model_names()
@@ -85,7 +110,7 @@ def test_litellm_router_settings_define_same_provider_fallbacks():
     assert "router_settings:" in text
     assert "gemini-2.0-flash" not in text
     assert "gemini-2.0-flash-lite" not in text
-    assert '"together_ai/moonshotai/Kimi-K2.5": ["together_ai/zai-org/GLM-5.1"]' in text
+    assert '"together_ai/moonshotai/Kimi-K2.5": ["together_ai/zai-org/GLM-5.1"]' not in text
 
 
 def test_evaluation_profiles_reference_existing_analyzer_configs():
@@ -122,11 +147,14 @@ def test_budget_no_gemini_profile_excludes_gemini_flash_lite():
 
 def test_test_profiles_have_expected_gemini_split():
     profiles = _profile_config_stems()
+    shadow_profiles = _profile_shadow_stems()
 
     assert "gemini_flash_lite" in profiles["test"]
     assert "gemini_flash_lite" not in profiles["test_no_gemini"]
     assert profiles["gemini_only"] == {"gemini_resilient_flash", "gemini_resilient_pro"}
     assert profiles["gemini_only_test"] == {"gemini_resilient_flash", "gemini_resilient_pro"}
+    assert shadow_profiles["frontier"] == {"together_frontier_qwen"}
+    assert shadow_profiles["all_models"] == {"together_frontier_qwen"}
     assert profiles["frontier_together_bakeoff"] == {
         "together_frontier_kimi_bench",
         "together_frontier_glm51_bench",
@@ -144,14 +172,20 @@ def test_medium_profile_uses_medium_analyzer_configs():
 def test_frontier_profile_uses_frontier_analyzer_configs():
     profiles = _profile_config_stems()
 
-    assert {"claude_opus", "gpt", "gemini", "together_frontier", "claude_agentic"} <= profiles["frontier"]
+    assert {"claude_opus", "gpt", "gemini", "together_frontier", "together_frontier_qwen", "claude_agentic"} <= profiles["frontier"]
 
 
-def test_frontier_together_primary_is_kimi():
-    text = (_ANALYZER_CONFIGS / "together_frontier.yaml").read_text(encoding="utf-8")
+def test_frontier_together_configs_use_kimi_and_qwen_frontier_models():
+    kimi_text = (_ANALYZER_CONFIGS / "together_frontier.yaml").read_text(encoding="utf-8")
+    qwen_text = (_ANALYZER_CONFIGS / "together_frontier_qwen.yaml").read_text(encoding="utf-8")
 
-    assert 'model_name: "together_ai/moonshotai/Kimi-K2.5"' in text
-    assert "Qwen3.5-397B-A17B" not in text
+    assert 'model_name: "together_ai/moonshotai/Kimi-K2.5"' in kimi_text
+    assert 'model_name: "together_ai/Qwen/Qwen3.5-397B-A17B"' in qwen_text
+    for text in (kimi_text, qwen_text):
+        assert 'max_tokens: 8192' in text
+        assert 'type: "json_schema"' in text
+        assert 'name: "supply_chain_verdict"' in text
+        assert "fallback_models" not in text
 
 
 def test_frontier_bakeoff_configs_use_json_schema_and_1024_tokens():
@@ -188,6 +222,19 @@ def test_gemini_resilient_configs_use_schema_and_reasoning_controls():
         assert 'type: "json_schema"' in text
         assert 'name: "supply_chain_verdict"' in text
         assert "fallback_models" not in text
+
+    assert 'reasoning_effort: "none"' in flash_text
+    assert 'reasoning_effort: "minimal"' in pro_text
+
+
+def test_canonical_gemini_medium_and_frontier_configs_use_promoted_hardening():
+    flash_text = (_ANALYZER_CONFIGS / "gemini_flash.yaml").read_text(encoding="utf-8")
+    pro_text = (_ANALYZER_CONFIGS / "gemini.yaml").read_text(encoding="utf-8")
+
+    for text in (flash_text, pro_text):
+        assert 'max_tokens: 1024' in text
+        assert 'type: "json_schema"' in text
+        assert 'name: "supply_chain_verdict"' in text
 
     assert 'reasoning_effort: "none"' in flash_text
     assert 'reasoning_effort: "minimal"' in pro_text

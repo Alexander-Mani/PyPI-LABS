@@ -464,10 +464,19 @@ Current canonical open-weight Together routes are:
 - frontier: `together_ai/moonshotai/Kimi-K2.5`
 
 Google is now handled in two modes:
-- normal mixed-provider runs keep the stable 2.5 routes with short retry logic
+- normal mixed-provider runs keep the stable 2.5 routes with short retry
+  logic, but medium/frontier now also use the hardened output contract:
+  changed from no explicit structured-output contract, no explicit
+  `max_tokens`, and no explicit `reasoning_effort` in `gemini_flash.yaml` /
+  `gemini.yaml` to JSON-schema structured output with `max_tokens: 1024`,
+  `reasoning_effort="none"` for Flash, and `reasoning_effort="minimal"` for
+  Pro, because a live mixed-provider `medium` validation on 2026-04-25 still
+  showed `gemini_flash -> unparseable_model_response (no_json_object)` while
+  the hardened `gemini_only` lane passed cleanly
 - dedicated `gemini_only` / `gemini_only_test` profiles run only the medium and
   frontier Gemini models with a much longer 429/high-demand retry budget
-- the dedicated `gemini_only*` lane also hardens output handling:
+- the dedicated `gemini_only*` lane still owns the long Google-only retry
+  behavior and originally introduced the hardened output handling:
   `gemini_resilient_flash` and `gemini_resilient_pro` now request JSON-schema
   structured output with `max_tokens: 1024`; Flash uses
   `reasoning_effort="none"` while Pro uses `reasoning_effort="minimal"`
