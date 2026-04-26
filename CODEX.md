@@ -104,7 +104,7 @@ The production-study DB helpers are:
 
 Repair behavior:
 - scans the configured analysis DB for all matching `experiment_mode="error"` rows by default
-- excludes validation tiers and existing `:repair` runs unless explicitly re-enabled
+- excludes validation tiers, existing `:repair` runs, and agentic rows unless explicitly re-enabled
 - supports narrowing by sample set, run id, detector, and intended mode
 - classifies matched rows as rerunnable or skipped before backing up the DB
 - re-downloads only the affected artifact, not the full simulator sample set
@@ -112,7 +112,7 @@ Repair behavior:
 - creates a new `:repair` run per source run represented in the rerunnable set
 - keeps the original source rows untouched and links correction rows back with `repair_source_row_id`
 - uses aggressive retry and token settings because this is an operator recovery path, not a normal experiment lane
-- prints compact grouped preflight counts and live repair progress by default; detailed analyzer logs go to a separate repair log file
+- prints compact grouped preflight counts and live repair progress by default, including current stage/attempt/elapsed time; detailed analyzer logs go to a separate repair log file
 
 Summarizer behavior:
 - latest complete run per canonical family by package/version coverage, then recency
@@ -157,7 +157,12 @@ Production eval DB repair preview:
 
 Production eval DB repair apply:
 ```bash
-./.venv/bin/python scripts/error_correct_production_data.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --apply --progress always
+./.venv/bin/python scripts/error_correct_production_data.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --apply --include-agentic off --progress always
+```
+
+Legacy agentic DB repair apply:
+```bash
+./.venv/bin/python scripts/error_correct_production_data.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --apply --include-agentic on --intended-mode agentic --progress always
 ```
 
 Thesis summary from production DB:

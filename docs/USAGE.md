@@ -420,11 +420,14 @@ same working tree or DB path. Two dedicated scripts support the thesis-analysis
 workflow against the configured analysis DB:
 
 ```bash
-# Preview all non-validation error rows in the analysis DB.
+# Preview all non-validation non-agentic error rows in the analysis DB.
 ./.venv/bin/python scripts/error_correct_production_data.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --dry-run
 
 # Create append-only correction runs with compact live progress.
-./.venv/bin/python scripts/error_correct_production_data.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --apply --progress always
+./.venv/bin/python scripts/error_correct_production_data.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --apply --include-agentic off --progress always
+
+# Legacy-only: rerun historical agentic error rows.
+./.venv/bin/python scripts/error_correct_production_data.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --apply --include-agentic on --intended-mode agentic --progress always
 
 # Generate thesis-ready CSV/Markdown summaries from the canonical latest-complete runs.
 ./.venv/bin/python scripts/summarize_thesis_eval_db.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --out-dir analysis/eval_db/latest
@@ -432,7 +435,7 @@ workflow against the configured analysis DB:
 
 `error_correct_production_data.py` now scans the configured analysis DB for all
 matching `experiment_mode="error"` rows, across run families by default, but it
-excludes validation tiers and existing `:repair` runs unless you opt in. It
+excludes validation tiers, existing `:repair` runs, and agentic rows unless you opt in. It
 supports filters such as `--sample-set`, `--run-id`, `--detector`, and
 `--intended-mode`, then classifies each matched row as rerunnable or skipped
 before any DB backup or API spend happens.
@@ -441,13 +444,15 @@ The repair path re-downloads only the affected artifacts, rebuilds the extracted
 package, reapplies alias masking for alias-probe rows, and writes the rerun
 result into a new timestamped correction run for each selected source run.
 Original source rows remain untouched. Non-agentic repairs force a larger token
-budget and stronger retry policy. Agentic repairs keep the same detector identity
-but add script-level retries for deployment-availability failures. If no rows
+budget and stronger retry policy. Legacy agentic repairs are still supported as
+an explicit opt-in path and keep the same detector identity while adding
+script-level retries for deployment-availability failures. If no rows
 match, or all matched rows are skipped during preflight, the script exits
 nonzero and does not create a backup. By default the operator output is compact:
-it prints grouped preflight counts, runs a live repair progress view, and writes
-detailed analyzer engine logs to a separate repair log file instead of dumping
-prompt/extractor traces inline.
+it prints grouped preflight counts, excludes legacy agentic rows from the main
+repair path, runs a live repair progress view with current stage/attempt/elapsed
+time, and writes detailed analyzer engine logs to a separate repair log file
+instead of dumping prompt/extractor traces inline.
 
 `summarize_thesis_eval_db.py` uses the same latest-complete selection policy and
 emits:
@@ -506,8 +511,9 @@ Experiment Suite` contains actual analyzer runs and warns when the active
 context's configured analysis DB already contains result rows.
 
 The `Database` section also exposes the production-study DB workflow directly:
-- preview non-validation DB error reruns against the configured analysis DB
-- create append-only correction runs for those matching error rows with live progress
+- preview non-validation non-agentic DB error reruns against the configured analysis DB
+- create append-only correction runs for those matching non-agentic error rows with live progress
+- preview and run a separate legacy agentic-only repair path when old frontier-agentic rows need recovery
 - summarize canonical raw and cleaned thesis-analysis views from the same configured DB
 
 The canonical experiment actions are organized so static baselines run only via
