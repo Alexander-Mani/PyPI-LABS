@@ -424,6 +424,9 @@ def test_production_db_actions_target_configured_analysis_db(tmp_path):
 
     assert summary.command[:2] == ("/py", str(tmp_path / "scripts" / "summarize_thesis_eval_db.py"))
     assert "--db" in summary.command
+    assert preview.title == "Preview all DB error reruns"
+    assert apply.title == "Create all DB error reruns"
+    assert summary.title == "Summarize thesis DB raw + cleaned views"
 
 
 def test_context_config_analysis_db_path_overrides_repo_default(tmp_path):

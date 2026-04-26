@@ -1081,8 +1081,8 @@ def build_actions(
         ReviewAction(
             id="db-production-repair-dry-run",
             section=SECTION_DATABASE,
-            title="Preview production DB correction runs",
-            description="Show which source error rows would be rerun and which append-only :repair runs would be created in the configured analysis DB.",
+            title="Preview all DB error reruns",
+            description="Show all matching error rows in the configured analysis DB, which rows are rerunnable, and which append-only :repair runs would be created.",
             command=(
                 *_context_script(
                     context,
@@ -1096,8 +1096,8 @@ def build_actions(
         ReviewAction(
             id="db-production-repair-apply",
             section=SECTION_DATABASE,
-            title="Create production DB correction runs",
-            description="Rerun only source error rows, spend API money as needed, and append new :repair runs into the configured analysis DB.",
+            title="Create all DB error reruns",
+            description="Rerun all matching error rows with aggressive recovery settings and append new :repair runs into the configured analysis DB.",
             command=(
                 *_context_script(
                     context,
@@ -1114,8 +1114,8 @@ def build_actions(
         ReviewAction(
             id="db-production-summary",
             section=SECTION_DATABASE,
-            title="Summarize production DB raw + cleaned views",
-            description="Generate raw and cleaned thesis-analysis artifacts from the configured analysis DB, including repair overlays when present.",
+            title="Summarize thesis DB raw + cleaned views",
+            description="Generate canonical thesis-analysis artifacts from the configured analysis DB, including repair overlays when present.",
             command=(
                 *_context_script(
                     context,

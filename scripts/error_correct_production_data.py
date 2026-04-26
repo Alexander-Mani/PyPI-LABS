@@ -13,6 +13,7 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,7 +25,7 @@ for _path in (_REPO_ROOT, _ANALYZER_DIR):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from scripts.production_eval_db_common import load_run_inventory, select_primary_runs  # noqa: E402
+from scripts.production_eval_db_common import load_run_inventory  # noqa: E402
 from src.analyzer.adapters import (  # noqa: E402
     AgenticAdapter,
     DetectorAdapter,
@@ -40,12 +41,11 @@ from src.analyzer.prompt_manager import PromptManager  # noqa: E402
 from src.data.db_manager import DBManager  # noqa: E402
 
 REPAIR_TIER_SUFFIX = ":repair"
-NON_AGENTIC_MAX_TOKENS = 16384
-AGENTIC_MAX_TOKENS = 16384
-NON_AGENTIC_RETRY_ATTEMPTS = 3
-NON_AGENTIC_RETRY_DELAY_SECONDS = 30.0
-AGENTIC_RETRY_ATTEMPTS = 3
-AGENTIC_RETRY_DELAY_SECONDS = 45.0
+DEFAULT_MAX_TOKENS = 16384
+DEFAULT_LLM_RETRY_ATTEMPTS = 5
+DEFAULT_LLM_RETRY_DELAY_SECONDS = 45.0
+DEFAULT_AGENTIC_RETRY_ATTEMPTS = 5
+DEFAULT_AGENTIC_RETRY_DELAY_SECONDS = 60.0
 TRANSPORT_RETRY_CATEGORIES = {
     "client_timeout",
     "provider_or_proxy_transient",
@@ -113,6 +113,21 @@ class RepairRunPlan:
     candidate_count: int
 
 
+@dataclass(frozen=True)
+class RepairPolicy:
+    max_tokens: int
+    llm_retry_attempts: int
+    llm_retry_delay_seconds: float
+    agentic_retry_attempts: int
+    agentic_retry_delay_seconds: float
+
+
+@dataclass(frozen=True)
+class SkippedCandidate:
+    candidate: RepairCandidate
+    reason: str
+
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -176,12 +191,14 @@ def _backup_db(db_path: Path) -> Path:
 
 def load_repair_candidates(
     db_path: Path,
-    selected_runs: dict[str, Any],
+    *,
+    sample_set: str = "any",
+    run_ids: list[str] | None = None,
+    detectors: list[str] | None = None,
+    intended_modes: list[str] | None = None,
+    include_agentic: bool = True,
 ) -> list[RepairCandidate]:
-    run_ids = sorted(run.run_id for run in selected_runs.values())
-    if not run_ids:
-        return []
-    placeholders = ", ".join("?" for _ in run_ids)
+    params: list[Any] = []
     with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
         conn.row_factory = sqlite3.Row
         columns = {
@@ -189,6 +206,24 @@ def load_repair_candidates(
             for row in conn.execute("PRAGMA table_info(eval_run)").fetchall()
         }
         sample_set_expr = "eru.sample_set" if "sample_set" in columns else "'dataset'"
+        where_parts = ["er.experiment_mode = 'error'"]
+        if sample_set != "any":
+            where_parts.append(f"{sample_set_expr} = ?")
+            params.append(sample_set)
+        if run_ids:
+            placeholders = ", ".join("?" for _ in run_ids)
+            where_parts.append(f"er.run_id IN ({placeholders})")
+            params.extend(run_ids)
+        if detectors:
+            placeholders = ", ".join("?" for _ in detectors)
+            where_parts.append(f"er.detector IN ({placeholders})")
+            params.extend(detectors)
+        if intended_modes:
+            placeholders = ", ".join("?" for _ in intended_modes)
+            where_parts.append(f"COALESCE(er.intended_mode, er.experiment_mode) IN ({placeholders})")
+            params.extend(intended_modes)
+        if not include_agentic:
+            where_parts.append("COALESCE(er.intended_mode, er.experiment_mode) != 'agentic'")
         query = f"""
             SELECT
                 er.id,
@@ -212,16 +247,12 @@ def load_repair_candidates(
             FROM eval_result AS er
             JOIN eval_run AS eru
               ON eru.run_id = er.run_id
-            WHERE er.experiment_mode = 'error'
-              AND er.run_id IN ({placeholders})
+            WHERE {" AND ".join(where_parts)}
             ORDER BY eru.created_at DESC, er.run_id, er.detector, er.package_name, er.version, er.prompt_strategy, er.artifact_filename
         """
-        rows = conn.execute(query, run_ids).fetchall()
+        rows = conn.execute(query, params).fetchall()
     candidates: list[RepairCandidate] = []
     for row in rows:
-        artifact_url = str(row["artifact_url"] or "").strip()
-        if not artifact_url:
-            continue
         candidates.append(
             RepairCandidate(
                 row_id=int(row["id"]),
@@ -235,7 +266,7 @@ def load_repair_candidates(
                 package_name=str(row["package_name"]),
                 version=str(row["version"]),
                 artifact_filename=str(row["artifact_filename"] or ""),
-                artifact_url=artifact_url,
+                artifact_url=str(row["artifact_url"] or "").strip(),
                 source_index_url=str(row["source_index_url"] or "") or None,
                 sample_role=str(row["sample_role"] or "") or None,
                 attack_vector=str(row["attack_vector"] or "") or None,
@@ -269,6 +300,67 @@ def build_repair_run_plans(
         )
         for source_run_id, (source_tier, sample_set, count) in grouped.items()
     }
+
+
+def _candidate_config_path(candidate: RepairCandidate) -> Path:
+    return _REPO_ROOT / "src" / "analyzer" / "configs" / f"{candidate.detector}.yaml"
+
+
+def _candidate_skip_reason(candidate: RepairCandidate) -> str | None:
+    if not candidate.artifact_url:
+        return "missing_artifact_url"
+
+    if bool(candidate.details.get("alias_probe")):
+        alias_name = str(candidate.details.get("alias_name") or "").strip()
+        alias_version = str(candidate.details.get("alias_version") or "").strip()
+        if not alias_name or not alias_version:
+            return "invalid_alias_metadata"
+
+    if candidate.intended_mode == "static":
+        if candidate.detector in {"bandit", "semgrep", "guarddog"}:
+            return None
+        return "unsupported_static_detector"
+
+    if candidate.intended_mode not in {"hybrid", "llm_raw", "agentic"}:
+        return "unsupported_intended_mode"
+
+    if not _candidate_config_path(candidate).exists():
+        return "missing_detector_config"
+
+    try:
+        _prompt_overrides(candidate.intended_mode, candidate.prompt_strategy)
+    except KeyError:
+        return "unsupported_prompt_strategy"
+    return None
+
+
+def partition_repair_candidates(
+    candidates: list[RepairCandidate],
+) -> tuple[list[RepairCandidate], list[SkippedCandidate]]:
+    rerunnable: list[RepairCandidate] = []
+    skipped: list[SkippedCandidate] = []
+    for candidate in candidates:
+        reason = _candidate_skip_reason(candidate)
+        if reason is None:
+            rerunnable.append(candidate)
+        else:
+            skipped.append(SkippedCandidate(candidate=candidate, reason=reason))
+    return rerunnable, skipped
+
+
+def _print_candidate_list(
+    header: str,
+    rows: list[str],
+    *,
+    limit: int = 20,
+) -> None:
+    if not rows:
+        return
+    print(header)
+    for line in rows[:limit]:
+        print(f"  {line}")
+    if len(rows) > limit:
+        print(f"  ... {len(rows) - limit} more")
 
 
 
@@ -329,13 +421,13 @@ def _build_adapter(detector: str, intended_mode: str) -> DetectorAdapter:
 
 
 
-def _tune_adapter(adapter: DetectorAdapter, intended_mode: str) -> None:
+def _tune_adapter(adapter: DetectorAdapter, intended_mode: str, policy: RepairPolicy) -> None:
     if isinstance(adapter, (LLMAdapter, LLMRawAdapter)):
-        adapter._max_tokens = max(int(getattr(adapter, "_max_tokens", 0) or 0), NON_AGENTIC_MAX_TOKENS)
-        adapter._retry_attempts = max(int(getattr(adapter, "_retry_attempts", 0) or 0), NON_AGENTIC_RETRY_ATTEMPTS)
+        adapter._max_tokens = max(int(getattr(adapter, "_max_tokens", 0) or 0), policy.max_tokens)
+        adapter._retry_attempts = max(int(getattr(adapter, "_retry_attempts", 0) or 0), policy.llm_retry_attempts)
         adapter._retry_delay_seconds = max(
             float(getattr(adapter, "_retry_delay_seconds", 0.0) or 0.0),
-            NON_AGENTIC_RETRY_DELAY_SECONDS,
+            policy.llm_retry_delay_seconds,
         )
         adapter._retry_protocol_errors = set(getattr(adapter, "_retry_protocol_errors", set()) or set())
         adapter._retry_protocol_errors.update(PROTOCOL_RETRY_ERRORS)
@@ -346,7 +438,7 @@ def _tune_adapter(adapter: DetectorAdapter, intended_mode: str) -> None:
         adapter._retry_transport_categories.update(TRANSPORT_RETRY_CATEGORIES)
         return
     if isinstance(adapter, AgenticAdapter):
-        adapter._max_tokens = max(int(getattr(adapter, "_max_tokens", 0) or 0), AGENTIC_MAX_TOKENS)
+        adapter._max_tokens = max(int(getattr(adapter, "_max_tokens", 0) or 0), policy.max_tokens)
         return
 
 
@@ -381,6 +473,7 @@ def _prompt_overrides(intended_mode: str, prompt_strategy: str) -> tuple[str | N
 def _repair_single_candidate(
     candidate: RepairCandidate,
     *,
+    policy: RepairPolicy,
     download_dir: Path,
     download_cache: dict[str, Path],
     package_cache: dict[Path, PackageInfo],
@@ -389,10 +482,10 @@ def _repair_single_candidate(
     pkg = _extract_package(archive_path, package_cache)
     detector_pkg, alias_details = _prepare_package(candidate, pkg)
     adapter = _build_adapter(candidate.detector, candidate.intended_mode)
-    _tune_adapter(adapter, candidate.intended_mode)
+    _tune_adapter(adapter, candidate.intended_mode, policy)
     system_prompt, template_override = _prompt_overrides(candidate.intended_mode, candidate.prompt_strategy)
 
-    attempts = AGENTIC_RETRY_ATTEMPTS if candidate.intended_mode == "agentic" else 1
+    attempts = policy.agentic_retry_attempts if candidate.intended_mode == "agentic" else 1
     last_result = None
     for attempt in range(1, attempts + 1):
         result = adapter.run(
@@ -405,7 +498,7 @@ def _repair_single_candidate(
         if result.experiment_mode != "error" or not _looks_retryable(result.details):
             return result, result.details or {}, attempt, alias_details
         if attempt < attempts:
-            time.sleep(AGENTIC_RETRY_DELAY_SECONDS)
+            time.sleep(policy.agentic_retry_delay_seconds)
     if last_result is None:  # pragma: no cover - defensive
         raise RuntimeError("repair rerun produced no result")
     return last_result, last_result.details or {}, attempts, alias_details
@@ -452,6 +545,7 @@ def apply_repairs(
     db_path: Path,
     candidates: list[RepairCandidate],
     *,
+    policy: RepairPolicy,
     dry_run: bool,
 ) -> list[RepairOutcome]:
     repair_plans = build_repair_run_plans(candidates)
@@ -485,6 +579,7 @@ def apply_repairs(
                 plan = repair_plans[candidate.run_id]
                 result, result_details, repair_attempts, alias_details = _repair_single_candidate(
                     candidate,
+                    policy=policy,
                     download_dir=download_dir,
                     download_cache=download_cache,
                     package_cache=package_cache,
@@ -556,13 +651,61 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--include-agentic",
         choices=["on", "off"],
         default="on",
-        help="Include the latest frontier agentic-only run in the repair scope (default: on)",
+        help="Include agentic error rows in the repair scope (default: on)",
     )
     parser.add_argument(
         "--sample-set",
-        choices=("dataset", "controls", "both"),
-        default="dataset",
-        help="Selected production run sample set to repair (default: dataset).",
+        choices=("any", "dataset", "controls", "both"),
+        default="any",
+        help="Filter repair scope by sample set (default: any).",
+    )
+    parser.add_argument(
+        "--run-id",
+        action="append",
+        default=[],
+        help="Restrict repair scope to specific source run_id values. Repeat to target multiple runs.",
+    )
+    parser.add_argument(
+        "--detector",
+        action="append",
+        default=[],
+        help="Restrict repair scope to specific detector names. Repeat to target multiple detectors.",
+    )
+    parser.add_argument(
+        "--intended-mode",
+        action="append",
+        default=[],
+        help="Restrict repair scope to specific intended modes. Repeat to target multiple modes.",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=DEFAULT_MAX_TOKENS,
+        help=f"Minimum max_tokens to force on rerun adapters (default: {DEFAULT_MAX_TOKENS}).",
+    )
+    parser.add_argument(
+        "--llm-retries",
+        type=int,
+        default=DEFAULT_LLM_RETRY_ATTEMPTS,
+        help=f"Minimum same-model retry count for non-agentic LLM reruns (default: {DEFAULT_LLM_RETRY_ATTEMPTS}).",
+    )
+    parser.add_argument(
+        "--llm-retry-delay",
+        type=float,
+        default=DEFAULT_LLM_RETRY_DELAY_SECONDS,
+        help=f"Minimum retry delay in seconds for non-agentic LLM reruns (default: {DEFAULT_LLM_RETRY_DELAY_SECONDS}).",
+    )
+    parser.add_argument(
+        "--agentic-retries",
+        type=int,
+        default=DEFAULT_AGENTIC_RETRY_ATTEMPTS,
+        help=f"Outer retry count for agentic reruns (default: {DEFAULT_AGENTIC_RETRY_ATTEMPTS}).",
+    )
+    parser.add_argument(
+        "--agentic-retry-delay",
+        type=float,
+        default=DEFAULT_AGENTIC_RETRY_DELAY_SECONDS,
+        help=f"Retry delay in seconds for agentic reruns (default: {DEFAULT_AGENTIC_RETRY_DELAY_SECONDS}).",
     )
     return parser.parse_args(argv)
 
@@ -573,19 +716,54 @@ def main(argv: list[str] | None = None) -> int:
     db_path = args.db.resolve()
     _ensure_db_shape(db_path)
     inventory = load_run_inventory(db_path)
-    selected = select_primary_runs(
-        inventory,
-        include_agentic=args.include_agentic == "on",
-        sample_set=args.sample_set,
+    inventory_by_run_id = {run.run_id: run for run in inventory}
+    policy = RepairPolicy(
+        max_tokens=args.max_tokens,
+        llm_retry_attempts=args.llm_retries,
+        llm_retry_delay_seconds=args.llm_retry_delay,
+        agentic_retry_attempts=args.agentic_retries,
+        agentic_retry_delay_seconds=args.agentic_retry_delay,
     )
-    candidates = load_repair_candidates(db_path, selected)
-    repair_plans = build_repair_run_plans(candidates)
+    matched_candidates = load_repair_candidates(
+        db_path,
+        sample_set=args.sample_set,
+        run_ids=list(args.run_id),
+        detectors=list(args.detector),
+        intended_modes=list(args.intended_mode),
+        include_agentic=args.include_agentic == "on",
+    )
+    rerunnable_candidates, skipped_candidates = partition_repair_candidates(matched_candidates)
+    repair_plans = build_repair_run_plans(rerunnable_candidates)
 
     print(f"DB: {db_path}")
-    print("Selected runs:")
-    for family, run in sorted(selected.items()):
+    print("Filters:")
+    print(f"  sample_set={args.sample_set}")
+    print(f"  include_agentic={args.include_agentic}")
+    if args.run_id:
+        print(f"  run_ids={', '.join(args.run_id)}")
+    if args.detector:
+        print(f"  detectors={', '.join(args.detector)}")
+    if args.intended_mode:
+        print(f"  intended_modes={', '.join(args.intended_mode)}")
+    print(
+        "  aggressive_policy="
+        f"max_tokens={policy.max_tokens} "
+        f"llm_retries={policy.llm_retry_attempts} "
+        f"llm_retry_delay={policy.llm_retry_delay_seconds}s "
+        f"agentic_retries={policy.agentic_retry_attempts} "
+        f"agentic_retry_delay={policy.agentic_retry_delay_seconds}s"
+    )
+
+    matched_run_ids = sorted({candidate.run_id for candidate in matched_candidates})
+    print("Matched source runs:")
+    for run_id in matched_run_ids:
+        run = inventory_by_run_id.get(run_id)
+        if run is None:
+            print(f"  {run_id}: metadata unavailable")
+            continue
         print(
-            f"  {family}: {run.run_id} pkg_versions={run.pkg_versions} rows={run.row_count} created_at={run.created_at}"
+            f"  {run.run_id} tier={run.tier} sample_set={run.sample_set} "
+            f"pkg_versions={run.pkg_versions} rows={run.row_count} created_at={run.created_at}"
         )
     if repair_plans:
         print("Planned correction runs:")
@@ -594,12 +772,38 @@ def main(argv: list[str] | None = None) -> int:
                 f"  {plan.repair_run_id} <= {source_run_id} "
                 f"tier={plan.repair_tier} targeted_rows={plan.candidate_count}"
             )
-    print(f"Targeted error rows: {len(candidates)}")
-    for candidate in candidates:
-        print(
-            f"  {candidate.run_id} {candidate.detector}:{candidate.intended_mode}:{candidate.prompt_strategy} "
+    print(f"Matched error rows: {len(matched_candidates)}")
+    print(f"Rerunnable rows: {len(rerunnable_candidates)}")
+    print(f"Skipped rows: {len(skipped_candidates)}")
+
+    skipped_counts = Counter(item.reason for item in skipped_candidates)
+    for reason, count in sorted(skipped_counts.items()):
+        print(f"  skipped[{reason}]={count}")
+
+    _print_candidate_list(
+        "Rerunnable preview:",
+        [
+            f"{candidate.run_id} {candidate.detector}:{candidate.intended_mode}:{candidate.prompt_strategy} "
             f"{candidate.package_name}=={candidate.version} [{candidate.artifact_filename}]"
-        )
+            for candidate in rerunnable_candidates
+        ],
+    )
+    _print_candidate_list(
+        "Skipped preview:",
+        [
+            f"{item.reason} :: {item.candidate.run_id} "
+            f"{item.candidate.detector}:{item.candidate.intended_mode}:{item.candidate.prompt_strategy} "
+            f"{item.candidate.package_name}=={item.candidate.version} [{item.candidate.artifact_filename}]"
+            for item in skipped_candidates
+        ],
+    )
+
+    if not matched_candidates:
+        print("HALT: no error rows matched the requested filters.")
+        return 1
+    if not rerunnable_candidates:
+        print("HALT: matched error rows exist, but none are rerunnable after preflight checks.")
+        return 1
 
     if not args.apply:
         print("Dry-run only. Re-run with --apply to create correction runs.")
@@ -607,12 +811,14 @@ def main(argv: list[str] | None = None) -> int:
 
     backup_path = _backup_db(db_path)
     print(f"Backup: {backup_path}")
-    outcomes = apply_repairs(db_path, candidates, dry_run=False)
+    outcomes = apply_repairs(db_path, rerunnable_candidates, policy=policy, dry_run=False)
 
     repaired = sum(1 for outcome in outcomes if outcome.success)
     remaining = len(outcomes) - repaired
     print(f"Repaired rows: {repaired}")
     print(f"Still error rows after rerun: {remaining}")
+    if skipped_candidates:
+        print(f"Skipped rows (not attempted): {len(skipped_candidates)}")
     for outcome in outcomes:
         status = "OK" if outcome.success else "ERROR"
         print(

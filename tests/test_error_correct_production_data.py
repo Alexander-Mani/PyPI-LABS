@@ -24,39 +24,21 @@ def _init_db(db_path: Path):
 
 
 
-def test_load_repair_candidates_targets_only_selected_error_rows(tmp_path):
+def test_load_repair_candidates_targets_all_error_rows_and_filters(tmp_path):
     db_path = tmp_path / "eval_results.db"
     db = _init_db(db_path)
     try:
         db.create_eval_run("budget-good", "profile:budget:llm-no-agentic")
-        db.create_eval_run("budget-old", "profile:budget:llm-no-agentic")
+        db.create_eval_run("debug-run", "profile:custom-debug")
         db.create_eval_run("budget-controls", "profile:budget:llm-no-agentic", sample_set="controls")
-        db.create_eval_run("budget-validation", "profile:budget-validation")
+        db.create_eval_run("agentic-run", "profile:frontier:agentic-only")
 
         for package in ("a", "b"):
-            db.insert_eval_result(
-                run_id="budget-old",
-                package_name=package,
-                version="1.0.0",
-                experiment_mode="hybrid",
-                intended_mode="hybrid",
-                prompt_strategy="zero_shot",
-                detector="gpt_nano",
-                artifact_filename=f"{package}.whl",
-                artifact_url=f"http://example/{package}.whl",
-                verdict=True,
-                ground_truth=True,
-                heuristic_flags=[],
-                exec_time_ms=10,
-                api_cost_usd=0.1,
-                details={"model": "gpt-5.4-nano"},
-            )
-        for package in ("a", "b", "c"):
             db.insert_eval_result(
                 run_id="budget-good",
                 package_name=package,
                 version="1.0.0",
-                experiment_mode="error" if package == "c" else "hybrid",
+                experiment_mode="error",
                 intended_mode="hybrid",
                 prompt_strategy="zero_shot",
                 detector="together_budget",
@@ -67,8 +49,59 @@ def test_load_repair_candidates_targets_only_selected_error_rows(tmp_path):
                 heuristic_flags=[],
                 exec_time_ms=10,
                 api_cost_usd=0.1,
-                details={"error": "empty_model_response", "protocol_category": "empty_finish_reason_length"} if package == "c" else {"model": "qwen"},
+                details={"error": "empty_model_response", "protocol_category": "empty_finish_reason_length"},
             )
+        db.insert_eval_result(
+            run_id="debug-run",
+            package_name="dbg",
+            version="1.0.0",
+            experiment_mode="error",
+            intended_mode="llm_raw",
+            prompt_strategy="few_shot",
+            detector="gpt_nano",
+            artifact_filename="dbg.whl",
+            artifact_url="http://example/dbg.whl",
+            verdict=False,
+            ground_truth=True,
+            heuristic_flags=[],
+            exec_time_ms=10,
+            api_cost_usd=0.1,
+            details={"error": "unparseable_model_response"},
+        )
+        db.insert_eval_result(
+            run_id="agentic-run",
+            package_name="agent",
+            version="1.0.0",
+            experiment_mode="error",
+            intended_mode="agentic",
+            prompt_strategy="zero_shot",
+            detector="claude_agentic",
+            artifact_filename="agent.whl",
+            artifact_url="http://example/agent.whl",
+            verdict=False,
+            ground_truth=True,
+            heuristic_flags=[],
+            exec_time_ms=10,
+            api_cost_usd=0.1,
+            details={"error": "Error code: 429"},
+        )
+        db.insert_eval_result(
+            run_id="budget-good",
+            package_name="ok",
+            version="1.0.0",
+            experiment_mode="hybrid",
+            intended_mode="hybrid",
+            prompt_strategy="zero_shot",
+            detector="gpt_nano",
+            artifact_filename="ok.whl",
+            artifact_url="http://example/ok.whl",
+            verdict=True,
+            ground_truth=True,
+            heuristic_flags=[],
+            exec_time_ms=10,
+            api_cost_usd=0.1,
+            details={"model": "gpt-5.4-nano"},
+        )
         db.insert_eval_result(
             run_id="budget-controls",
             package_name="ctrl",
@@ -86,16 +119,53 @@ def test_load_repair_candidates_targets_only_selected_error_rows(tmp_path):
             api_cost_usd=0.1,
             details={"error": "empty_model_response"},
         )
+    finally:
+        db.close()
+
+    candidates = error_correct_production_data.load_repair_candidates(db_path)
+    dataset_only = error_correct_production_data.load_repair_candidates(db_path, sample_set="dataset")
+    no_agentic = error_correct_production_data.load_repair_candidates(db_path, include_agentic=False)
+    detector_filtered = error_correct_production_data.load_repair_candidates(db_path, detectors=["gpt_nano"])
+
+    assert {(candidate.run_id, candidate.package_name) for candidate in candidates} == {
+        ("budget-good", "a"),
+        ("budget-good", "b"),
+        ("debug-run", "dbg"),
+        ("agentic-run", "agent"),
+        ("budget-controls", "ctrl"),
+    }
+    assert {(candidate.run_id, candidate.package_name) for candidate in dataset_only} == {
+        ("budget-good", "a"),
+        ("budget-good", "b"),
+        ("debug-run", "dbg"),
+        ("agentic-run", "agent"),
+    }
+    assert {(candidate.run_id, candidate.package_name) for candidate in no_agentic} == {
+        ("budget-good", "a"),
+        ("budget-good", "b"),
+        ("debug-run", "dbg"),
+        ("budget-controls", "ctrl"),
+    }
+    assert {(candidate.run_id, candidate.package_name) for candidate in detector_filtered} == {
+        ("debug-run", "dbg"),
+    }
+
+
+def test_partition_repair_candidates_reports_skips(tmp_path):
+    db_path = tmp_path / "eval_results.db"
+    db = _init_db(db_path)
+    try:
+        db.create_eval_run("mixed-errors", "profile:custom-debug")
         db.insert_eval_result(
-            run_id="budget-validation",
-            package_name="z",
+            run_id="mixed-errors",
+            package_name="missing-url",
             version="1.0.0",
             experiment_mode="error",
             intended_mode="hybrid",
             prompt_strategy="zero_shot",
-            detector="together_budget",
-            artifact_filename="z.whl",
-            artifact_url="http://example/z.whl",
+            detector="gpt_nano",
+            artifact_filename="missing-url.whl",
+            artifact_url="",
             verdict=False,
             ground_truth=True,
             heuristic_flags=[],
@@ -103,16 +173,51 @@ def test_load_repair_candidates_targets_only_selected_error_rows(tmp_path):
             api_cost_usd=0.1,
             details={"error": "empty_model_response"},
         )
+        db.insert_eval_result(
+            run_id="mixed-errors",
+            package_name="bad-mode",
+            version="1.0.0",
+            experiment_mode="error",
+            intended_mode="unknown_mode",
+            prompt_strategy="zero_shot",
+            detector="gpt_nano",
+            artifact_filename="bad-mode.whl",
+            artifact_url="http://example/bad-mode.whl",
+            verdict=False,
+            ground_truth=True,
+            heuristic_flags=[],
+            exec_time_ms=10,
+            api_cost_usd=0.1,
+            details={"error": "empty_model_response"},
+        )
+        db.insert_eval_result(
+            run_id="mixed-errors",
+            package_name="good",
+            version="1.0.0",
+            experiment_mode="error",
+            intended_mode="hybrid",
+            prompt_strategy="zero_shot",
+            detector="gpt_nano",
+            artifact_filename="good.whl",
+            artifact_url="http://example/good.whl",
+            verdict=False,
+            ground_truth=True,
+            heuristic_flags=[],
+            exec_time_ms=10,
+            api_cost_usd=0.1,
+            details={"error": "empty_model_response"},
+            )
     finally:
         db.close()
 
-    inventory = error_correct_production_data.load_run_inventory(db_path)
-    selected = error_correct_production_data.select_primary_runs(inventory)
-    candidates = error_correct_production_data.load_repair_candidates(db_path, selected)
+    candidates = error_correct_production_data.load_repair_candidates(db_path)
+    rerunnable, skipped = error_correct_production_data.partition_repair_candidates(candidates)
 
-    assert len(candidates) == 1
-    assert candidates[0].run_id == "budget-good"
-    assert candidates[0].package_name == "c"
+    assert [(candidate.run_id, candidate.package_name) for candidate in rerunnable] == [("mixed-errors", "good")]
+    assert {(item.candidate.package_name, item.reason) for item in skipped} == {
+        ("missing-url", "missing_artifact_url"),
+        ("bad-mode", "unsupported_intended_mode"),
+    }
 
 
 
@@ -150,9 +255,14 @@ def test_apply_repairs_replaces_error_row_in_place_and_preserves_alias_details(t
     finally:
         db.close()
 
-    inventory = error_correct_production_data.load_run_inventory(db_path)
-    selected = error_correct_production_data.select_primary_runs(inventory)
-    candidates = error_correct_production_data.load_repair_candidates(db_path, selected)
+    candidates = error_correct_production_data.load_repair_candidates(db_path)
+    policy = error_correct_production_data.RepairPolicy(
+        max_tokens=16384,
+        llm_retry_attempts=5,
+        llm_retry_delay_seconds=45.0,
+        agentic_retry_attempts=5,
+        agentic_retry_delay_seconds=60.0,
+    )
 
     fake_result = SimpleNamespace(
         experiment_mode="hybrid",
@@ -175,7 +285,7 @@ def test_apply_repairs_replaces_error_row_in_place_and_preserves_alias_details(t
 
     monkeypatch.setattr(error_correct_production_data, "_repair_single_candidate", fake_repair_single_candidate)
 
-    outcomes = error_correct_production_data.apply_repairs(db_path, candidates, dry_run=False)
+    outcomes = error_correct_production_data.apply_repairs(db_path, candidates, policy=policy, dry_run=False)
 
     assert len(outcomes) == 1
     assert outcomes[0].success is True
@@ -211,3 +321,42 @@ def test_apply_repairs_replaces_error_row_in_place_and_preserves_alias_details(t
     assert details["repair_source_tier"] == "profile:all_models:identity-alias-probe"
     assert details["repair_source_row_id"] == candidates[0].row_id
     assert details["original_error_details"]["error"] == "empty_model_response"
+
+
+def test_main_halts_without_backup_when_no_rerunnable_rows(tmp_path, monkeypatch):
+    db_path = tmp_path / "eval_results.db"
+    db = _init_db(db_path)
+    try:
+        db.create_eval_run("broken-run", "profile:custom-debug")
+        db.insert_eval_result(
+            run_id="broken-run",
+            package_name="missing-url",
+            version="1.0.0",
+            experiment_mode="error",
+            intended_mode="hybrid",
+            prompt_strategy="zero_shot",
+            detector="gpt_nano",
+            artifact_filename="missing-url.whl",
+            artifact_url="",
+            verdict=False,
+            ground_truth=True,
+            heuristic_flags=[],
+            exec_time_ms=10,
+            api_cost_usd=0.1,
+            details={"error": "empty_model_response"},
+        )
+    finally:
+        db.close()
+
+    backup_calls: list[Path] = []
+
+    def fake_backup(path: Path) -> Path:
+        backup_calls.append(path)
+        return path.with_suffix(".bak")
+
+    monkeypatch.setattr(error_correct_production_data, "_backup_db", fake_backup)
+
+    rc = error_correct_production_data.main(["--db", str(db_path), "--apply"])
+
+    assert rc == 1
+    assert backup_calls == []
