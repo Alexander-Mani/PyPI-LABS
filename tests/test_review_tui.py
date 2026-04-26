@@ -308,6 +308,10 @@ def test_model_memory_probe_actions_are_source_free_sidecars(tmp_path):
     assert production_preview.section == review_tui.SECTION_DRY_RUNS
     assert production_preview.command[production_preview.command.index("--scope") + 1] == "production"
     assert production_preview.command[production_preview.command.index("--profile") + 1] == "all_models"
+    assert production_preview.command[production_preview.command.index("--max-tokens") + 1] == "8192"
+    assert production_preview.command[production_preview.command.index("--timeout") + 1] == "120"
+    assert production_preview.command[production_preview.command.index("--retries") + 1] == "2"
+    assert production_preview.command[production_preview.command.index("--retry-delay") + 1] == "20"
     assert budget.section == review_tui.SECTION_DEPLOYMENT
     assert budget.command[:2] == ("/py", str(tmp_path / "scripts" / "model_memory_probe.py"))
     assert budget.command[budget.command.index("--scope") + 1] == "curated"
@@ -316,7 +320,10 @@ def test_model_memory_probe_actions_are_source_free_sidecars(tmp_path):
     assert all_models.double_confirm is True
     assert production_run.section == review_tui.SECTION_EXPERIMENT
     assert production_run.command[production_run.command.index("--scope") + 1] == "production"
-    assert production_run.command[production_run.command.index("--max-tokens") + 1] == "4096"
+    assert production_run.command[production_run.command.index("--max-tokens") + 1] == "8192"
+    assert production_run.command[production_run.command.index("--timeout") + 1] == "120"
+    assert production_run.command[production_run.command.index("--retries") + 1] == "2"
+    assert production_run.command[production_run.command.index("--retry-delay") + 1] == "20"
     assert "--progress" in production_run.command
 
 
