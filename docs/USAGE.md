@@ -420,18 +420,19 @@ same working tree or DB path. Two dedicated scripts support the thesis-analysis
 workflow against the configured analysis DB:
 
 ```bash
-# Preview all matching error rows in the analysis DB.
+# Preview all non-validation error rows in the analysis DB.
 ./.venv/bin/python scripts/error_correct_production_data.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --dry-run
 
-# Create append-only correction runs for all matching rerunnable error rows.
-./.venv/bin/python scripts/error_correct_production_data.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --apply
+# Create append-only correction runs with compact live progress.
+./.venv/bin/python scripts/error_correct_production_data.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --apply --progress always
 
 # Generate thesis-ready CSV/Markdown summaries from the canonical latest-complete runs.
 ./.venv/bin/python scripts/summarize_thesis_eval_db.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --out-dir analysis/eval_db/latest
 ```
 
 `error_correct_production_data.py` now scans the configured analysis DB for all
-matching `experiment_mode="error"` rows, across run families by default. It
+matching `experiment_mode="error"` rows, across run families by default, but it
+excludes validation tiers and existing `:repair` runs unless you opt in. It
 supports filters such as `--sample-set`, `--run-id`, `--detector`, and
 `--intended-mode`, then classifies each matched row as rerunnable or skipped
 before any DB backup or API spend happens.
@@ -443,7 +444,10 @@ Original source rows remain untouched. Non-agentic repairs force a larger token
 budget and stronger retry policy. Agentic repairs keep the same detector identity
 but add script-level retries for deployment-availability failures. If no rows
 match, or all matched rows are skipped during preflight, the script exits
-nonzero and does not create a backup.
+nonzero and does not create a backup. By default the operator output is compact:
+it prints grouped preflight counts, runs a live repair progress view, and writes
+detailed analyzer engine logs to a separate repair log file instead of dumping
+prompt/extractor traces inline.
 
 `summarize_thesis_eval_db.py` uses the same latest-complete selection policy and
 emits:
@@ -502,8 +506,8 @@ Experiment Suite` contains actual analyzer runs and warns when the active
 context's configured analysis DB already contains result rows.
 
 The `Database` section also exposes the production-study DB workflow directly:
-- preview whole-DB error reruns against the configured analysis DB
-- create append-only correction runs for those matching error rows
+- preview non-validation DB error reruns against the configured analysis DB
+- create append-only correction runs for those matching error rows with live progress
 - summarize canonical raw and cleaned thesis-analysis views from the same configured DB
 
 The canonical experiment actions are organized so static baselines run only via
