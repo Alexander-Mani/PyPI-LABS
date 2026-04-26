@@ -109,3 +109,14 @@ def test_eval_results_keep_error_rows_for_distinct_intended_modes(monkeypatch, t
     rows = db.get_eval_results_for_run("run-1")
     assert [row["intended_mode"] for row in rows] == ["hybrid", "llm_raw"]
     assert [row["details"]["error"] for row in rows] == ["hybrid failed", "raw failed"]
+
+
+def test_eval_run_defaults_sample_set_to_dataset(monkeypatch, tmp_path):
+    monkeypatch.setattr(DBManager, "DB_PATH", tmp_path / "eval_results.db")
+    db = DBManager()
+    db.create_eval_run("run-1", "budget")
+    db.close()
+
+    rows = DBManager().fetch_many("SELECT run_id, tier, sample_set FROM eval_run", ())
+
+    assert rows == [{"run_id": "run-1", "tier": "budget", "sample_set": "dataset"}]

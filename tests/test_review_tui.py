@@ -293,6 +293,7 @@ def test_identity_alias_probe_is_standalone_all_models_action(tmp_path):
     assert alias.section == review_tui.SECTION_EXPERIMENT
     assert alias.command[:2] == ("/py", str(tmp_path / "src" / "analyzer" / "evaluate.py"))
     assert alias.command[alias.command.index("--profile") + 1] == "all_models"
+    assert alias.command[alias.command.index("--sample-set") + 1] == "dataset"
     assert "--identity-alias-probe" in alias.command
     assert "--sast-only" not in alias.command
     assert "--only-agentic" not in alias.command
@@ -328,6 +329,7 @@ def test_model_memory_probe_actions_are_source_free_sidecars(tmp_path):
     assert all_models.double_confirm is True
     assert production_run.section == review_tui.SECTION_EXPERIMENT
     assert production_run.command[production_run.command.index("--scope") + 1] == "production"
+    assert production_run.command[production_run.command.index("--sample-set") + 1] == "dataset"
     assert production_run.command[production_run.command.index("--max-tokens") + 1] == "8192"
     assert production_run.command[production_run.command.index("--timeout") + 1] == "120"
     assert production_run.command[production_run.command.index("--retries") + 1] == "2"
@@ -349,6 +351,23 @@ def test_full_model_runs_skip_static_for_every_profile(tmp_path):
         if action.section == review_tui.SECTION_EXPERIMENT and "--sast-only" in action.command
     ]
     assert [action.id for action in static_actions] == ["experiment-static-baseline"]
+
+
+def test_sample_set_is_applied_to_canonical_experiment_actions_only(tmp_path):
+    actions = review_tui.build_actions(tmp_path, python_executable="/py", sample_set="controls")
+
+    full = review_tui.action_by_id("experiment-full-budget", actions)
+    static = review_tui.action_by_id("experiment-static-baseline", actions)
+    alias = review_tui.action_by_id("experiment-identity-alias-probe", actions)
+    production_probe = review_tui.action_by_id("experiment-production-memory-probe-all-models", actions)
+    gemini_only = review_tui.action_by_id("experiment-gemini-only-full", actions)
+    bakeoff = review_tui.action_by_id("experiment-frontier-bakeoff", actions)
+
+    for action in (full, static, alias, production_probe):
+        assert action.command[action.command.index("--sample-set") + 1] == "controls"
+
+    assert "--sample-set" not in gemini_only.command
+    assert "--sample-set" not in bakeoff.command
 
 
 def test_safe_action_executes_with_repo_root_cwd_through_runner(tmp_path):

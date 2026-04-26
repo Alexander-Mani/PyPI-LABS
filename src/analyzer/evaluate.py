@@ -12,6 +12,7 @@ labels are stored at insert time and never passed to extractors or adapters.
 Usage:
     python src/analyzer/evaluate.py [--config PATH] [--profile budget]
                                     [--tier budget|medium|frontier]
+                                    [--sample-set dataset|controls|both]
                                     [--max-tokens N]
                                     [--gemini on|off]
                                     [--skip-validation] [--sast-only]
@@ -83,6 +84,7 @@ _COST_DIVERGENCE_WARN_THRESHOLD = 0.20
 _STEM_RE = re.compile(r"^(.+?)-(\d[^-]*)(?:-.*)?$")
 _RUN_ID_PREFIX_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 _PROFILES_PATH = _REPO_ROOT / "configs" / "evaluation_profiles.yaml"
+_VALID_SAMPLE_SETS = ("dataset", "controls", "both")
 
 
 @dataclass(frozen=True)
@@ -246,6 +248,48 @@ def _apply_gemini_toggle(stems: set[str], *, gemini_enabled: bool) -> set[str]:
     return filtered
 
 
+def _normalize_sample_set_arg(
+    sample_set: str,
+    *,
+    include_controls_alias: bool = False,
+) -> str:
+    if include_controls_alias:
+        if sample_set != "dataset":
+            raise SystemExit(
+                "HALT: --include-controls is the legacy alias for '--sample-set both' "
+                "and cannot be combined with another --sample-set value."
+            )
+        return "both"
+    if sample_set not in _VALID_SAMPLE_SETS:
+        raise SystemExit(
+            "HALT: --sample-set must be one of "
+            + ", ".join(_VALID_SAMPLE_SETS)
+        )
+    return sample_set
+
+
+def _resolve_sample_selection(
+    sample_set: str,
+    *,
+    include_controls: bool | None = None,
+    package_limits: dict[str, int] | None = None,
+) -> tuple[bool, dict[str, int]]:
+    limits = dict(package_limits or {})
+    if sample_set == "dataset":
+        limits["control"] = 0
+        return False, limits
+    if sample_set == "controls":
+        limits["malicious"] = 0
+        limits["benign"] = 0
+        return True, limits
+    if sample_set == "both":
+        return True, limits
+    raise SystemExit(
+        "HALT: unknown sample set "
+        f"{sample_set!r}; expected one of {', '.join(_VALID_SAMPLE_SETS)}"
+    )
+
+
 def _collapse_error(details: dict, limit: int = 300) -> str:
     message = str(details.get("error") or details)
     qualifier = str(details.get("protocol_category") or details.get("parse_error") or "").strip()
@@ -343,6 +387,7 @@ class EvaluationRunner:
         tier: str = "budget",
         profile: str | None = None,
         model_config_stems: set[str] | None = None,
+        sample_set: str = "dataset",
         include_controls: bool = False,
         package_limits: dict[str, int] | None = None,
         progress_enabled: bool = False,
@@ -358,6 +403,7 @@ class EvaluationRunner:
         self._tier = tier
         self._profile = profile
         self._gemini_enabled = gemini_enabled
+        self._sample_set = sample_set
         base_run_label = f"profile:{profile}" if profile else f"tier:{tier}"
         self._run_label = base_run_label if gemini_enabled else f"{base_run_label}:gemini-off"
         self._include_controls = include_controls
@@ -687,6 +733,7 @@ class EvaluationRunner:
             resolver_policy = json.dumps({
                 "version_strategy": "latest_labelled_stable",
                 "artifact_policy": "all",
+                "sample_set": self._sample_set,
                 "package_limits": self._package_limits,
                 "pre_release_policy": "ignore_unless_no_stable",
                 "metric_unit": "package_version",
@@ -842,7 +889,7 @@ class EvaluationRunner:
             run_label = f"{run_label}:identity-alias-probe"
         elif not sast_only and task_scope != "all":
             run_label = f"{run_label}:{task_scope}"
-        self._db.create_eval_run(run_id, tier=run_label)
+        self._db.create_eval_run(run_id, tier=run_label, sample_set=self._sample_set)
 
         if (
             not skip_validation
@@ -882,6 +929,7 @@ class EvaluationRunner:
                     "samples_root": self._samples_root,
                     "db_path": DBManager.DB_PATH,
                     "human_log_path": get_active_log_path(),
+                    "sample_set": self._sample_set,
                     "package_limits": self._package_limits,
                     "include_controls": self._include_controls,
                 },
@@ -891,7 +939,11 @@ class EvaluationRunner:
             samples = self._resolve_simulator_samples(download=not dry_run_resolution)
             self._log_sample_plan(samples)
 
-            if not any(sample.ground_truth for sample in samples) and not sast_only:
+            if (
+                not any(sample.ground_truth for sample in samples)
+                and not sast_only
+                and self._sample_set != "controls"
+            ):
                 raise SystemExit(
                     "HALT: no labelled malicious versions were resolved from the simulator. "
                     "Cannot compute Recall or F1 without malware samples. Stage and upload "
@@ -975,7 +1027,7 @@ class EvaluationRunner:
                         if pkg.heuristic_flags:
                             run_log.info(f"    Heuristic flags: {', '.join(pkg.heuristic_flags)}")
                         detector_pkg = pkg
-                        result_details_extra = None
+                        result_details_extra = {"sample_set": self._sample_set}
                         if self._identity_alias_probe:
                             alias_name, alias_version = self._identity_alias_for(
                                 sample.package_name, sample.version
@@ -986,7 +1038,7 @@ class EvaluationRunner:
                                 alias_version=alias_version,
                             )
                             detector_pkg = masked.package
-                            result_details_extra = masked.details()
+                            result_details_extra.update(masked.details())
                             if raw_log is not None:
                                 raw_log.emit(
                                     "identity_alias.mask",
@@ -1095,7 +1147,11 @@ class EvaluationRunner:
         )
 
         val_id = _make_run_id(getattr(self, "_run_id_prefix", None), validation=True)
-        self._db.create_eval_run(val_id, tier=f"{self._run_label}-validation")
+        self._db.create_eval_run(
+            val_id,
+            tier=f"{self._run_label}-validation",
+            sample_set=self._sample_set,
+        )
         validation_archive = self._download_sample(benign_sample)
         pkg = self._extractor.extract(validation_archive)
         pkg.name    = benign_sample.package_name
@@ -1114,6 +1170,7 @@ class EvaluationRunner:
             sample_role=benign_sample.sample_role,
             attack_vector=benign_sample.attack_vector,
             resolver_policy=benign_sample.resolver_policy,
+            result_details_extra={"sample_set": self._sample_set},
         )
 
         llm_results = [r for r in results if r.experiment_mode != "static"]
@@ -1380,7 +1437,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--include-controls",
         action="store_true",
-        help="Include high-volume controls in simulator-resolved evaluation",
+        help="Legacy alias for '--sample-set both'.",
+    )
+    parser.add_argument(
+        "--sample-set",
+        choices=_VALID_SAMPLE_SETS,
+        default="dataset",
+        help="Resolved sample universe: dataset, controls, or both (default: dataset).",
     )
     parser.add_argument(
         "--progress",
@@ -1427,6 +1490,11 @@ if __name__ == "__main__":
         args.skip_validation = True
         if args.run_id_prefix is None:
             args.run_id_prefix = "canonical-v2-alias"
+    sample_set = _normalize_sample_set_arg(
+        args.sample_set,
+        include_controls_alias=args.include_controls,
+    )
+    args.sample_set = sample_set
     with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
@@ -1474,13 +1542,19 @@ if __name__ == "__main__":
         args.progress,
         dry_run_resolution=args.dry_run_resolution,
     )
+    effective_include_controls, effective_package_limits = _resolve_sample_selection(
+        sample_set,
+        include_controls=profile_include_controls,
+        package_limits=profile_package_limits,
+    )
     EvaluationRunner(
         cfg,
         tier=tier,
         profile=profile_name,
         model_config_stems=model_config_stems,
-        include_controls=args.include_controls or bool(profile_include_controls),
-        package_limits=profile_package_limits,
+        sample_set=sample_set,
+        include_controls=effective_include_controls,
+        package_limits=effective_package_limits,
         progress_enabled=progress_enabled,
         run_id_prefix=args.run_id_prefix,
         gemini_enabled=gemini_enabled,

@@ -357,12 +357,15 @@ def test_run_probe_writes_v2_jsonl_with_summary_and_costs(monkeypatch, tmp_path)
     records = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     assert records[0]["event"] == "run.start"
     assert records[0]["probe_schema_version"] == 2
+    assert records[0]["sample_set"] == "dataset"
     result_records = [record for record in records if record["event"] == "probe.result"]
     assert len(result_records) == 2
     assert all(record["parse_status"] == "ok_parsed" for record in result_records)
+    assert all(record["sample_set"] == "dataset" for record in result_records)
     assert all(record["package_match"] is True for record in result_records)
     assert all(record["exact_match"] is True for record in result_records)
     assert records[-1]["event"] == "run.summary"
+    assert records[-1]["sample_set"] == "dataset"
     assert records[-1]["recognized_package_true"] == 1
     assert records[-1]["recognized_exact_version_true"] == 1
     assert records[-1]["by_attack_vector"]["dependency_confusion"]["exact_true"] == 1

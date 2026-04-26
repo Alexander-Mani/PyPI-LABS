@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS eval_run (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id     TEXT NOT NULL UNIQUE,
     tier       TEXT NOT NULL DEFAULT 'unknown',
+    sample_set TEXT NOT NULL DEFAULT 'dataset',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -50,7 +51,7 @@ CREATE INDEX IF NOT EXISTS idx_eval_result_mode ON eval_result(run_id, experimen
 CREATE INDEX IF NOT EXISTS idx_eval_result_sample
     ON eval_result(run_id, package_name, version, artifact_filename);
 
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;
 """
 
 
@@ -78,6 +79,8 @@ class DBManager(DBCore):
             self._migrate_eval_result_v3()
         if self._needs_v4_migration():
             self._migrate_eval_result_v4()
+        if self._needs_v5_migration():
+            self._migrate_eval_run_v5()
         self.cursor.executescript(_EVAL_SCHEMA)
         self.conn.commit()
 
@@ -100,6 +103,19 @@ class DBManager(DBCore):
             for row in self.cursor.execute("PRAGMA table_info(eval_result)").fetchall()
         }
         return "intended_mode" not in columns
+
+    def _needs_v5_migration(self) -> bool:
+        version = self.cursor.execute("PRAGMA user_version").fetchone()[0]
+        table = self.cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='eval_run'"
+        ).fetchone()
+        if not table or version >= 5:
+            return False
+        columns = {
+            row[1]
+            for row in self.cursor.execute("PRAGMA table_info(eval_run)").fetchall()
+        }
+        return "sample_set" not in columns
 
     def _migrate_eval_result_v3(self) -> None:
         """
@@ -223,14 +239,29 @@ class DBManager(DBCore):
         )
         self.conn.commit()
 
+    def _migrate_eval_run_v5(self) -> None:
+        self.cursor.executescript(
+            """
+            ALTER TABLE eval_run
+                ADD COLUMN sample_set TEXT NOT NULL DEFAULT 'dataset';
+
+            UPDATE eval_run
+               SET sample_set = 'dataset'
+             WHERE sample_set IS NULL OR sample_set = '';
+
+            PRAGMA user_version = 5;
+            """
+        )
+        self.conn.commit()
+
     # ------------------------------------------------------------------
     # Evaluation pipeline CRUD
     # ------------------------------------------------------------------
 
-    def create_eval_run(self, run_id: str, tier: str = "unknown") -> None:
+    def create_eval_run(self, run_id: str, tier: str = "unknown", sample_set: str = "dataset") -> None:
         self.write_one(
-            "INSERT OR IGNORE INTO eval_run (run_id, tier) VALUES (?, ?)",
-            (run_id, tier),
+            "INSERT OR IGNORE INTO eval_run (run_id, tier, sample_set) VALUES (?, ?, ?)",
+            (run_id, tier, sample_set),
         )
 
     def insert_eval_result(

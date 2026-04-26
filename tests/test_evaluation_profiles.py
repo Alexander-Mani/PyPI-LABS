@@ -19,6 +19,8 @@ from evaluate import (  # noqa: E402
     _config_stems_for_tier,
     _load_evaluation_profile,
     _make_run_id,
+    _normalize_sample_set_arg,
+    _resolve_sample_selection,
 )
 from simulator_resolver import IndexArtifact  # noqa: E402
 
@@ -154,6 +156,42 @@ def test_profile_loader_accepts_package_limits(monkeypatch):
 
     assert profile.include_controls is True
     assert profile.package_limits == {"malicious": 2, "control": 2, "benign": 0}
+
+
+def test_sample_set_overlay_keeps_dataset_default_and_supports_controls_only():
+    include_controls, limits = _resolve_sample_selection(
+        "dataset",
+        include_controls=False,
+        package_limits={"malicious": 2, "control": 2, "benign": 0},
+    )
+    assert include_controls is False
+    assert limits == {"malicious": 2, "control": 0, "benign": 0}
+
+    include_controls, limits = _resolve_sample_selection(
+        "controls",
+        include_controls=False,
+        package_limits={"malicious": 2, "control": 2, "benign": 0},
+    )
+    assert include_controls is True
+    assert limits == {"malicious": 0, "control": 2, "benign": 0}
+
+    include_controls, limits = _resolve_sample_selection(
+        "both",
+        include_controls=False,
+        package_limits={"malicious": 2, "control": 2, "benign": 0},
+    )
+    assert include_controls is True
+    assert limits == {"malicious": 2, "control": 2, "benign": 0}
+
+
+def test_include_controls_is_legacy_alias_for_sample_set_both():
+    assert _normalize_sample_set_arg("dataset", include_controls_alias=True) == "both"
+    try:
+        _normalize_sample_set_arg("controls", include_controls_alias=True)
+    except SystemExit as exc:
+        assert "--include-controls" in str(exc)
+    else:  # pragma: no cover - defensive failure path
+        raise AssertionError("legacy include-controls alias should reject conflicting sample-set")
 
 
 def test_gemini_only_test_profile_uses_expected_limits_and_configs():
