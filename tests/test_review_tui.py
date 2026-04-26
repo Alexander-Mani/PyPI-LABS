@@ -81,6 +81,9 @@ def test_action_registry_contains_expected_sectioned_actions(tmp_path):
         "deployment-smoke-test",
         "deployment-restart-services",
         "db-status",
+        "db-production-repair-dry-run",
+        "db-production-repair-apply",
+        "db-production-summary",
         "archive-db-dry-run",
         "archive-db",
         "archive-db-no-init",
@@ -147,6 +150,11 @@ def test_safety_and_confirmation_policy(tmp_path):
     assert by_id["deployment-smoke-test"].requires_clean_db is True
     assert by_id["archive-db"].safety == review_tui.SAFETY_MUTATES_DB
     assert by_id["archive-db"].confirm is True
+    assert by_id["db-production-repair-dry-run"].safety == review_tui.SAFETY_SAFE
+    assert by_id["db-production-repair-apply"].safety == review_tui.SAFETY_API_COST
+    assert by_id["db-production-repair-apply"].confirm is True
+    assert by_id["db-production-repair-apply"].double_confirm is True
+    assert by_id["db-production-summary"].safety == review_tui.SAFETY_SAFE
     assert by_id["tests-all"].safety == review_tui.SAFETY_LONG_RUNNING
 
 
@@ -373,6 +381,30 @@ def test_sqlite_actions_use_readonly_immutable_db_urls(tmp_path):
         assert str(tmp_path / "src" / "data" / "eval_results.db") in action.command[3]
     assert "limit 30" in review_tui.action_by_id("db-recent", actions).command[4].lower()
     assert "experiment_mode = 'error'" in review_tui.action_by_id("db-errors", actions).command[4]
+
+
+def test_production_db_actions_target_repo_root_eval_db(tmp_path):
+    actions = review_tui.build_actions(tmp_path, python_executable="/py")
+    preview = review_tui.action_by_id("db-production-repair-dry-run", actions)
+    apply = review_tui.action_by_id("db-production-repair-apply", actions)
+    summary = review_tui.action_by_id("db-production-summary", actions)
+
+    expected_db = str(tmp_path / "eval_results.db")
+
+    for action in (preview, apply, summary):
+        assert action.command[0] == "/py"
+        assert expected_db in action.command
+
+    assert preview.command[:2] == ("/py", str(tmp_path / "scripts" / "error_correct_production_data.py"))
+    assert "--dry-run" in preview.command
+    assert "--apply" not in preview.command
+
+    assert apply.command[:2] == ("/py", str(tmp_path / "scripts" / "error_correct_production_data.py"))
+    assert "--apply" in apply.command
+    assert "--dry-run" not in apply.command
+
+    assert summary.command[:2] == ("/py", str(tmp_path / "scripts" / "summarize_thesis_eval_db.py"))
+    assert "--db" in summary.command
 
 
 def test_db_archive_warning_detects_existing_result_rows(tmp_path):

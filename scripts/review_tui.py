@@ -43,6 +43,7 @@ EXPERIMENT_PROFILES: tuple[tuple[str, str], ...] = (
     ("all_models", "All models"),
 )
 HIGH_COST_PROFILES = {"frontier", "all_models"}
+SAMPLE_SET_SEQUENCE: tuple[str, ...] = ("dataset", "controls", "both")
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,10 @@ class ReviewContext:
     @property
     def db_path(self) -> Path:
         return self.repo_root / "src" / "data" / "eval_results.db"
+
+    @property
+    def production_db_path(self) -> Path:
+        return self.repo_root / "eval_results.db"
 
     @property
     def deployed(self) -> bool:
@@ -564,17 +569,37 @@ def _section_has_gemini_toggle(section_id: str) -> bool:
     return section_id in {SECTION_DEPLOYMENT, SECTION_DRY_RUNS, SECTION_EXPERIMENT}
 
 
+def _sample_set_label(sample_set: str) -> str:
+    return sample_set.replace("_", " ").title()
+
+
+def _section_has_sample_set_toggle(section_id: str) -> bool:
+    return section_id == SECTION_EXPERIMENT
+
+
+def _next_sample_set(sample_set: str) -> str:
+    try:
+        index = SAMPLE_SET_SEQUENCE.index(sample_set)
+    except ValueError:
+        return SAMPLE_SET_SEQUENCE[0]
+    return SAMPLE_SET_SEQUENCE[(index + 1) % len(SAMPLE_SET_SEQUENCE)]
+
+
 def build_actions(
     repo_root: Path = _REPO_ROOT,
     *,
     python_executable: str = sys.executable,
     gemini_enabled: bool = True,
+    sample_set: str = "dataset",
     context: ReviewContext | None = None,
 ) -> tuple[ReviewAction, ...]:
     context = context or _default_local_context(repo_root, python_executable)
     gemini = _gemini_value(gemini_enabled)
 
-    def evaluate(profile: str, *args: str) -> tuple[str, ...]:
+    def evaluate(profile: str, *args: str, sample_set_override: str | None = None) -> tuple[str, ...]:
+        extra_args: tuple[str, ...] = ()
+        if sample_set_override is not None:
+            extra_args = ("--sample-set", sample_set_override)
         return _context_script(
             context,
             "src/analyzer/evaluate.py",
@@ -582,14 +607,18 @@ def build_actions(
             profile,
             "--gemini",
             gemini,
+            *extra_args,
             *args,
         )
 
     def smoke(*args: str) -> tuple[str, ...]:
         return _context_script(context, "scripts/litellm_smoke.py", *args, "--gemini", gemini)
 
-    def memory_probe(*args: str) -> tuple[str, ...]:
-        return _context_script(context, "scripts/model_memory_probe.py", *args, "--gemini", gemini)
+    def memory_probe(*args: str, sample_set_override: str | None = None) -> tuple[str, ...]:
+        extra_args: tuple[str, ...] = ()
+        if sample_set_override is not None:
+            extra_args = ("--sample-set", sample_set_override)
+        return _context_script(context, "scripts/model_memory_probe.py", *args, *extra_args, "--gemini", gemini)
 
     def deploy(
         profile: str,
@@ -754,7 +783,15 @@ def build_actions(
             section=SECTION_EXPERIMENT,
             title=f"Full {label} model run",
             description="Run hybrid, raw LLM, and agentic adapters only; static baseline is a separate action.",
-            command=evaluate(profile, "--skip-static", "--run-id-prefix", "canonical-v2", "--progress", "always"),
+            command=evaluate(
+                profile,
+                "--skip-static",
+                "--run-id-prefix",
+                "canonical-v2",
+                "--progress",
+                "always",
+                sample_set_override=sample_set,
+            ),
             safety=SAFETY_API_COST,
             confirm=True,
             double_confirm=high_cost,
@@ -773,6 +810,7 @@ def build_actions(
                 f"canonical-v2-{slug}",
                 "--progress",
                 "always",
+                sample_set_override=sample_set,
             ),
             safety=SAFETY_API_COST,
             confirm=True,
@@ -791,6 +829,7 @@ def build_actions(
                 f"canonical-v2-{slug}-agentic",
                 "--progress",
                 "always",
+                sample_set_override=sample_set,
             ),
             safety=SAFETY_API_COST,
             confirm=True,
@@ -927,8 +966,16 @@ def build_actions(
             id="experiment-static-baseline",
             section=SECTION_EXPERIMENT,
             title="Static baseline once",
-            description="Run Bandit, Semgrep, and GuardDog once over the canonical artifact set.",
-            command=evaluate("budget", "--sast-only", "--run-id-prefix", "canonical-v2-static", "--progress", "always"),
+            description="Run Bandit, Semgrep, and GuardDog once over the selected sample set.",
+            command=evaluate(
+                "budget",
+                "--sast-only",
+                "--run-id-prefix",
+                "canonical-v2-static",
+                "--progress",
+                "always",
+                sample_set_override=sample_set,
+            ),
             safety=SAFETY_LONG_RUNNING,
             confirm=True,
             requires_clean_db=True,
@@ -941,7 +988,13 @@ def build_actions(
                 "Run one masked-identity hybrid zero-shot call per non-agentic "
                 "model; no static, no raw, no agentic."
             ),
-            command=evaluate("all_models", "--identity-alias-probe", "--progress", "always"),
+            command=evaluate(
+                "all_models",
+                "--identity-alias-probe",
+                "--progress",
+                "always",
+                sample_set_override=sample_set,
+            ),
             safety=SAFETY_API_COST,
             confirm=True,
             double_confirm=True,
@@ -972,6 +1025,7 @@ def build_actions(
                 "20",
                 "--progress",
                 "always",
+                sample_set_override=sample_set,
             ),
             safety=SAFETY_API_COST,
             confirm=True,
@@ -1007,6 +1061,53 @@ def build_actions(
             title="DB status",
             description="Show DB path, counts, and latest run metadata.",
             command=_db_status_command(context),
+        ),
+        ReviewAction(
+            id="db-production-repair-dry-run",
+            section=SECTION_DATABASE,
+            title="Preview production DB correction runs",
+            description="Show which source error rows would be rerun and which append-only :repair runs would be created in the repo-root production DB.",
+            command=(
+                *_context_script(
+                    context,
+                    "scripts/error_correct_production_data.py",
+                    "--db",
+                    str(context.production_db_path),
+                    "--dry-run",
+                ),
+            ),
+        ),
+        ReviewAction(
+            id="db-production-repair-apply",
+            section=SECTION_DATABASE,
+            title="Create production DB correction runs",
+            description="Rerun only source error rows, spend API money as needed, and append new :repair runs into the repo-root production DB.",
+            command=(
+                *_context_script(
+                    context,
+                    "scripts/error_correct_production_data.py",
+                    "--db",
+                    str(context.production_db_path),
+                    "--apply",
+                ),
+            ),
+            safety=SAFETY_API_COST,
+            confirm=True,
+            double_confirm=True,
+        ),
+        ReviewAction(
+            id="db-production-summary",
+            section=SECTION_DATABASE,
+            title="Summarize production DB raw + cleaned views",
+            description="Generate raw and cleaned thesis-analysis artifacts from the repo-root production DB, including repair overlays when present.",
+            command=(
+                *_context_script(
+                    context,
+                    "scripts/summarize_thesis_eval_db.py",
+                    "--db",
+                    str(context.production_db_path),
+                ),
+            ),
         ),
         ReviewAction(
             id="archive-db-dry-run",
@@ -1310,14 +1411,19 @@ class _PlainUI:
         actions: Sequence[ReviewAction],
         *,
         gemini_enabled: bool | None = None,
+        sample_set: str | None = None,
     ) -> str:
         print(f"\n{section.title}")
         if gemini_enabled is not None:
             print(f"Gemini: {_gemini_label(gemini_enabled)}")
+        if sample_set is not None:
+            print(f"Sample set: {_sample_set_label(sample_set)}")
         for index, action in enumerate(actions, start=1):
             print(f"{index}. {action.title} [{action.safety}] - {action.description}")
         if gemini_enabled is not None:
             print("g. Toggle Gemini")
+        if sample_set is not None:
+            print("s. Toggle Sample Set")
         print("b. Back")
         print("q. Quit")
         return input("Select action: ").strip().lower()
@@ -1359,11 +1465,14 @@ class _RichUI:
         actions: Sequence[ReviewAction],
         *,
         gemini_enabled: bool | None = None,
+        sample_set: str | None = None,
     ) -> str:
         title = f"[{section.style}]{section.title}[/{section.style}]"
         if gemini_enabled is not None:
             gemini_style = "green" if gemini_enabled else "yellow"
             title += f"  |  Gemini: [{gemini_style}]{_gemini_label(gemini_enabled)}[/{gemini_style}]"
+        if sample_set is not None:
+            title += f"  |  Sample Set: [cyan]{_sample_set_label(sample_set)}[/cyan]"
         table = self.Table(title=title)
         table.add_column("#", justify="right")
         table.add_column("Action")
@@ -1374,6 +1483,8 @@ class _RichUI:
             table.add_row(str(index), action.title, f"[{style}]{action.safety}[/{style}]", action.description)
         if gemini_enabled is not None:
             table.add_row("g", "Toggle Gemini", "", "Switch Gemini/Google models on or off for experiment actions")
+        if sample_set is not None:
+            table.add_row("s", "Toggle Sample Set", "", "Cycle experiment sample set: Dataset, Controls, Both")
         table.add_row("b", "Back", "", "")
         table.add_row("q", "Quit", "", "")
         self.console.print(table)
@@ -1461,13 +1572,14 @@ def run_menu(
     context = context or _default_local_context(repo_root, sys.executable)
     sections = build_sections()
     gemini_enabled = True
+    sample_set = "dataset"
     ui = _make_ui(no_rich)
     ui.print(f"[cyan]Active context:[/cyan] {context_summary(context)}")
     for warning in context_warnings(context):
         ui.print(f"[yellow]Context warning:[/yellow] {warning}")
 
     while True:
-        actions = build_actions(context=context, gemini_enabled=gemini_enabled)
+        actions = build_actions(context=context, gemini_enabled=gemini_enabled, sample_set=sample_set)
         ui.print()
         try:
             section = _resolve_choice(ui.choose_section(sections), sections)
@@ -1483,16 +1595,21 @@ def run_menu(
             continue
 
         while True:
-            actions = build_actions(context=context, gemini_enabled=gemini_enabled)
+            actions = build_actions(context=context, gemini_enabled=gemini_enabled, sample_set=sample_set)
             section_actions = actions_for_section(section.id, actions)
             raw_choice = ui.choose_action(
                 section,
                 section_actions,
                 gemini_enabled=gemini_enabled if _section_has_gemini_toggle(section.id) else None,
+                sample_set=sample_set if _section_has_sample_set_toggle(section.id) else None,
             )
             if _section_has_gemini_toggle(section.id) and raw_choice in {"g", "gemini", "toggle"}:
                 gemini_enabled = not gemini_enabled
                 ui.print(f"Gemini is now {_gemini_label(gemini_enabled)}.")
+                continue
+            if _section_has_sample_set_toggle(section.id) and raw_choice in {"s", "sample", "sample-set"}:
+                sample_set = _next_sample_set(sample_set)
+                ui.print(f"Sample set is now {_sample_set_label(sample_set)}.")
                 continue
             try:
                 action = _resolve_choice(raw_choice, section_actions)
@@ -1508,6 +1625,8 @@ def run_menu(
             ui.print(f"Safety: {action.safety}")
             if _section_has_gemini_toggle(section.id):
                 ui.print(f"Gemini: {_gemini_label(gemini_enabled)}")
+            if _section_has_sample_set_toggle(section.id):
+                ui.print(f"Sample set: {_sample_set_label(sample_set)}")
             if action.requires_clean_db and db_needs_archive_warning(context=context):
                 ui.print("[yellow]Warning: active DB contains previous result rows.[/yellow]")
             ui.print("Command:")
