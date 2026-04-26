@@ -159,6 +159,7 @@ def test_load_repair_candidates_targets_all_error_rows_and_filters(tmp_path):
         db.close()
 
     candidates = error_correct_production_data.load_repair_candidates(db_path)
+    with_agentic = error_correct_production_data.load_repair_candidates(db_path, include_agentic=True)
     dataset_only = error_correct_production_data.load_repair_candidates(db_path, sample_set="dataset")
     no_agentic = error_correct_production_data.load_repair_candidates(db_path, include_agentic=False)
     detector_filtered = error_correct_production_data.load_repair_candidates(db_path, detectors=["gpt_nano"])
@@ -169,6 +170,12 @@ def test_load_repair_candidates_targets_all_error_rows_and_filters(tmp_path):
         ("budget-good", "a"),
         ("budget-good", "b"),
         ("debug-run", "dbg"),
+        ("budget-controls", "ctrl"),
+    }
+    assert {(candidate.run_id, candidate.package_name) for candidate in with_agentic} == {
+        ("budget-good", "a"),
+        ("budget-good", "b"),
+        ("debug-run", "dbg"),
         ("agentic-run", "agent"),
         ("budget-controls", "ctrl"),
     }
@@ -176,7 +183,6 @@ def test_load_repair_candidates_targets_all_error_rows_and_filters(tmp_path):
         ("budget-good", "a"),
         ("budget-good", "b"),
         ("debug-run", "dbg"),
-        ("agentic-run", "agent"),
     }
     assert {(candidate.run_id, candidate.package_name) for candidate in no_agentic} == {
         ("budget-good", "a"),
@@ -409,3 +415,9 @@ def test_load_repair_logging_config_defaults_to_file_only():
     assert cfg["logging"]["console_output"] is False
     assert cfg["logging"]["per_run"] is True
     assert cfg["logging"]["file"].endswith("logs/repair/error_correct_production_data.log")
+
+
+def test_parse_args_defaults_exclude_agentic():
+    args = error_correct_production_data.parse_args(["--db", "/tmp/example.db"])
+
+    assert args.include_agentic == "off"

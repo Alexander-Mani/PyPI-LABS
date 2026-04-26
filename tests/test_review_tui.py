@@ -83,6 +83,8 @@ def test_action_registry_contains_expected_sectioned_actions(tmp_path):
         "db-status",
         "db-production-repair-dry-run",
         "db-production-repair-apply",
+        "db-production-repair-agentic-dry-run",
+        "db-production-repair-agentic-apply",
         "db-production-summary",
         "archive-db-dry-run",
         "archive-db",
@@ -154,6 +156,10 @@ def test_safety_and_confirmation_policy(tmp_path):
     assert by_id["db-production-repair-apply"].safety == review_tui.SAFETY_API_COST
     assert by_id["db-production-repair-apply"].confirm is True
     assert by_id["db-production-repair-apply"].double_confirm is True
+    assert by_id["db-production-repair-agentic-dry-run"].safety == review_tui.SAFETY_SAFE
+    assert by_id["db-production-repair-agentic-apply"].safety == review_tui.SAFETY_API_COST
+    assert by_id["db-production-repair-agentic-apply"].confirm is True
+    assert by_id["db-production-repair-agentic-apply"].double_confirm is True
     assert by_id["db-production-summary"].safety == review_tui.SAFETY_SAFE
     assert by_id["tests-all"].safety == review_tui.SAFETY_LONG_RUNNING
 
@@ -406,30 +412,45 @@ def test_production_db_actions_target_configured_analysis_db(tmp_path):
     actions = review_tui.build_actions(tmp_path, python_executable="/py")
     preview = review_tui.action_by_id("db-production-repair-dry-run", actions)
     apply = review_tui.action_by_id("db-production-repair-apply", actions)
+    legacy_preview = review_tui.action_by_id("db-production-repair-agentic-dry-run", actions)
+    legacy_apply = review_tui.action_by_id("db-production-repair-agentic-apply", actions)
     summary = review_tui.action_by_id("db-production-summary", actions)
 
     expected_db = str(tmp_path / "src" / "data" / "eval_results.db")
 
-    for action in (preview, apply, summary):
+    for action in (preview, apply, legacy_preview, legacy_apply, summary):
         assert action.command[0] == "/py"
         assert expected_db in action.command
 
     assert preview.command[:2] == ("/py", str(tmp_path / "scripts" / "error_correct_production_data.py"))
     assert "--dry-run" in preview.command
     assert "--apply" not in preview.command
+    assert preview.command[preview.command.index("--include-agentic") + 1] == "off"
 
     assert apply.command[:2] == ("/py", str(tmp_path / "scripts" / "error_correct_production_data.py"))
     assert "--apply" in apply.command
     assert "--dry-run" not in apply.command
+    assert apply.command[apply.command.index("--include-agentic") + 1] == "off"
     assert "--progress" in apply.command
     assert "always" in apply.command
+
+    assert legacy_preview.command[:2] == ("/py", str(tmp_path / "scripts" / "error_correct_production_data.py"))
+    assert legacy_preview.command[legacy_preview.command.index("--include-agentic") + 1] == "on"
+    assert legacy_preview.command[legacy_preview.command.index("--intended-mode") + 1] == "agentic"
+
+    assert legacy_apply.command[:2] == ("/py", str(tmp_path / "scripts" / "error_correct_production_data.py"))
+    assert legacy_apply.command[legacy_apply.command.index("--include-agentic") + 1] == "on"
+    assert legacy_apply.command[legacy_apply.command.index("--intended-mode") + 1] == "agentic"
+    assert legacy_apply.command[legacy_apply.command.index("--progress") + 1] == "always"
 
     assert summary.command[:2] == ("/py", str(tmp_path / "scripts" / "summarize_thesis_eval_db.py"))
     assert "--db" in summary.command
     assert preview.title == "Preview DB error reruns"
     assert apply.title == "Create DB error reruns"
+    assert legacy_preview.title == "Preview legacy agentic DB reruns"
+    assert legacy_apply.title == "Create legacy agentic DB reruns"
     assert summary.title == "Summarize thesis DB raw + cleaned views"
-    assert "non-validation error rows" in preview.description
+    assert "non-validation non-agentic error rows" in preview.description
     assert "separate repair log file" in apply.description
 
 

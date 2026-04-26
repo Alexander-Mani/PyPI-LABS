@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -65,6 +66,7 @@ PROTOCOL_RETRY_ERRORS = {
     "unparseable_model_response",
 }
 MIN_REFRESH_INTERVAL_S = 0.75
+PLAIN_HEARTBEAT_INTERVAL_S = 15.0
 
 try:
     from rich.console import Console, Group
@@ -204,10 +206,17 @@ class RepairProgress:
         self.current_detector = ""
         self.current_run = ""
         self.current_result = ""
+        self.current_stage = "idle"
+        self.current_attempt = 0
+        self.current_retry_wait_s = 0.0
+        self._current_started_at = 0.0
         self._console = Console(stderr=True) if self.enabled and Console is not None else None
         self._live = None
         self._last_refresh = 0.0
         self._plain_enabled = bool(plain_enabled and not self.enabled)
+        self._last_plain_heartbeat = 0.0
+        self._stop_event = threading.Event()
+        self._ticker: threading.Thread | None = None
 
     @property
     def active(self) -> bool:
@@ -223,9 +232,15 @@ class RepairProgress:
                 vertical_overflow="ellipsis",
             )
             self._live.start()
+        self._stop_event.clear()
+        self._ticker = threading.Thread(target=self._tick_loop, name="repair-progress", daemon=True)
+        self._ticker.start()
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> bool:
+        self._stop_event.set()
+        if self._ticker is not None:
+            self._ticker.join(timeout=1.0)
         if self._live is not None:
             self._live.stop()
         return False
@@ -238,6 +253,29 @@ class RepairProgress:
         self.current_detector = f"{candidate.detector}:{candidate.intended_mode}:{candidate.prompt_strategy}"
         self.current_run = candidate.run_id
         self.current_result = "running"
+        self.current_stage = "queued"
+        self.current_attempt = 0
+        self.current_retry_wait_s = 0.0
+        self._current_started_at = time.monotonic()
+        self.refresh(force=True)
+
+    def update_stage(
+        self,
+        stage: str,
+        *,
+        attempt: int | None = None,
+        retry_wait_s: float | None = None,
+        current_result: str | None = None,
+    ) -> None:
+        self.current_stage = stage
+        if attempt is not None:
+            self.current_attempt = attempt
+        if retry_wait_s is not None:
+            self.current_retry_wait_s = max(float(retry_wait_s), 0.0)
+        elif stage != "retrying":
+            self.current_retry_wait_s = 0.0
+        if current_result is not None:
+            self.current_result = current_result
         self.refresh(force=True)
 
     def record(self, outcome: RepairProgressOutcome) -> None:
@@ -254,6 +292,8 @@ class RepairProgress:
         self.current_package = outcome.package_label
         self.current_detector = outcome.detector
         self.current_run = outcome.run_label
+        self.current_stage = "done"
+        self.current_retry_wait_s = 0.0
         if self.active:
             self.refresh()
             return
@@ -273,6 +313,32 @@ class RepairProgress:
         self._last_refresh = now
         self._live.refresh()
 
+    def _tick_loop(self) -> None:
+        while not self._stop_event.wait(1.0):
+            if self._current_started_at <= 0:
+                continue
+            if self.active:
+                self.refresh(force=True)
+                continue
+            if not self._plain_enabled:
+                continue
+            now = time.monotonic()
+            if now - self._last_plain_heartbeat < PLAIN_HEARTBEAT_INTERVAL_S:
+                continue
+            self._last_plain_heartbeat = now
+            elapsed_s = max(now - self._current_started_at, 0.0)
+            attempt = self.current_attempt or 1
+            retry_note = (
+                f" retry_wait={self.current_retry_wait_s:.0f}s"
+                if self.current_stage == "retrying" and self.current_retry_wait_s > 0
+                else ""
+            )
+            print(
+                f"Heartbeat: {self.completed}/{self.total_rows} "
+                f"stage={self.current_stage} attempt={attempt} elapsed={elapsed_s:.0f}s"
+                f"{retry_note} current={self.current_package}"
+            )
+
     def _render(self):
         header = Table.grid(expand=True)
         header.add_column(style="bold")
@@ -281,6 +347,8 @@ class RepairProgress:
         header.add_row("Current", self.current_package or "waiting")
         header.add_row("Detector", self.current_detector or "waiting")
         header.add_row("Source Run", self.current_run or "waiting")
+        header.add_row("Stage", self.current_stage or "idle")
+        header.add_row("Attempt", str(self.current_attempt or 0))
 
         stats = Table.grid(expand=True)
         stats.add_column(style="bold")
@@ -289,6 +357,10 @@ class RepairProgress:
         stats.add_row("Still error", str(self.still_error))
         stats.add_row("Skipped", str(self.skipped))
         stats.add_row("API Cost", f"${self.total_cost_usd:.4f}")
+        row_elapsed = max(time.monotonic() - self._current_started_at, 0.0) if self._current_started_at > 0 else 0.0
+        stats.add_row("Row Elapsed", f"{row_elapsed:.1f}s")
+        if self.current_stage == "retrying" and self.current_retry_wait_s > 0:
+            stats.add_row("Retry Wait", f"{self.current_retry_wait_s:.0f}s")
         avg = self.total_elapsed_s / self.completed if self.completed else 0.0
         remaining = max(self.total_rows - self.completed, 0)
         eta = avg * remaining
@@ -374,7 +446,7 @@ def load_repair_candidates(
     run_ids: list[str] | None = None,
     detectors: list[str] | None = None,
     intended_modes: list[str] | None = None,
-    include_agentic: bool = True,
+    include_agentic: bool = False,
     include_validation: bool = False,
     include_repair_runs: bool = False,
 ) -> list[RepairCandidate]:
@@ -652,6 +724,60 @@ def _tune_adapter(adapter: DetectorAdapter, intended_mode: str, policy: RepairPo
         return
 
 
+def _instrument_adapter_with_progress(
+    adapter: DetectorAdapter,
+    progress: RepairProgress | None,
+) -> None:
+    if progress is None:
+        return
+
+    if isinstance(adapter, (LLMAdapter, LLMRawAdapter)):
+        original_call_api = adapter._call_api
+        original_retry_sleep = adapter._retry_sleep
+        original_generic_retry_sleep = adapter._generic_protocol_retry_sleep
+
+        def wrapped_call_api(system, user, **kwargs):
+            attempt = int(kwargs.get("attempt") or 1)
+            progress.update_stage("running", attempt=attempt, current_result="running")
+            return original_call_api(system, user, **kwargs)
+
+        def wrapped_retry_sleep():
+            progress.update_stage(
+                "retrying",
+                attempt=max(progress.current_attempt or 1, 1),
+                retry_wait_s=float(getattr(adapter, "_retry_delay_seconds", 0.0) or 0.0),
+                current_result="retrying",
+            )
+            return original_retry_sleep()
+
+        def wrapped_generic_retry_sleep():
+            progress.update_stage(
+                "retrying",
+                attempt=max(progress.current_attempt or 1, 1),
+                current_result="retrying",
+            )
+            return original_generic_retry_sleep()
+
+        adapter._call_api = wrapped_call_api
+        adapter._retry_sleep = wrapped_retry_sleep
+        adapter._generic_protocol_retry_sleep = wrapped_generic_retry_sleep
+        return
+
+    if isinstance(adapter, AgenticAdapter):
+        original_make_api_call = adapter._make_api_call
+
+        def wrapped_make_api_call(messages, system_prompt=None, **kwargs):
+            turn = int(kwargs.get("turn") or 0)
+            phase = str(kwargs.get("phase") or "turn")
+            progress.update_stage(
+                f"agentic_{phase}",
+                attempt=turn + 1,
+                current_result="running",
+            )
+            return original_make_api_call(messages, system_prompt=system_prompt, **kwargs)
+
+        adapter._make_api_call = wrapped_make_api_call
+
 
 def _looks_retryable(result_details: dict[str, Any]) -> bool:
     if not result_details:
@@ -687,17 +813,27 @@ def _repair_single_candidate(
     download_dir: Path,
     download_cache: dict[str, Path],
     package_cache: dict[Path, PackageInfo],
+    progress: RepairProgress | None = None,
 ) -> tuple[Any, dict[str, Any], int, dict[str, Any] | None]:
+    if progress is not None:
+        progress.update_stage("downloading", current_result="running")
     archive_path = _download_artifact(candidate.artifact_url, download_dir, download_cache)
+    if progress is not None:
+        progress.update_stage("extracting", current_result="running")
     pkg = _extract_package(archive_path, package_cache)
+    if progress is not None:
+        progress.update_stage("preparing package", current_result="running")
     detector_pkg, alias_details = _prepare_package(candidate, pkg)
     adapter = _build_adapter(candidate.detector, candidate.intended_mode)
     _tune_adapter(adapter, candidate.intended_mode, policy)
+    _instrument_adapter_with_progress(adapter, progress)
     system_prompt, template_override = _prompt_overrides(candidate.intended_mode, candidate.prompt_strategy)
 
     attempts = policy.agentic_retry_attempts if candidate.intended_mode == "agentic" else 1
     last_result = None
     for attempt in range(1, attempts + 1):
+        if progress is not None:
+            progress.update_stage("running", attempt=attempt, current_result="running")
         result = adapter.run(
             detector_pkg,
             candidate.prompt_strategy,
@@ -708,6 +844,13 @@ def _repair_single_candidate(
         if result.experiment_mode != "error" or not _looks_retryable(result.details):
             return result, result.details or {}, attempt, alias_details
         if attempt < attempts:
+            if progress is not None:
+                progress.update_stage(
+                    "retrying",
+                    attempt=attempt + 1,
+                    retry_wait_s=policy.agentic_retry_delay_seconds,
+                    current_result="retrying",
+                )
             time.sleep(policy.agentic_retry_delay_seconds)
     if last_result is None:  # pragma: no cover - defensive
         raise RuntimeError("repair rerun produced no result")
@@ -799,6 +942,7 @@ def apply_repairs(
                     download_dir=download_dir,
                     download_cache=download_cache,
                     package_cache=package_cache,
+                    progress=progress,
                 )
                 merged_details = _merged_details(
                     candidate,
@@ -810,6 +954,8 @@ def apply_repairs(
                     heuristic_flags: list[str] = []
                 else:
                     heuristic_flags = list(result.heuristic_flags)
+                if progress is not None:
+                    progress.update_stage("writing result", attempt=repair_attempts, current_result="writing")
                 db.insert_eval_result(
                     run_id=plan.repair_run_id,
                     package_name=candidate.package_name,
@@ -895,8 +1041,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--include-agentic",
         choices=["on", "off"],
-        default="on",
-        help="Include agentic error rows in the repair scope (default: on)",
+        default="off",
+        help="Include agentic error rows in the repair scope (default: off)",
     )
     parser.add_argument(
         "--include-validation",
@@ -1015,6 +1161,21 @@ def main(argv: list[str] | None = None) -> int:
         include_validation=args.include_validation == "on",
         include_repair_runs=args.include_repair_runs == "on",
     )
+    excluded_agentic_rows = 0
+    if args.include_agentic == "off":
+        all_mode_candidates = load_repair_candidates(
+            db_path,
+            sample_set=args.sample_set,
+            run_ids=list(args.run_id),
+            detectors=list(args.detector),
+            intended_modes=list(args.intended_mode),
+            include_agentic=True,
+            include_validation=args.include_validation == "on",
+            include_repair_runs=args.include_repair_runs == "on",
+        )
+        excluded_agentic_rows = sum(
+            1 for candidate in all_mode_candidates if candidate.intended_mode == "agentic"
+        )
     rerunnable_candidates, skipped_candidates = partition_repair_candidates(matched_candidates)
     repair_plans = build_repair_run_plans(rerunnable_candidates)
     matched_run_ids = sorted({candidate.run_id for candidate in matched_candidates})
@@ -1045,6 +1206,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  rerunnable_rows={len(rerunnable_candidates)}")
     print(f"  skipped_rows={len(skipped_candidates)}")
     print(f"  planned_repair_runs={len(repair_plans)}")
+    if args.include_agentic == "off":
+        print(f"  excluded_agentic_rows={excluded_agentic_rows}")
 
     skipped_counts = Counter(item.reason for item in skipped_candidates)
     for reason, count in sorted(skipped_counts.items()):
@@ -1134,6 +1297,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  still_error_rows={remaining}")
     if skipped_candidates:
         print(f"  skipped_rows={len(skipped_candidates)}")
+    if args.include_agentic == "off":
+        print(f"  excluded_agentic_rows={excluded_agentic_rows}")
     print(f"  api_cost_usd=${total_cost:.4f}")
     print(
         f"  exit_status={'0 (all reruns repaired)' if remaining == 0 else '1 (one or more reruns still failed)'}"
