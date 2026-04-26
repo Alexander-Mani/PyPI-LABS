@@ -402,13 +402,13 @@ def test_sqlite_actions_use_readonly_immutable_db_urls(tmp_path):
     assert "experiment_mode = 'error'" in review_tui.action_by_id("db-errors", actions).command[4]
 
 
-def test_production_db_actions_target_repo_root_eval_db(tmp_path):
+def test_production_db_actions_target_configured_analysis_db(tmp_path):
     actions = review_tui.build_actions(tmp_path, python_executable="/py")
     preview = review_tui.action_by_id("db-production-repair-dry-run", actions)
     apply = review_tui.action_by_id("db-production-repair-apply", actions)
     summary = review_tui.action_by_id("db-production-summary", actions)
 
-    expected_db = str(tmp_path / "eval_results.db")
+    expected_db = str(tmp_path / "src" / "data" / "eval_results.db")
 
     for action in (preview, apply, summary):
         assert action.command[0] == "/py"
@@ -424,6 +424,38 @@ def test_production_db_actions_target_repo_root_eval_db(tmp_path):
 
     assert summary.command[:2] == ("/py", str(tmp_path / "scripts" / "summarize_thesis_eval_db.py"))
     assert "--db" in summary.command
+
+
+def test_context_config_analysis_db_path_overrides_repo_default(tmp_path):
+    deployed = tmp_path / "deployed"
+    deployed.mkdir()
+    deployed_python = deployed / "venv" / "bin" / "python"
+    deployed_python.parent.mkdir(parents=True)
+    deployed_python.write_text("", encoding="utf-8")
+    configured_db = tmp_path / "shared" / "analysis.db"
+    config = tmp_path / "review_tui.yaml"
+    config.write_text(
+        f"""
+default_context: deployed
+contexts:
+  deployed:
+    repo_root: {deployed}
+    python: {deployed_python}
+    runner_user: pypi-runner
+    analysis_db_path: {configured_db}
+    litellm_log: /tmp/litellm.log
+    deployment_cwd: {tmp_path}
+    deployment_script: {tmp_path / 'deployment.sh'}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    context = review_tui.resolve_review_context("deployed", config_path=config)
+    actions = review_tui.build_actions(context=context)
+    preview = review_tui.action_by_id("db-production-repair-dry-run", actions)
+
+    assert context.db_path == configured_db.resolve()
+    assert str(configured_db.resolve()) in review_tui.command_preview(preview.command)
 
 
 def test_db_archive_warning_detects_existing_result_rows(tmp_path):

@@ -75,6 +75,7 @@ class ReviewContext:
     python_executable: str
     configured_python: str | None = None
     runner_user: str | None = None
+    analysis_db_path: Path | None = None
     litellm_log: Path = Path("/home/proxy-runner/litellm.log")
     deployment_cwd: Path = _REPO_ROOT
     deployment_script: Path = _REPO_ROOT / "deployment.sh"
@@ -82,11 +83,12 @@ class ReviewContext:
 
     @property
     def db_path(self) -> Path:
-        return self.repo_root / "src" / "data" / "eval_results.db"
-
-    @property
-    def production_db_path(self) -> Path:
-        return self.repo_root / "eval_results.db"
+        if self.analysis_db_path is None:
+            return (self.repo_root / "src" / "data" / "eval_results.db").resolve()
+        path = Path(self.analysis_db_path)
+        if not path.is_absolute():
+            path = self.repo_root / path
+        return path.resolve()
 
     @property
     def deployed(self) -> bool:
@@ -101,6 +103,7 @@ def _default_local_context(repo_root: Path = _REPO_ROOT, python_executable: str 
         python_executable=str(python_executable),
         configured_python=str(python_executable),
         runner_user=None,
+        analysis_db_path=repo_root / "src" / "data" / "eval_results.db",
         litellm_log=Path("/home/proxy-runner/litellm.log"),
         deployment_cwd=repo_root,
         deployment_script=repo_root / "deployment.sh",
@@ -179,6 +182,11 @@ def _context_from_config(name: str, config: dict, *, base: Path, python_fallback
     repo_root = _resolve_path(raw.get("repo_root"), base=base, default=_REPO_ROOT)
     runner_user = raw.get("runner_user")
     configured_python = raw.get("python")
+    analysis_db_path = _resolve_path(
+        raw.get("analysis_db_path"),
+        base=base,
+        default=repo_root / "src" / "data" / "eval_results.db",
+    )
     warnings: list[str] = []
 
     if configured_python is None and runner_user:
@@ -216,6 +224,7 @@ def _context_from_config(name: str, config: dict, *, base: Path, python_fallback
         python_executable=python_path,
         configured_python=configured_python,
         runner_user=runner_user,
+        analysis_db_path=analysis_db_path,
         litellm_log=_resolve_path(raw.get("litellm_log"), base=base, default=Path("/home/proxy-runner/litellm.log")),
         deployment_cwd=_resolve_path(raw.get("deployment_cwd"), base=base, default=_REPO_ROOT),
         deployment_script=_resolve_path(raw.get("deployment_script"), base=base, default=_REPO_ROOT / "deployment.sh"),
@@ -257,6 +266,8 @@ def resolve_review_context(
         warnings = list(context.warnings)
         effective_python = context.python_executable
         configured_python = context.configured_python
+        effective_repo_root = Path(repo_root_override).resolve() if repo_root_override is not None else context.repo_root
+        effective_analysis_db_path = context.db_path
         if python_override is not None:
             configured_python = str(python_override)
             override_path = Path(python_override)
@@ -275,12 +286,17 @@ def resolve_review_context(
                         warnings.append(
                             f"Python override {override_path} is outside {context.repo_root}; expected repo venv is missing: {venv_python}"
                         )
+        if repo_root_override is not None:
+            default_db_path = (context.repo_root / "src" / "data" / "eval_results.db").resolve()
+            if context.db_path == default_db_path:
+                effective_analysis_db_path = effective_repo_root / "src" / "data" / "eval_results.db"
         context = ReviewContext(
             name=context.name,
-            repo_root=Path(repo_root_override).resolve() if repo_root_override is not None else context.repo_root,
+            repo_root=effective_repo_root,
             python_executable=effective_python,
             configured_python=configured_python,
             runner_user=context.runner_user,
+            analysis_db_path=effective_analysis_db_path,
             litellm_log=context.litellm_log,
             deployment_cwd=context.deployment_cwd,
             deployment_script=context.deployment_script,
@@ -292,7 +308,7 @@ def resolve_review_context(
 def context_summary(context: ReviewContext) -> str:
     return (
         f"context={context.name} repo={context.repo_root} "
-        f"python={context.python_executable} db={context.db_path}"
+        f"python={context.python_executable} analysis_db={context.db_path}"
     )
 
 
@@ -334,7 +350,7 @@ def build_sections() -> tuple[Section, ...]:
         Section(
             id=SECTION_DATABASE,
             title="Database",
-            description="Archive, inspect, and summarize eval_results.db.",
+            description="Archive, inspect, repair, and summarize the configured analysis DB.",
             style="yellow",
         ),
         Section(
@@ -483,7 +499,7 @@ def _db_status_command(context: ReviewContext) -> tuple[str, ...]:
     sqlite = shlex.join(["sqlite3", "-header", "-column", f"file:{context.db_path}?mode=ro&immutable=1", query])
     return _context_db_shell(
         context,
-        f"echo 'DB path: {context.db_path}'; "
+        f"echo 'Analysis DB path: {context.db_path}'; "
         f"if [ ! -f {db} ]; then echo 'DB missing'; exit 0; fi; "
         f"{sqlite}",
     )
@@ -639,7 +655,7 @@ def build_actions(
             id="context-status",
             section=SECTION_DEPLOYMENT,
             title="Show active deployment context",
-            description="Show target repo, Python, DB, runner user, and LiteLLM log paths.",
+            description="Show target repo, Python, analysis DB, runner user, and LiteLLM log paths.",
             command=_shell(
                 "printf '%s\n' "
                 + shlex.join([
@@ -648,7 +664,7 @@ def build_actions(
                     f"Configured Python: {context.configured_python or 'not set'}",
                     f"Effective Python: {context.python_executable}",
                     f"Runner user: {context.runner_user or 'current user'}",
-                    f"DB: {context.db_path}",
+                    f"Analysis DB: {context.db_path}",
                     f"LiteLLM log: {context.litellm_log}",
                     f"Deployment cwd: {context.deployment_cwd}",
                     f"Deployment script: {context.deployment_script}",
@@ -1066,13 +1082,13 @@ def build_actions(
             id="db-production-repair-dry-run",
             section=SECTION_DATABASE,
             title="Preview production DB correction runs",
-            description="Show which source error rows would be rerun and which append-only :repair runs would be created in the repo-root production DB.",
+            description="Show which source error rows would be rerun and which append-only :repair runs would be created in the configured analysis DB.",
             command=(
                 *_context_script(
                     context,
                     "scripts/error_correct_production_data.py",
                     "--db",
-                    str(context.production_db_path),
+                    str(context.db_path),
                     "--dry-run",
                 ),
             ),
@@ -1081,13 +1097,13 @@ def build_actions(
             id="db-production-repair-apply",
             section=SECTION_DATABASE,
             title="Create production DB correction runs",
-            description="Rerun only source error rows, spend API money as needed, and append new :repair runs into the repo-root production DB.",
+            description="Rerun only source error rows, spend API money as needed, and append new :repair runs into the configured analysis DB.",
             command=(
                 *_context_script(
                     context,
                     "scripts/error_correct_production_data.py",
                     "--db",
-                    str(context.production_db_path),
+                    str(context.db_path),
                     "--apply",
                 ),
             ),
@@ -1099,13 +1115,13 @@ def build_actions(
             id="db-production-summary",
             section=SECTION_DATABASE,
             title="Summarize production DB raw + cleaned views",
-            description="Generate raw and cleaned thesis-analysis artifacts from the repo-root production DB, including repair overlays when present.",
+            description="Generate raw and cleaned thesis-analysis artifacts from the configured analysis DB, including repair overlays when present.",
             command=(
                 *_context_script(
                     context,
                     "scripts/summarize_thesis_eval_db.py",
                     "--db",
-                    str(context.production_db_path),
+                    str(context.db_path),
                 ),
             ),
         ),
@@ -1412,12 +1428,15 @@ class _PlainUI:
         *,
         gemini_enabled: bool | None = None,
         sample_set: str | None = None,
+        db_path: Path | None = None,
     ) -> str:
         print(f"\n{section.title}")
         if gemini_enabled is not None:
             print(f"Gemini: {_gemini_label(gemini_enabled)}")
         if sample_set is not None:
             print(f"Sample set: {_sample_set_label(sample_set)}")
+        if db_path is not None:
+            print(f"Analysis DB: {db_path}")
         for index, action in enumerate(actions, start=1):
             print(f"{index}. {action.title} [{action.safety}] - {action.description}")
         if gemini_enabled is not None:
@@ -1466,6 +1485,7 @@ class _RichUI:
         *,
         gemini_enabled: bool | None = None,
         sample_set: str | None = None,
+        db_path: Path | None = None,
     ) -> str:
         title = f"[{section.style}]{section.title}[/{section.style}]"
         if gemini_enabled is not None:
@@ -1473,6 +1493,8 @@ class _RichUI:
             title += f"  |  Gemini: [{gemini_style}]{_gemini_label(gemini_enabled)}[/{gemini_style}]"
         if sample_set is not None:
             title += f"  |  Sample Set: [cyan]{_sample_set_label(sample_set)}[/cyan]"
+        if db_path is not None:
+            title += f"  |  Analysis DB: [cyan]{db_path}[/cyan]"
         table = self.Table(title=title)
         table.add_column("#", justify="right")
         table.add_column("Action")
@@ -1602,6 +1624,7 @@ def run_menu(
                 section_actions,
                 gemini_enabled=gemini_enabled if _section_has_gemini_toggle(section.id) else None,
                 sample_set=sample_set if _section_has_sample_set_toggle(section.id) else None,
+                db_path=context.db_path if section.id == SECTION_DATABASE else None,
             )
             if _section_has_gemini_toggle(section.id) and raw_choice in {"g", "gemini", "toggle"}:
                 gemini_enabled = not gemini_enabled

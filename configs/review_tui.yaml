@@ -7,6 +7,7 @@ contexts:
     repo_root: /home/pypi-runner/pypi-scada-repo
     python: /home/pypi-runner/pypi-scada-repo/venv/bin/python
     runner_user: pypi-runner
+    analysis_db_path: /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db
     litellm_log: /home/proxy-runner/litellm.log
     deployment_cwd: .
     deployment_script: deployment.sh
@@ -15,6 +16,7 @@ contexts:
     repo_root: .
     python: null
     runner_user: null
+    analysis_db_path: src/data/eval_results.db
     litellm_log: /home/proxy-runner/litellm.log
     deployment_cwd: .
     deployment_script: deployment.sh
