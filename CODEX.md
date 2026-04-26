@@ -13,6 +13,23 @@ Main subsystems:
 - `samples/`: curated benign and malicious package corpus
 - `overleaf_thesis/`: separate git repo for the report; do not mix its commits with the main repo
 
+## Topology
+
+This project is developed and operated across two different environments.
+
+- Operator/dev checkout:
+  - used to edit code and launch the review TUI
+  - often lives outside the runner account, for example `/home/lexi/PyPi-SCADA`
+- Deployed runner checkout:
+  - `/home/pypi-runner/pypi-scada-repo`
+  - analyzer and simulator actions run under the less-privileged `pypi-runner` account
+- Proxy/model routing:
+  - runs separately from the analyzer workflow
+  - current default log path is `/home/proxy-runner/litellm.log`
+
+Do not assume the operator checkout and deployed checkout are the same tree.
+Do not infer DB paths from repo layout when a TUI context config exists.
+
 ## Current Experiment Shape
 
 Canonical profiles live in `configs/evaluation_profiles.yaml`.
@@ -68,8 +85,9 @@ Related validity probe:
 
 ## Operational Gotchas
 
-- Many experiment actions assume a clean `src/data/eval_results.db`. Check the TUI warning before expensive runs.
-- Thesis analysis and production repair use the repo-root `./eval_results.db`, not `src/data/eval_results.db`.
+- Many experiment actions assume a clean analysis DB. Check the TUI warning before expensive runs.
+- The authoritative analysis DB is context-specific. In the deployed runner topology it is currently `/home/pypi-runner/pypi-scada-repo/src/data/eval_results.db`.
+- The review TUI now reads the analysis DB path from `configs/review_tui.yaml` instead of guessing between repo-root and `src/data/`.
 - Production package resolution depends on the local simulator being available at the configured base URL.
 - LiteLLM/provider behavior is often the real failure mode. Prefer explicit telemetry over guessing from final verdicts.
 - The production memory probe is intentionally expensive: `8192` output tokens, `120s` timeout, `2` retries, `20s` retry delay.
@@ -137,17 +155,17 @@ Canonical non-agentic evaluation:
 
 Production eval DB repair preview:
 ```bash
-./.venv/bin/python scripts/error_correct_production_data.py --db ./eval_results.db --dry-run
+./.venv/bin/python scripts/error_correct_production_data.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --dry-run
 ```
 
 Production eval DB repair apply:
 ```bash
-./.venv/bin/python scripts/error_correct_production_data.py --db ./eval_results.db --apply
+./.venv/bin/python scripts/error_correct_production_data.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --apply
 ```
 
 Thesis summary from production DB:
 ```bash
-./.venv/bin/python scripts/summarize_thesis_eval_db.py --db ./eval_results.db --out-dir analysis/eval_db/latest
+./.venv/bin/python scripts/summarize_thesis_eval_db.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --out-dir analysis/eval_db/latest
 ```
 
 ## Editing Guidance

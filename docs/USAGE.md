@@ -410,19 +410,24 @@ metrics rather than counted as benign.
 
 ## Production Eval DB Repair And Thesis Summary
 
-The repo-root `eval_results.db` can be treated as the authoritative production
-study database for thesis analysis. Two dedicated scripts now support that
-workflow:
+The authoritative analysis DB is deployment-context specific. In the deployed
+runner topology documented here, the active DB lives at:
+
+- `/home/pypi-runner/pypi-scada-repo/src/data/eval_results.db`
+
+Do not assume the operator checkout and the deployed runner checkout share the
+same working tree or DB path. Two dedicated scripts support the thesis-analysis
+workflow against the configured analysis DB:
 
 ```bash
 # Preview the latest-complete canonical + alias repair scope.
-./.venv/bin/python scripts/error_correct_production_data.py --db ./eval_results.db --dry-run
+./.venv/bin/python scripts/error_correct_production_data.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --dry-run
 
-# Apply in-place repairs to selected error rows after creating a timestamped backup.
-./.venv/bin/python scripts/error_correct_production_data.py --db ./eval_results.db --apply
+# Create append-only correction runs for selected error rows after creating a timestamped backup.
+./.venv/bin/python scripts/error_correct_production_data.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --apply
 
 # Generate thesis-ready CSV/Markdown summaries from the selected latest-complete runs.
-./.venv/bin/python scripts/summarize_thesis_eval_db.py --db ./eval_results.db --out-dir analysis/eval_db/latest
+./.venv/bin/python scripts/summarize_thesis_eval_db.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --out-dir analysis/eval_db/latest
 ```
 
 `error_correct_production_data.py` selects the latest complete run for each
@@ -456,7 +461,7 @@ emits:
 - raw and cleaned alias-sensitivity comparisons against canonical hybrid zero-shot rows
 
 These scripts are intentionally hardcoded to the current production-study shape.
-They should point at the repo-root `eval_results.db`, not `src/data/eval_results.db`.
+They should point at the configured analysis DB for the selected environment.
 
 ---
 
@@ -479,17 +484,26 @@ venv exist; otherwise it falls back to the local checkout. Use `--context local`
 for local-only review, or `--context deployed` to fail fast if the deployed
 target is missing.
 
+Each TUI context carries its own explicit `analysis_db_path`. The shipped
+deployed context points at:
+
+- `/home/pypi-runner/pypi-scada-repo/src/data/eval_results.db`
+
+The operator checkout can be a different repo, account, and path entirely. The
+TUI now uses the configured analysis DB path for status, archive, repair,
+normalization, and summary actions instead of guessing from repo layout.
+
 The menu is split into `Deployment`, `Dry Runs`, `Run Experiment Suite`,
 `Database`, `Logs`, and `Tests`. `Deployment` prepares or refreshes the VM and
 can run a deployment smoke test; it is not treated as an experiment by default.
 `Dry Runs` resolves package/artifact plans without writing DB rows. `Run
 Experiment Suite` contains actual analyzer runs and warns when the active
-context's `src/data/eval_results.db` already contains result rows.
+context's configured analysis DB already contains result rows.
 
 The `Database` section also exposes the production-study DB workflow directly:
-- preview append-only correction runs against repo-root `eval_results.db`
+- preview append-only correction runs against the configured analysis DB
 - create those correction runs with the repair script
-- summarize raw and cleaned thesis-analysis views from the same production DB
+- summarize raw and cleaned thesis-analysis views from the same configured DB
 
 The canonical experiment actions are organized so static baselines run only via
 `Static baseline once`. Full budget/medium/frontier model runs skip static
@@ -623,7 +637,7 @@ Open the evaluation database in read-only immutable mode when inspecting it from
 outside the `pypi-runner` account:
 
 ```bash
-sqlite3 'file:src/data/eval_results.db?mode=ro&immutable=1' \
+sqlite3 'file:/home/pypi-runner/pypi-scada-repo/src/data/eval_results.db?mode=ro&immutable=1' \
   'select id, detector, experiment_mode, details from eval_result order by id desc limit 20;'
 ```
 
@@ -648,8 +662,8 @@ model responses used to be parsed as benign. Preview and then apply the
 normalizer before interpreting those rows:
 
 ```bash
-python scripts/normalize_llm_protocol_failures.py --db eval_results.db
-python scripts/normalize_llm_protocol_failures.py --db eval_results.db --apply
+python scripts/normalize_llm_protocol_failures.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db
+python scripts/normalize_llm_protocol_failures.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --apply
 ```
 
 The script creates a timestamped backup unless `--no-backup` is passed. It
