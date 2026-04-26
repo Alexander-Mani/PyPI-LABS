@@ -637,9 +637,26 @@ def build_actions(
         ReviewAction(
             id="memory-probe-preview",
             section=SECTION_DRY_RUNS,
-            title="Preview model memory probe",
-            description="Show selected models and name-only incident-recognition cases without API calls.",
-            command=memory_probe("--profile", "budget", "--dry-run"),
+            title="Preview curated model memory probe",
+            description="Show selected models and the curated name/version incident-recognition cases without API calls.",
+            command=memory_probe("--scope", "curated", "--profile", "budget", "--dry-run"),
+        ),
+        ReviewAction(
+            id="memory-probe-production-preview",
+            section=SECTION_DRY_RUNS,
+            title="Preview production model memory probe",
+            description="Show the full production package/version set and canonical non-agentic models without API calls.",
+            command=memory_probe(
+                "--scope",
+                "production",
+                "--profile",
+                "all_models",
+                "--resolver-profile",
+                "all_models",
+                "--max-tokens",
+                "4096",
+                "--dry-run",
+            ),
         ),
         ReviewAction(
             id="models-smoke-all",
@@ -712,9 +729,9 @@ def build_actions(
             actions.append(ReviewAction(
                 id=f"memory-probe-{slug}",
                 section=SECTION_DEPLOYMENT,
-                title=f"Run {label} model memory probe",
-                description="Name/version-only probe for public incident recognition; writes JSONL, not DB rows.",
-                command=memory_probe("--profile", profile),
+                title=f"Run {label} curated model memory probe",
+                description="Curated source-free name/version probe for public incident recognition; writes JSONL, not DB rows.",
+                command=memory_probe("--scope", "curated", "--profile", profile),
                 safety=SAFETY_API_COST,
                 confirm=True,
                 double_confirm=high_cost,
@@ -923,6 +940,30 @@ def build_actions(
             confirm=True,
             double_confirm=True,
             requires_clean_db=True,
+        ),
+        ReviewAction(
+            id="experiment-production-memory-probe-all-models",
+            section=SECTION_EXPERIMENT,
+            title="Validity: production model memory probe, all models",
+            description=(
+                "Run the source-free name/version probe across the full resolved production "
+                "package set for every canonical non-agentic model; no DB rows."
+            ),
+            command=memory_probe(
+                "--scope",
+                "production",
+                "--profile",
+                "all_models",
+                "--resolver-profile",
+                "all_models",
+                "--max-tokens",
+                "4096",
+                "--progress",
+                "always",
+            ),
+            safety=SAFETY_API_COST,
+            confirm=True,
+            double_confirm=True,
         ),
         ReviewAction(
             id="analyzer-dry-run-test",

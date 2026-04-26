@@ -39,6 +39,7 @@ def test_action_registry_contains_expected_sectioned_actions(tmp_path):
     expected = {
         "models-preview-all",
         "memory-probe-preview",
+        "memory-probe-production-preview",
         "models-smoke-all",
         "models-smoke-budget",
         "models-smoke-medium",
@@ -52,6 +53,7 @@ def test_action_registry_contains_expected_sectioned_actions(tmp_path):
         "experiment-tiny-test",
         "experiment-static-baseline",
         "experiment-identity-alias-probe",
+        "experiment-production-memory-probe-all-models",
         "experiment-non-agentic-budget",
         "experiment-non-agentic-medium",
         "experiment-non-agentic-frontier",
@@ -127,6 +129,7 @@ def test_safety_and_confirmation_policy(tmp_path):
     assert by_id["models-preview-all"].safety == review_tui.SAFETY_SAFE
     assert by_id["models-preview-all"].confirm is False
     assert by_id["memory-probe-preview"].safety == review_tui.SAFETY_SAFE
+    assert by_id["memory-probe-production-preview"].safety == review_tui.SAFETY_SAFE
     assert by_id["memory-probe-budget"].safety == review_tui.SAFETY_API_COST
     assert by_id["memory-probe-budget"].confirm is True
     assert by_id["models-smoke-all"].safety == review_tui.SAFETY_API_COST
@@ -138,6 +141,7 @@ def test_safety_and_confirmation_policy(tmp_path):
     assert by_id["experiment-full-all-models"].double_confirm is True
     assert by_id["experiment-identity-alias-probe"].requires_clean_db is True
     assert by_id["experiment-identity-alias-probe"].double_confirm is True
+    assert by_id["experiment-production-memory-probe-all-models"].double_confirm is True
     assert by_id["deployment-setup"].safety == review_tui.SAFETY_DEPLOYMENT
     assert by_id["deployment-setup"].double_confirm is True
     assert by_id["deployment-smoke-test"].requires_clean_db is True
@@ -295,14 +299,25 @@ def test_model_memory_probe_actions_are_source_free_sidecars(tmp_path):
     budget = review_tui.action_by_id("memory-probe-budget", actions)
     frontier = review_tui.action_by_id("memory-probe-frontier", actions)
     all_models = review_tui.action_by_id("memory-probe-all-models", actions)
+    production_preview = review_tui.action_by_id("memory-probe-production-preview", actions)
+    production_run = review_tui.action_by_id("experiment-production-memory-probe-all-models", actions)
 
     assert preview.section == review_tui.SECTION_DRY_RUNS
     assert "--dry-run" in preview.command
+    assert preview.command[preview.command.index("--scope") + 1] == "curated"
+    assert production_preview.section == review_tui.SECTION_DRY_RUNS
+    assert production_preview.command[production_preview.command.index("--scope") + 1] == "production"
+    assert production_preview.command[production_preview.command.index("--profile") + 1] == "all_models"
     assert budget.section == review_tui.SECTION_DEPLOYMENT
     assert budget.command[:2] == ("/py", str(tmp_path / "scripts" / "model_memory_probe.py"))
+    assert budget.command[budget.command.index("--scope") + 1] == "curated"
     assert budget.command[budget.command.index("--profile") + 1] == "budget"
     assert frontier.double_confirm is True
     assert all_models.double_confirm is True
+    assert production_run.section == review_tui.SECTION_EXPERIMENT
+    assert production_run.command[production_run.command.index("--scope") + 1] == "production"
+    assert production_run.command[production_run.command.index("--max-tokens") + 1] == "4096"
+    assert "--progress" in production_run.command
 
 
 def test_full_model_runs_skip_static_for_every_profile(tmp_path):
