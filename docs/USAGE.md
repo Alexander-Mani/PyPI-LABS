@@ -227,8 +227,9 @@ Default selection policy:
 - Versions: latest stable labelled PEP 440 version per package.
 - Artifacts: all simulator artifacts for the selected package version.
 - Metrics: package-version level; artifact rows remain in SQLite for audit.
-- Controls: skipped unless `--include-controls` is passed or the selected
-  evaluation profile enables controls.
+- Sample set: `dataset` by default. Use `--sample-set controls` for the
+  controls-only false-positive lane or `--sample-set both` to add controls on
+  top of the canonical dataset.
 
 ```bash
 # Confirm what would be evaluated, without downloading/scanning.
@@ -239,6 +240,9 @@ python src/analyzer/evaluate.py --sast-only
 
 # Budget profile LLM run; frontier/all-model profiles should be reserved for verified execution.
 python src/analyzer/evaluate.py --profile budget
+
+# Controls-only false-positive benchmark on the canonical budget lane.
+python src/analyzer/evaluate.py --profile budget --sample-set controls
 
 # Run only the medium, frontier, or exhaustive all-model suite.
 python src/analyzer/evaluate.py --profile medium
@@ -263,7 +267,8 @@ Useful flags:
 
 | Flag | Default | Description |
 |---|---|---|
-| `--include-controls` | off | Include high-volume benign controls; some profiles enable this automatically |
+| `--sample-set` | `dataset` | Resolved sample universe: `dataset`, `controls`, or `both` |
+| `--include-controls` | off | Legacy alias for `--sample-set both` |
 | `--dry-run-resolution` | off | Print selected simulator artifacts without scanning |
 | `--profile` | `budget` | Model profile from `configs/evaluation_profiles.yaml` |
 | `--gemini` | `on` | Include Gemini/Google model configs: `on` or `off` |
@@ -281,6 +286,12 @@ packages; use `--gemini off` to run the same smoke scope without Google models.
 Legacy `*_no_gemini` profiles remain for compatibility but the preferred path is
 the `--gemini` toggle.
 
+The experiment TUI now carries the same choice through a shared `Sample Set`
+toggle in the experiment section. Canonical full/non-agentic/agentic runs,
+`Static baseline once`, `Validity: identity alias probe, all models`, and
+`Validity: production model memory probe, all models` inherit that selector.
+Gemini-only and bake-off lanes stay on their own fixed scopes.
+
 Agentic mode is a LiteLLM-backed, read-only RAG workflow inspired by
 coding-agent workflows such as Codex and Claude Code. It plans an
 investigation, inspects extracted package evidence through constrained tools,
@@ -296,16 +307,34 @@ turns and serialized read-only tool use. See `docs/ops/RISK_DIARY.md` Decision
 The model-memory probe is a separate validity sidecar for checking whether
 models recognize package names and versions from public incident reporting. It
 does not send source code, ground-truth labels, Backstabber's Knife references,
-or dataset membership, and it does not write `eval_results.db` rows.
+or dataset membership, and it does not write `eval_results.db` rows. The v2
+probe treats exact-version recognition as the primary metric and broader
+package-level association as a secondary signal. Schema-invalid outputs,
+length-truncated blanks, and transport failures are tracked explicitly as probe
+failures, not treated as negative answers.
 
 ```bash
 # Preview the name/version cases and selected models without API calls.
-python scripts/model_memory_probe.py --profile budget --dry-run
+python scripts/model_memory_probe.py --scope curated --profile budget --dry-run
 
-# Run the source-free recognition probe and write JSONL under logs/model_memory_probe/.
-python scripts/model_memory_probe.py --profile budget
-python scripts/model_memory_probe.py --profile frontier --gemini off
+# Run the curated source-free recognition probe and write JSONL under logs/model_memory_probe/.
+python scripts/model_memory_probe.py --scope curated --profile budget
+python scripts/model_memory_probe.py --scope curated --profile frontier --gemini off
+
+# Run the production-wide source-free probe across the canonical non-agentic lineup.
+python scripts/model_memory_probe.py --scope production --profile all_models --resolver-profile all_models --max-tokens 8192 --timeout 120 --retries 2 --retry-delay 20 --progress always
+
+# Run the same production probe against the controls-only sample set.
+python scripts/model_memory_probe.py --scope production --profile all_models --resolver-profile all_models --sample-set controls --max-tokens 8192 --timeout 120 --retries 2 --retry-delay 20 --progress always
+
+# Recompute the v2 summary for an existing JSONL run without rerunning the probe.
+python scripts/summarize_model_memory_probe.py logs/model_memory_probe/<file>.jsonl
 ```
+
+Treat the production memory probe as a validity study, not as a replacement for
+the detector metrics. Exact-version recognition is the strongest evidence.
+Package-only recognition can still matter, but it is easier to inflate with
+public package familiarity or vague incident association.
 
 The identity-alias probe is a second validity sidecar for checking whether
 source-based LLM verdicts are sensitive to recognizable public incident identity.
@@ -318,6 +347,9 @@ the selected non-agentic models.
 ```bash
 # Run the cheap alias probe across all configured non-agentic models.
 python src/analyzer/evaluate.py --profile all_models --identity-alias-probe
+
+# Run the alias probe against controls only.
+python src/analyzer/evaluate.py --profile all_models --identity-alias-probe --sample-set controls
 
 # Use the Gemini toggle if Google routing is unavailable or too expensive.
 python src/analyzer/evaluate.py --profile all_models --identity-alias-probe --gemini off
@@ -376,6 +408,56 @@ provider returns an empty body, prose, truncated output, or JSON without a valid
 are not automatically retryable. These rows are excluded from package-version
 metrics rather than counted as benign.
 
+## Production Eval DB Repair And Thesis Summary
+
+The repo-root `eval_results.db` can be treated as the authoritative production
+study database for thesis analysis. Two dedicated scripts now support that
+workflow:
+
+```bash
+# Preview the latest-complete canonical + alias repair scope.
+./.venv/bin/python scripts/error_correct_production_data.py --db ./eval_results.db --dry-run
+
+# Apply in-place repairs to selected error rows after creating a timestamped backup.
+./.venv/bin/python scripts/error_correct_production_data.py --db ./eval_results.db --apply
+
+# Generate thesis-ready CSV/Markdown summaries from the selected latest-complete runs.
+./.venv/bin/python scripts/summarize_thesis_eval_db.py --db ./eval_results.db --out-dir analysis/eval_db/latest
+```
+
+`error_correct_production_data.py` selects the latest complete run for each
+canonical family by package/version coverage, then recovers only
+`experiment_mode="error"` rows from:
+
+- `sast-only`
+- `profile:budget:llm-no-agentic`
+- `profile:medium:llm-no-agentic`
+- `profile:frontier:llm-no-agentic`
+- `profile:frontier:agentic-only`
+- `profile:all_models:identity-alias-probe`
+
+The repair path re-downloads only the affected artifacts, rebuilds the extracted
+package, reapplies alias masking for alias-probe rows, and writes the rerun
+result into a new timestamped correction run for each selected source run.
+Original source rows remain untouched. Non-agentic repairs force a larger token
+budget and stronger retry policy. Agentic repairs keep the same detector identity
+but add script-level retries for deployment-availability failures.
+
+`summarize_thesis_eval_db.py` uses the same latest-complete selection policy and
+emits:
+
+- run inventory
+- repair inventory and row-level repair comparisons
+- raw detector-level TP/TN/FP/FN metrics
+- cleaned detector-level TP/TN/FP/FN metrics
+- raw and cleaned package-version coverage/error metrics
+- raw detector cost summaries plus repair-run cost summaries
+- raw and cleaned error inventory
+- raw and cleaned alias-sensitivity comparisons against canonical hybrid zero-shot rows
+
+These scripts are intentionally hardcoded to the current production-study shape.
+They should point at the repo-root `eval_results.db`, not `src/data/eval_results.db`.
+
 ---
 
 ## Review Runner TUI
@@ -403,6 +485,11 @@ can run a deployment smoke test; it is not treated as an experiment by default.
 `Dry Runs` resolves package/artifact plans without writing DB rows. `Run
 Experiment Suite` contains actual analyzer runs and warns when the active
 context's `src/data/eval_results.db` already contains result rows.
+
+The `Database` section also exposes the production-study DB workflow directly:
+- preview append-only correction runs against repo-root `eval_results.db`
+- create those correction runs with the repair script
+- summarize raw and cleaned thesis-analysis views from the same production DB
 
 The canonical experiment actions are organized so static baselines run only via
 `Static baseline once`. Full budget/medium/frontier model runs skip static
