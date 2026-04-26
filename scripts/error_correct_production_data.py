@@ -19,8 +19,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _ANALYZER_DIR = _REPO_ROOT / "src" / "analyzer"
+_ANALYZER_CONFIG = _ANALYZER_DIR / "config.yaml"
 for _path in (_REPO_ROOT, _ANALYZER_DIR):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
@@ -39,6 +42,7 @@ from src.analyzer.heuristic_filter import HeuristicFilter  # noqa: E402
 from src.analyzer.identity_mask import mask_package_identity  # noqa: E402
 from src.analyzer.prompt_manager import PromptManager  # noqa: E402
 from src.data.db_manager import DBManager  # noqa: E402
+from src.utils.logger import get_active_log_path, setup_logger  # noqa: E402
 
 REPAIR_TIER_SUFFIX = ":repair"
 DEFAULT_MAX_TOKENS = 16384
@@ -46,6 +50,10 @@ DEFAULT_LLM_RETRY_ATTEMPTS = 5
 DEFAULT_LLM_RETRY_DELAY_SECONDS = 45.0
 DEFAULT_AGENTIC_RETRY_ATTEMPTS = 5
 DEFAULT_AGENTIC_RETRY_DELAY_SECONDS = 60.0
+DEFAULT_PROGRESS_MODE = "auto"
+DEFAULT_VERBOSE_PREVIEW = False
+DEFAULT_VERBOSE_RESULTS = False
+DEFAULT_ENGINE_CONSOLE_LOGS = "off"
 TRANSPORT_RETRY_CATEGORIES = {
     "client_timeout",
     "provider_or_proxy_transient",
@@ -56,6 +64,19 @@ PROTOCOL_RETRY_ERRORS = {
     "empty_model_response",
     "unparseable_model_response",
 }
+MIN_REFRESH_INTERVAL_S = 0.75
+
+try:
+    from rich.console import Console, Group
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.table import Table
+except ImportError:  # pragma: no cover - deployment dependency guard
+    Console = None
+    Group = None
+    Live = None
+    Panel = None
+    Table = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +121,9 @@ class RepairOutcome:
     final_mode: str
     success: bool
     attempts: int
+    api_cost_usd: float
+    exec_time_ms: int
+    model_name: str
     details: dict[str, Any]
 
 
@@ -127,6 +151,160 @@ class SkippedCandidate:
     candidate: RepairCandidate
     reason: str
 
+
+@dataclass
+class RepairProgressOutcome:
+    success: bool
+    cost_usd: float
+    elapsed_s: float
+    final_mode: str
+    detector: str
+    model_name: str
+    package_label: str
+    run_label: str
+
+
+def _should_use_progress(mode: str) -> bool:
+    if mode == "never":
+        return False
+    if Live is None:
+        return False
+    if mode == "always":
+        return True
+    return sys.stderr.isatty()
+
+
+def _provider_for_model(model_name: str | None) -> str:
+    model = (model_name or "").strip().lower()
+    if not model:
+        return "other"
+    if model.startswith("claude-") or model.startswith("anthropic/"):
+        return "anthropic"
+    if model.startswith(("gpt-", "o1-", "o3-")) or model.startswith("openai/"):
+        return "openai"
+    if model.startswith("gemini-") or model.startswith("google/") or model.startswith("gemini/"):
+        return "google"
+    if model.startswith("together_ai/") or model.startswith("together/"):
+        return "together"
+    return "other"
+
+
+class RepairProgress:
+    def __init__(self, *, enabled: bool, total_rows: int, plain_enabled: bool = False):
+        self.enabled = enabled and total_rows > 0
+        self.total_rows = total_rows
+        self.completed = 0
+        self.repaired = 0
+        self.still_error = 0
+        self.skipped = 0
+        self.total_cost_usd = 0.0
+        self.total_elapsed_s = 0.0
+        self.provider_costs = {name: 0.0 for name in ("anthropic", "openai", "google", "together", "other")}
+        self.current_package = ""
+        self.current_detector = ""
+        self.current_run = ""
+        self.current_result = ""
+        self._console = Console(stderr=True) if self.enabled and Console is not None else None
+        self._live = None
+        self._last_refresh = 0.0
+        self._plain_enabled = bool(plain_enabled and not self.enabled)
+
+    @property
+    def active(self) -> bool:
+        return self.enabled and self._live is not None
+
+    def __enter__(self) -> "RepairProgress":
+        if self.enabled and Live is not None:
+            self._live = Live(
+                self,
+                console=self._console,
+                auto_refresh=False,
+                transient=False,
+                vertical_overflow="ellipsis",
+            )
+            self._live.start()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> bool:
+        if self._live is not None:
+            self._live.stop()
+        return False
+
+    def __rich_console__(self, console, options):
+        yield self._render()
+
+    def start_candidate(self, candidate: RepairCandidate) -> None:
+        self.current_package = f"{candidate.package_name}=={candidate.version} [{candidate.artifact_filename}]"
+        self.current_detector = f"{candidate.detector}:{candidate.intended_mode}:{candidate.prompt_strategy}"
+        self.current_run = candidate.run_id
+        self.current_result = "running"
+        self.refresh(force=True)
+
+    def record(self, outcome: RepairProgressOutcome) -> None:
+        self.completed += 1
+        if outcome.success:
+            self.repaired += 1
+        else:
+            self.still_error += 1
+        self.total_cost_usd += outcome.cost_usd
+        self.total_elapsed_s += outcome.elapsed_s
+        provider = _provider_for_model(outcome.model_name)
+        self.provider_costs[provider] = self.provider_costs.get(provider, 0.0) + outcome.cost_usd
+        self.current_result = "repaired" if outcome.success else "still error"
+        self.current_package = outcome.package_label
+        self.current_detector = outcome.detector
+        self.current_run = outcome.run_label
+        if self.active:
+            self.refresh()
+            return
+        if self._plain_enabled and (self.completed == self.total_rows or self.completed % 10 == 0 or not outcome.success):
+            print(
+                f"Progress: {self.completed}/{self.total_rows} "
+                f"repaired={self.repaired} still_error={self.still_error} "
+                f"cost=${self.total_cost_usd:.4f} current={self.current_package}"
+            )
+
+    def refresh(self, *, force: bool = False) -> None:
+        if not self.active:
+            return
+        now = time.monotonic()
+        if not force and now - self._last_refresh < MIN_REFRESH_INTERVAL_S:
+            return
+        self._last_refresh = now
+        self._live.refresh()
+
+    def _render(self):
+        header = Table.grid(expand=True)
+        header.add_column(style="bold")
+        header.add_column()
+        header.add_row("Rows", f"{self.completed}/{self.total_rows}")
+        header.add_row("Current", self.current_package or "waiting")
+        header.add_row("Detector", self.current_detector or "waiting")
+        header.add_row("Source Run", self.current_run or "waiting")
+
+        stats = Table.grid(expand=True)
+        stats.add_column(style="bold")
+        stats.add_column(justify="right")
+        stats.add_row("Repaired", str(self.repaired))
+        stats.add_row("Still error", str(self.still_error))
+        stats.add_row("Skipped", str(self.skipped))
+        stats.add_row("API Cost", f"${self.total_cost_usd:.4f}")
+        avg = self.total_elapsed_s / self.completed if self.completed else 0.0
+        remaining = max(self.total_rows - self.completed, 0)
+        eta = avg * remaining
+        stats.add_row("Avg / ETA", f"{avg:.1f}s / {eta:.0f}s")
+
+        providers = Table.grid(expand=True)
+        providers.add_column(style="bold")
+        providers.add_column(justify="right")
+        for name in ("anthropic", "openai", "google", "together", "other"):
+            providers.add_row(name, f"${self.provider_costs[name]:.4f}")
+
+        return Group(
+            Panel(header, title="DB Error Reruns", border_style="cyan"),
+            Panel(stats, title="Outcome", border_style="green"),
+            Panel(providers, title="Provider Cost", border_style="magenta"),
+        )
 
 
 def _utc_now() -> str:
@@ -197,6 +375,8 @@ def load_repair_candidates(
     detectors: list[str] | None = None,
     intended_modes: list[str] | None = None,
     include_agentic: bool = True,
+    include_validation: bool = False,
+    include_repair_runs: bool = False,
 ) -> list[RepairCandidate]:
     params: list[Any] = []
     with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
@@ -224,6 +404,10 @@ def load_repair_candidates(
             params.extend(intended_modes)
         if not include_agentic:
             where_parts.append("COALESCE(er.intended_mode, er.experiment_mode) != 'agentic'")
+        if not include_validation:
+            where_parts.append("eru.tier NOT LIKE '%-validation'")
+        if not include_repair_runs:
+            where_parts.append("eru.tier NOT LIKE '%:repair'")
         query = f"""
             SELECT
                 er.id,
@@ -359,6 +543,32 @@ def _print_candidate_list(
     print(header)
     for line in rows[:limit]:
         print(f"  {line}")
+    if len(rows) > limit:
+        print(f"  ... {len(rows) - limit} more")
+
+
+def _load_repair_logging_config(*, engine_console_logs: bool) -> dict[str, Any]:
+    with _ANALYZER_CONFIG.open(encoding="utf-8") as handle:
+        cfg = yaml.safe_load(handle)
+    cfg.setdefault("logging", {})
+    cfg["logging"]["file"] = str(_REPO_ROOT / "logs" / "repair" / "error_correct_production_data.log")
+    cfg["logging"]["level"] = "INFO"
+    cfg["logging"]["console_output"] = bool(engine_console_logs)
+    cfg["logging"]["per_run"] = True
+    return cfg
+
+
+def _count_by(candidates: list[RepairCandidate], attr: str) -> list[tuple[str, int]]:
+    counts = Counter(str(getattr(candidate, attr) or "") for candidate in candidates)
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+
+
+def _print_count_block(title: str, rows: list[tuple[str, int]], *, limit: int = 12) -> None:
+    if not rows:
+        return
+    print(f"{title}:")
+    for name, count in rows[:limit]:
+        print(f"  {name}: {count}")
     if len(rows) > limit:
         print(f"  ... {len(rows) - limit} more")
 
@@ -547,6 +757,7 @@ def apply_repairs(
     *,
     policy: RepairPolicy,
     dry_run: bool,
+    progress: RepairProgress | None = None,
 ) -> list[RepairOutcome]:
     repair_plans = build_repair_run_plans(candidates)
     if dry_run:
@@ -557,6 +768,9 @@ def apply_repairs(
                 final_mode=candidate.experiment_mode,
                 success=False,
                 attempts=0,
+                api_cost_usd=0.0,
+                exec_time_ms=0,
+                model_name="",
                 details=candidate.details,
             )
             for candidate in candidates
@@ -576,6 +790,8 @@ def apply_repairs(
                     sample_set=plan.sample_set,
                 )
             for candidate in candidates:
+                if progress is not None:
+                    progress.start_candidate(candidate)
                 plan = repair_plans[candidate.run_id]
                 result, result_details, repair_attempts, alias_details = _repair_single_candidate(
                     candidate,
@@ -624,9 +840,38 @@ def apply_repairs(
                         final_mode=result.experiment_mode,
                         success=result.experiment_mode != "error",
                         attempts=repair_attempts,
+                        api_cost_usd=float(getattr(result, "api_cost_usd", 0.0) or 0.0),
+                        exec_time_ms=int(getattr(result, "exec_time_ms", 0) or 0),
+                        model_name=str(
+                            merged_details.get("actual_model")
+                            or merged_details.get("selected_model")
+                            or merged_details.get("model")
+                            or ""
+                        ),
                         details=merged_details,
                     )
                 )
+                if progress is not None:
+                    progress.record(
+                        RepairProgressOutcome(
+                            success=result.experiment_mode != "error",
+                            cost_usd=float(getattr(result, "api_cost_usd", 0.0) or 0.0),
+                            elapsed_s=float(int(getattr(result, "exec_time_ms", 0) or 0)) / 1000.0,
+                            final_mode=result.experiment_mode,
+                            detector=f"{candidate.detector}:{candidate.intended_mode}:{candidate.prompt_strategy}",
+                            model_name=str(
+                                merged_details.get("actual_model")
+                                or merged_details.get("selected_model")
+                                or merged_details.get("model")
+                                or ""
+                            ),
+                            package_label=(
+                                f"{candidate.package_name}=={candidate.version} "
+                                f"[{candidate.artifact_filename}]"
+                            ),
+                            run_label=plan.repair_run_id,
+                        )
+                    )
     finally:
         db.close()
         DBManager.DB_PATH = original_db_path
@@ -652,6 +897,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=["on", "off"],
         default="on",
         help="Include agentic error rows in the repair scope (default: on)",
+    )
+    parser.add_argument(
+        "--include-validation",
+        choices=["on", "off"],
+        default="off",
+        help="Include validation tiers in the repair scope (default: off).",
+    )
+    parser.add_argument(
+        "--include-repair-runs",
+        choices=["on", "off"],
+        default="off",
+        help="Include existing :repair rows in the repair scope (default: off).",
     )
     parser.add_argument(
         "--sample-set",
@@ -707,6 +964,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_AGENTIC_RETRY_DELAY_SECONDS,
         help=f"Retry delay in seconds for agentic reruns (default: {DEFAULT_AGENTIC_RETRY_DELAY_SECONDS}).",
     )
+    parser.add_argument(
+        "--progress",
+        choices=("auto", "always", "never"),
+        default=DEFAULT_PROGRESS_MODE,
+        help=f"Live repair progress display mode (default: {DEFAULT_PROGRESS_MODE}).",
+    )
+    parser.add_argument(
+        "--verbose-preview",
+        action="store_true",
+        default=DEFAULT_VERBOSE_PREVIEW,
+        help="Print detailed matched-run and per-row previews instead of compact grouped preflight counts.",
+    )
+    parser.add_argument(
+        "--verbose-results",
+        action="store_true",
+        default=DEFAULT_VERBOSE_RESULTS,
+        help="Print a line for every rerun result instead of only failures and summary totals.",
+    )
+    parser.add_argument(
+        "--engine-console-logs",
+        choices=("on", "off"),
+        default=DEFAULT_ENGINE_CONSOLE_LOGS,
+        help="Mirror analyzer engine INFO logs to the console during reruns (default: off).",
+    )
     return parser.parse_args(argv)
 
 
@@ -731,14 +1012,19 @@ def main(argv: list[str] | None = None) -> int:
         detectors=list(args.detector),
         intended_modes=list(args.intended_mode),
         include_agentic=args.include_agentic == "on",
+        include_validation=args.include_validation == "on",
+        include_repair_runs=args.include_repair_runs == "on",
     )
     rerunnable_candidates, skipped_candidates = partition_repair_candidates(matched_candidates)
     repair_plans = build_repair_run_plans(rerunnable_candidates)
+    matched_run_ids = sorted({candidate.run_id for candidate in matched_candidates})
 
     print(f"DB: {db_path}")
     print("Filters:")
     print(f"  sample_set={args.sample_set}")
     print(f"  include_agentic={args.include_agentic}")
+    print(f"  include_validation={args.include_validation}")
+    print(f"  include_repair_runs={args.include_repair_runs}")
     if args.run_id:
         print(f"  run_ids={', '.join(args.run_id)}")
     if args.detector:
@@ -753,50 +1039,57 @@ def main(argv: list[str] | None = None) -> int:
         f"agentic_retries={policy.agentic_retry_attempts} "
         f"agentic_retry_delay={policy.agentic_retry_delay_seconds}s"
     )
-
-    matched_run_ids = sorted({candidate.run_id for candidate in matched_candidates})
-    print("Matched source runs:")
-    for run_id in matched_run_ids:
-        run = inventory_by_run_id.get(run_id)
-        if run is None:
-            print(f"  {run_id}: metadata unavailable")
-            continue
-        print(
-            f"  {run.run_id} tier={run.tier} sample_set={run.sample_set} "
-            f"pkg_versions={run.pkg_versions} rows={run.row_count} created_at={run.created_at}"
-        )
-    if repair_plans:
-        print("Planned correction runs:")
-        for source_run_id, plan in sorted(repair_plans.items()):
-            print(
-                f"  {plan.repair_run_id} <= {source_run_id} "
-                f"tier={plan.repair_tier} targeted_rows={plan.candidate_count}"
-            )
-    print(f"Matched error rows: {len(matched_candidates)}")
-    print(f"Rerunnable rows: {len(rerunnable_candidates)}")
-    print(f"Skipped rows: {len(skipped_candidates)}")
+    print("Preflight:")
+    print(f"  matched_source_runs={len(matched_run_ids)}")
+    print(f"  matched_error_rows={len(matched_candidates)}")
+    print(f"  rerunnable_rows={len(rerunnable_candidates)}")
+    print(f"  skipped_rows={len(skipped_candidates)}")
+    print(f"  planned_repair_runs={len(repair_plans)}")
 
     skipped_counts = Counter(item.reason for item in skipped_candidates)
     for reason, count in sorted(skipped_counts.items()):
         print(f"  skipped[{reason}]={count}")
 
-    _print_candidate_list(
-        "Rerunnable preview:",
-        [
-            f"{candidate.run_id} {candidate.detector}:{candidate.intended_mode}:{candidate.prompt_strategy} "
-            f"{candidate.package_name}=={candidate.version} [{candidate.artifact_filename}]"
-            for candidate in rerunnable_candidates
-        ],
-    )
-    _print_candidate_list(
-        "Skipped preview:",
-        [
-            f"{item.reason} :: {item.candidate.run_id} "
-            f"{item.candidate.detector}:{item.candidate.intended_mode}:{item.candidate.prompt_strategy} "
-            f"{item.candidate.package_name}=={item.candidate.version} [{item.candidate.artifact_filename}]"
-            for item in skipped_candidates
-        ],
-    )
+    _print_count_block("By sample set", _count_by(rerunnable_candidates, "sample_set"))
+    _print_count_block("By source tier", _count_by(rerunnable_candidates, "tier"))
+    _print_count_block("By detector", _count_by(rerunnable_candidates, "detector"))
+    _print_count_block("By intended mode", _count_by(rerunnable_candidates, "intended_mode"))
+
+    if args.verbose_preview:
+        print("Matched source runs:")
+        for run_id in matched_run_ids:
+            run = inventory_by_run_id.get(run_id)
+            if run is None:
+                print(f"  {run_id}: metadata unavailable")
+                continue
+            print(
+                f"  {run.run_id} tier={run.tier} sample_set={run.sample_set} "
+                f"pkg_versions={run.pkg_versions} rows={run.row_count} created_at={run.created_at}"
+            )
+        if repair_plans:
+            print("Planned correction runs:")
+            for source_run_id, plan in sorted(repair_plans.items()):
+                print(
+                    f"  {plan.repair_run_id} <= {source_run_id} "
+                    f"tier={plan.repair_tier} targeted_rows={plan.candidate_count}"
+                )
+        _print_candidate_list(
+            "Rerunnable preview:",
+            [
+                f"{candidate.run_id} {candidate.detector}:{candidate.intended_mode}:{candidate.prompt_strategy} "
+                f"{candidate.package_name}=={candidate.version} [{candidate.artifact_filename}]"
+                for candidate in rerunnable_candidates
+            ],
+        )
+        _print_candidate_list(
+            "Skipped preview:",
+            [
+                f"{item.reason} :: {item.candidate.run_id} "
+                f"{item.candidate.detector}:{item.candidate.intended_mode}:{item.candidate.prompt_strategy} "
+                f"{item.candidate.package_name}=={item.candidate.version} [{item.candidate.artifact_filename}]"
+                for item in skipped_candidates
+            ],
+        )
 
     if not matched_candidates:
         print("HALT: no error rows matched the requested filters.")
@@ -809,22 +1102,52 @@ def main(argv: list[str] | None = None) -> int:
         print("Dry-run only. Re-run with --apply to create correction runs.")
         return 0
 
+    logger_cfg = _load_repair_logging_config(engine_console_logs=args.engine_console_logs == "on")
+    setup_logger(logger_cfg)
+    log_path = get_active_log_path()
+    if log_path is not None:
+        print(f"Detailed repair log: {log_path}")
     backup_path = _backup_db(db_path)
     print(f"Backup: {backup_path}")
-    outcomes = apply_repairs(db_path, rerunnable_candidates, policy=policy, dry_run=False)
+    live_enabled = _should_use_progress(args.progress)
+    plain_progress = args.progress != "never" and not live_enabled
+    with RepairProgress(
+        enabled=live_enabled,
+        total_rows=len(rerunnable_candidates),
+        plain_enabled=plain_progress,
+    ) as progress:
+        progress.skipped = len(skipped_candidates)
+        outcomes = apply_repairs(
+            db_path,
+            rerunnable_candidates,
+            policy=policy,
+            dry_run=False,
+            progress=progress,
+        )
 
     repaired = sum(1 for outcome in outcomes if outcome.success)
     remaining = len(outcomes) - repaired
-    print(f"Repaired rows: {repaired}")
-    print(f"Still error rows after rerun: {remaining}")
+    total_cost = sum(outcome.api_cost_usd for outcome in outcomes)
+    print("Final summary:")
+    print(f"  attempted_reruns={len(outcomes)}")
+    print(f"  repaired_rows={repaired}")
+    print(f"  still_error_rows={remaining}")
     if skipped_candidates:
-        print(f"Skipped rows (not attempted): {len(skipped_candidates)}")
+        print(f"  skipped_rows={len(skipped_candidates)}")
+    print(f"  api_cost_usd=${total_cost:.4f}")
+    print(
+        f"  exit_status={'0 (all reruns repaired)' if remaining == 0 else '1 (one or more reruns still failed)'}"
+    )
     for outcome in outcomes:
+        if outcome.success and not args.verbose_results:
+            continue
         status = "OK" if outcome.success else "ERROR"
         print(
             f"  {status} {outcome.repair_run_id} <= {outcome.candidate.run_id} "
             f"{outcome.candidate.detector}:{outcome.candidate.intended_mode}:{outcome.candidate.prompt_strategy} "
-            f"{outcome.candidate.package_name}=={outcome.candidate.version} attempts={outcome.attempts} final_mode={outcome.final_mode}"
+            f"{outcome.candidate.package_name}=={outcome.candidate.version} "
+            f"attempts={outcome.attempts} final_mode={outcome.final_mode} "
+            f"cost=${outcome.api_cost_usd:.4f}"
         )
     return 0 if remaining == 0 else 1
 

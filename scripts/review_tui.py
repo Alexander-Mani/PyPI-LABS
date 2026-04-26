@@ -1081,8 +1081,8 @@ def build_actions(
         ReviewAction(
             id="db-production-repair-dry-run",
             section=SECTION_DATABASE,
-            title="Preview all DB error reruns",
-            description="Show all matching error rows in the configured analysis DB, which rows are rerunnable, and which append-only :repair runs would be created.",
+            title="Preview DB error reruns",
+            description="Preview all non-validation error rows in the configured analysis DB by default, show compact preflight counts, and list append-only :repair runs when verbose preview is enabled.",
             command=(
                 *_context_script(
                     context,
@@ -1096,8 +1096,8 @@ def build_actions(
         ReviewAction(
             id="db-production-repair-apply",
             section=SECTION_DATABASE,
-            title="Create all DB error reruns",
-            description="Rerun all matching error rows with aggressive recovery settings and append new :repair runs into the configured analysis DB.",
+            title="Create DB error reruns",
+            description="Rerun all non-validation error rows in the configured analysis DB by default, use aggressive recovery settings, stream compact live progress, and write detailed engine logs to a separate repair log file.",
             command=(
                 *_context_script(
                     context,
@@ -1105,6 +1105,8 @@ def build_actions(
                     "--db",
                     str(context.db_path),
                     "--apply",
+                    "--progress",
+                    "always",
                 ),
             ),
             safety=SAFETY_API_COST,
@@ -1115,7 +1117,7 @@ def build_actions(
             id="db-production-summary",
             section=SECTION_DATABASE,
             title="Summarize thesis DB raw + cleaned views",
-            description="Generate canonical thesis-analysis artifacts from the configured analysis DB, including repair overlays when present.",
+            description="Generate canonical thesis-analysis artifacts from the configured analysis DB, including repair overlays when present for thesis-primary source runs.",
             command=(
                 *_context_script(
                     context,

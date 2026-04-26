@@ -32,6 +32,8 @@ def test_load_repair_candidates_targets_all_error_rows_and_filters(tmp_path):
         db.create_eval_run("debug-run", "profile:custom-debug")
         db.create_eval_run("budget-controls", "profile:budget:llm-no-agentic", sample_set="controls")
         db.create_eval_run("agentic-run", "profile:frontier:agentic-only")
+        db.create_eval_run("validation-run", "profile:budget-validation")
+        db.create_eval_run("repair-run", "profile:custom-debug:repair")
 
         for package in ("a", "b"):
             db.insert_eval_result(
@@ -119,6 +121,40 @@ def test_load_repair_candidates_targets_all_error_rows_and_filters(tmp_path):
             api_cost_usd=0.1,
             details={"error": "empty_model_response"},
         )
+        db.insert_eval_result(
+            run_id="validation-run",
+            package_name="val",
+            version="1.0.0",
+            experiment_mode="error",
+            intended_mode="hybrid",
+            prompt_strategy="zero_shot",
+            detector="gpt_nano",
+            artifact_filename="val.whl",
+            artifact_url="http://example/val.whl",
+            verdict=False,
+            ground_truth=True,
+            heuristic_flags=[],
+            exec_time_ms=10,
+            api_cost_usd=0.1,
+            details={"error": "empty_model_response"},
+        )
+        db.insert_eval_result(
+            run_id="repair-run",
+            package_name="fixme",
+            version="1.0.0",
+            experiment_mode="error",
+            intended_mode="hybrid",
+            prompt_strategy="zero_shot",
+            detector="gpt_nano",
+            artifact_filename="fixme.whl",
+            artifact_url="http://example/fixme.whl",
+            verdict=False,
+            ground_truth=True,
+            heuristic_flags=[],
+            exec_time_ms=10,
+            api_cost_usd=0.1,
+            details={"error": "empty_model_response"},
+        )
     finally:
         db.close()
 
@@ -126,6 +162,8 @@ def test_load_repair_candidates_targets_all_error_rows_and_filters(tmp_path):
     dataset_only = error_correct_production_data.load_repair_candidates(db_path, sample_set="dataset")
     no_agentic = error_correct_production_data.load_repair_candidates(db_path, include_agentic=False)
     detector_filtered = error_correct_production_data.load_repair_candidates(db_path, detectors=["gpt_nano"])
+    with_validation = error_correct_production_data.load_repair_candidates(db_path, include_validation=True)
+    with_repairs = error_correct_production_data.load_repair_candidates(db_path, include_repair_runs=True)
 
     assert {(candidate.run_id, candidate.package_name) for candidate in candidates} == {
         ("budget-good", "a"),
@@ -149,6 +187,8 @@ def test_load_repair_candidates_targets_all_error_rows_and_filters(tmp_path):
     assert {(candidate.run_id, candidate.package_name) for candidate in detector_filtered} == {
         ("debug-run", "dbg"),
     }
+    assert ("validation-run", "val") in {(candidate.run_id, candidate.package_name) for candidate in with_validation}
+    assert ("repair-run", "fixme") in {(candidate.run_id, candidate.package_name) for candidate in with_repairs}
 
 
 def test_partition_repair_candidates_reports_skips(tmp_path):
@@ -360,3 +400,12 @@ def test_main_halts_without_backup_when_no_rerunnable_rows(tmp_path, monkeypatch
 
     assert rc == 1
     assert backup_calls == []
+
+
+def test_load_repair_logging_config_defaults_to_file_only():
+    cfg = error_correct_production_data._load_repair_logging_config(engine_console_logs=False)
+
+    assert cfg["logging"]["level"] == "INFO"
+    assert cfg["logging"]["console_output"] is False
+    assert cfg["logging"]["per_run"] is True
+    assert cfg["logging"]["file"].endswith("logs/repair/error_correct_production_data.log")
