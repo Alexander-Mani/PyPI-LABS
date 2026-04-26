@@ -393,17 +393,23 @@ def _sanitize_case_id(text: str) -> str:
     return slug or "case"
 
 
-def load_production_cases(profile_name: str, *, include_controls: bool = False) -> list[ProbeCase]:
+def load_production_cases(profile_name: str, *, sample_set: str = "dataset") -> list[ProbeCase]:
     with _ANALYZER_CONFIG.open(encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
     profile = analyzer_evaluate._load_evaluation_profile(profile_name)
+    include_controls, package_limits = analyzer_evaluate._resolve_sample_selection(
+        sample_set,
+        include_controls=profile.include_controls,
+        package_limits=profile.package_limits,
+    )
     runner = analyzer_evaluate.EvaluationRunner(
         cfg,
         tier=profile.tier,
         profile=profile_name,
         model_config_stems=profile.config_stems,
-        include_controls=bool(include_controls or profile.include_controls),
-        package_limits=profile.package_limits,
+        sample_set=sample_set,
+        include_controls=include_controls,
+        package_limits=package_limits,
         progress_enabled=False,
         raw_experiment_log=False,
         gemini_enabled=True,
@@ -492,12 +498,22 @@ def select_models(args: argparse.Namespace) -> tuple[list[ModelSpec], str]:
 
 def resolve_cases(args: argparse.Namespace) -> tuple[list[ProbeCase], str]:
     if args.scope == "curated":
+        if args.sample_set != "dataset" or args.include_controls:
+            raise SystemExit(
+                "HALT: curated model-memory probes do not use resolver-derived sample sets. "
+                "Use the default sample set or switch to --scope production."
+            )
         return load_cases(args.cases), str(args.cases)
     resolver_profile = args.resolver_profile or ("all_models" if args.all_models and args.profile == "budget" else args.profile)
-    cases = load_production_cases(resolver_profile, include_controls=args.include_controls)
+    sample_set = analyzer_evaluate._normalize_sample_set_arg(
+        args.sample_set,
+        include_controls_alias=args.include_controls,
+    )
+    args.sample_set = sample_set
+    cases = load_production_cases(resolver_profile, sample_set=sample_set)
     source = f"profile:{resolver_profile}"
-    if args.include_controls:
-        source = f"{source} (controls included)"
+    if sample_set != "dataset":
+        source = f"{source} (sample_set={sample_set})"
     return cases, source
 
 
@@ -1058,6 +1074,7 @@ def summarize_probe_records(
     *,
     run_id: str,
     scope: str,
+    sample_set: str,
     model_source: str,
     case_source: str,
     models: list[dict[str, Any]],
@@ -1222,6 +1239,7 @@ def summarize_probe_records(
         "run_id": run_id,
         "created_at": _utc_now(),
         "scope": scope,
+        "sample_set": sample_set,
         "model_source": model_source,
         "case_source": case_source,
         "models": models,
@@ -1268,6 +1286,7 @@ def _render_summary_markdown(summary: dict[str, Any]) -> str:
         f"- Run ID: `{summary['run_id']}`",
         f"- Schema version: `{summary['probe_schema_version']}`",
         f"- Scope: `{summary['scope']}`",
+        f"- Sample set: `{summary['sample_set']}`",
         f"- Model source: `{summary['model_source']}`",
         f"- Case source: `{summary['case_source']}`",
         f"- Calls: `{summary['total_calls']}`",
@@ -1447,6 +1466,7 @@ def summarize_probe_file(path: Path) -> dict[str, Any]:
     return summarize_probe_records(
         run_id=str(start_record.get("run_id") or path.stem),
         scope=str(start_record.get("scope") or "unknown"),
+        sample_set=str(start_record.get("sample_set") or "dataset"),
         model_source=str(start_record.get("model_source") or "unknown"),
         case_source=str(start_record.get("case_source") or "unknown"),
         models=list(start_record.get("models") or []),
@@ -1471,6 +1491,7 @@ def run_probe(args: argparse.Namespace) -> int:
         print(f"Model memory probe dry-run: {len(models)} model(s), {len(cases)} case(s)")
         print(f"scope={args.scope} base_url={args.base_url.rstrip('/')} model_source={model_source}")
         print(f"case_source={case_source}")
+        print(f"sample_set={args.sample_set}")
         print(f"max_tokens={runtime['max_tokens']} timeout={runtime['timeout']} retries={runtime['retries']} retry_delay={runtime['retry_delay']} progress={runtime['progress']}")
         print(f"out={out_path}")
         print(f"summary_json={summary_json_path}")
@@ -1491,6 +1512,7 @@ def run_probe(args: argparse.Namespace) -> int:
         "created_at": _utc_now(),
         "base_url": args.base_url.rstrip("/"),
         "scope": args.scope,
+        "sample_set": args.sample_set,
         "model_source": model_source,
         "case_source": case_source,
         "models": [asdict(spec) for spec in models],
@@ -1538,6 +1560,7 @@ def run_probe(args: argparse.Namespace) -> int:
                     "run_id": run_id,
                     "created_at": _utc_now(),
                     "scope": args.scope,
+                    "sample_set": args.sample_set,
                     "config_stem": spec.config_stem,
                     "model": spec.model_name,
                     "case": asdict(case),
@@ -1595,6 +1618,7 @@ def run_probe(args: argparse.Namespace) -> int:
     summary = summarize_probe_records(
         run_id=run_id,
         scope=args.scope,
+        sample_set=args.sample_set,
         model_source=model_source,
         case_source=case_source,
         models=[asdict(spec) for spec in models],
@@ -1624,6 +1648,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--profile", default="budget")
     parser.add_argument("--resolver-profile", default=None)
     parser.add_argument("--include-controls", action="store_true")
+    parser.add_argument("--sample-set", choices=analyzer_evaluate._VALID_SAMPLE_SETS, default="dataset")
     parser.add_argument("--gemini", choices=["on", "off"], default="on")
     parser.add_argument("--all-models", action="store_true")
     parser.add_argument("--models", nargs="+", default=None)

@@ -110,6 +110,44 @@ def test_effective_runtime_options_use_scope_specific_defaults():
     }
 
 
+def test_resolve_cases_rejects_sample_set_for_curated_scope():
+    args = SimpleNamespace(
+        scope="curated",
+        sample_set="controls",
+        include_controls=False,
+        cases=Path("unused.json"),
+    )
+
+    with pytest.raises(SystemExit, match="curated model-memory probes"):
+        model_memory_probe.resolve_cases(args)
+
+
+def test_resolve_cases_passes_sample_set_to_production_loader(monkeypatch):
+    captured = {}
+
+    def fake_loader(profile_name, *, sample_set):
+        captured["profile_name"] = profile_name
+        captured["sample_set"] = sample_set
+        return []
+
+    monkeypatch.setattr(model_memory_probe, "load_production_cases", fake_loader)
+
+    args = SimpleNamespace(
+        scope="production",
+        sample_set="controls",
+        include_controls=False,
+        resolver_profile=None,
+        all_models=False,
+        profile="all_models",
+    )
+
+    cases, source = model_memory_probe.resolve_cases(args)
+
+    assert cases == []
+    assert source == "profile:all_models (sample_set=controls)"
+    assert captured == {"profile_name": "all_models", "sample_set": "controls"}
+
+
 def test_validate_probe_response_rejects_out_of_range_confidence():
     case = model_memory_probe.ProbeCase(
         id="known-colourama",
@@ -298,6 +336,7 @@ def test_run_probe_writes_v2_jsonl_with_summary_and_costs(monkeypatch, tmp_path)
         profile="budget",
         resolver_profile=None,
         include_controls=False,
+        sample_set="dataset",
         models=None,
         all_models=False,
         gemini="on",
@@ -401,6 +440,7 @@ def test_run_probe_keeps_schema_invalid_and_length_failures_as_telemetry(monkeyp
         profile="budget",
         resolver_profile=None,
         include_controls=False,
+        sample_set="dataset",
         models=None,
         all_models=False,
         gemini="on",
@@ -458,6 +498,7 @@ def test_run_probe_returns_nonzero_on_transport_failure(monkeypatch, tmp_path):
         profile="budget",
         resolver_profile=None,
         include_controls=False,
+        sample_set="dataset",
         models=None,
         all_models=False,
         gemini="on",
