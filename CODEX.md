@@ -102,28 +102,23 @@ The production-study DB helpers are:
 - `scripts/summarize_thesis_eval_db.py`
 - `scripts/production_eval_db_common.py`
 
-Selection policy:
-- latest complete run per canonical family by package/version coverage, then recency
-- default DB-analysis sample set is `dataset`; controls/both runs must be selected explicitly
-- primary families:
-  - `sast-only`
-  - `profile:budget:llm-no-agentic`
-  - `profile:medium:llm-no-agentic`
-  - `profile:frontier:llm-no-agentic`
-  - `profile:frontier:agentic-only`
-  - `profile:all_models:identity-alias-probe`
-
 Repair behavior:
-- only targets `experiment_mode="error"` rows in the selected runs
+- scans the configured analysis DB for all matching `experiment_mode="error"` rows by default
+- supports narrowing by sample set, run id, detector, and intended mode
+- classifies matched rows as rerunnable or skipped before backing up the DB
 - re-downloads only the affected artifact, not the full simulator sample set
 - reuses stored alias names for alias-probe rows
-- creates a new `:repair` run per selected source run
+- creates a new `:repair` run per source run represented in the rerunnable set
 - keeps the original source rows untouched and links correction rows back with `repair_source_row_id`
+- uses aggressive retry and token settings because this is an operator recovery path, not a normal experiment lane
 
 Summarizer behavior:
+- latest complete run per canonical family by package/version coverage, then recency
+- default DB-analysis sample set is `dataset`; controls/both runs must be selected explicitly
 - primary detector metrics exclude error-only package/version units from TP/TN/FP/FN
 - alias probe is reported as a validity sidecar, not folded into primary detector scoring
 - emits both raw and cleaned overlays; cleaned views only replace source error rows when a correction row exists
+- extra repair runs for noncanonical source runs are ignored by the canonical thesis summary
 
 ## Useful Commands
 

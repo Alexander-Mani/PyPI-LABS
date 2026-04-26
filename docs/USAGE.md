@@ -420,33 +420,30 @@ same working tree or DB path. Two dedicated scripts support the thesis-analysis
 workflow against the configured analysis DB:
 
 ```bash
-# Preview the latest-complete canonical + alias repair scope.
+# Preview all matching error rows in the analysis DB.
 ./.venv/bin/python scripts/error_correct_production_data.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --dry-run
 
-# Create append-only correction runs for selected error rows after creating a timestamped backup.
+# Create append-only correction runs for all matching rerunnable error rows.
 ./.venv/bin/python scripts/error_correct_production_data.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --apply
 
-# Generate thesis-ready CSV/Markdown summaries from the selected latest-complete runs.
+# Generate thesis-ready CSV/Markdown summaries from the canonical latest-complete runs.
 ./.venv/bin/python scripts/summarize_thesis_eval_db.py --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db --out-dir analysis/eval_db/latest
 ```
 
-`error_correct_production_data.py` selects the latest complete run for each
-canonical family by package/version coverage, then recovers only
-`experiment_mode="error"` rows from:
-
-- `sast-only`
-- `profile:budget:llm-no-agentic`
-- `profile:medium:llm-no-agentic`
-- `profile:frontier:llm-no-agentic`
-- `profile:frontier:agentic-only`
-- `profile:all_models:identity-alias-probe`
+`error_correct_production_data.py` now scans the configured analysis DB for all
+matching `experiment_mode="error"` rows, across run families by default. It
+supports filters such as `--sample-set`, `--run-id`, `--detector`, and
+`--intended-mode`, then classifies each matched row as rerunnable or skipped
+before any DB backup or API spend happens.
 
 The repair path re-downloads only the affected artifacts, rebuilds the extracted
 package, reapplies alias masking for alias-probe rows, and writes the rerun
 result into a new timestamped correction run for each selected source run.
 Original source rows remain untouched. Non-agentic repairs force a larger token
 budget and stronger retry policy. Agentic repairs keep the same detector identity
-but add script-level retries for deployment-availability failures.
+but add script-level retries for deployment-availability failures. If no rows
+match, or all matched rows are skipped during preflight, the script exits
+nonzero and does not create a backup.
 
 `summarize_thesis_eval_db.py` uses the same latest-complete selection policy and
 emits:
@@ -460,8 +457,12 @@ emits:
 - raw and cleaned error inventory
 - raw and cleaned alias-sensitivity comparisons against canonical hybrid zero-shot rows
 
-These scripts are intentionally hardcoded to the current production-study shape.
-They should point at the configured analysis DB for the selected environment.
+The repair and summary scripts intentionally serve different purposes:
+
+- `error_correct_production_data.py` is the operator-facing whole-DB repair tool
+- `summarize_thesis_eval_db.py` remains the canonical thesis-analysis reducer
+
+Both should point at the configured analysis DB for the selected environment.
 
 ---
 
@@ -501,9 +502,9 @@ Experiment Suite` contains actual analyzer runs and warns when the active
 context's configured analysis DB already contains result rows.
 
 The `Database` section also exposes the production-study DB workflow directly:
-- preview append-only correction runs against the configured analysis DB
-- create those correction runs with the repair script
-- summarize raw and cleaned thesis-analysis views from the same configured DB
+- preview whole-DB error reruns against the configured analysis DB
+- create append-only correction runs for those matching error rows
+- summarize canonical raw and cleaned thesis-analysis views from the same configured DB
 
 The canonical experiment actions are organized so static baselines run only via
 `Static baseline once`. Full budget/medium/frontier model runs skip static
