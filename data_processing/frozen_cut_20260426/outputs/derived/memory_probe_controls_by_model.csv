@@ -1,0 +1,14 @@
+label,model_name,calls,parsed,package_true,exact_true,package_only_true,recognized_false,recognized_unknown,schema_invalid,length_empty,blank_content,transport_failures,benign_package_false_positives,benign_exact_false_positives,suspicious_exact_claims,total_cost_usd,mean_cost_usd,mean_latency_s
+claude_haiku,claude-haiku-4-5,10,6,4,0,4,2,4,4,0,0,0,0,0,0,0.019553,0.001955,1.512
+claude_opus,claude-opus-4-6,10,8,10,0,10,0,2,2,0,0,0,0,0,0,0.069465,0.006947,4.807
+claude_sonnet,claude-sonnet-4-6,10,10,6,1,5,4,0,0,0,0,0,0,0,0,0.034914,0.003491,5.333
+gemini,gemini-2.5-pro,10,10,6,0,6,4,0,0,0,0,0,0,0,0,0.020988,0.002099,4.726
+gemini_flash,gemini-2.5-flash,10,10,0,0,0,10,0,0,0,0,0,0,0,0,0.002031,0.000203,0.926
+gemini_flash_lite,gemini-2.5-flash-lite,10,10,8,0,8,2,0,0,0,0,0,0,0,0,0.000735,7.3e-05,3.323
+gpt,gpt-5.4,10,10,4,0,4,6,0,0,0,0,0,0,0,0,0.019048,0.001905,1.583
+gpt_mini,gpt-5.4-mini,10,10,2,0,2,8,0,0,0,0,0,0,0,0,0.004972,0.000497,1.619
+gpt_nano,gpt-5.4-nano,10,10,0,0,0,10,0,0,0,0,0,0,0,0,0.001264,0.000126,0.963
+together_budget,together_ai/Qwen/Qwen3.5-9B,10,0,0,0,0,0,10,0,10,0,0,0,0,0,0.025356,0.002536,107.115
+together_frontier,together_ai/moonshotai/Kimi-K2.5,10,10,6,2,4,4,0,0,0,0,0,0,0,0,0.081499,0.00815,61.043
+together_frontier_qwen,together_ai/Qwen/Qwen3.5-397B-A17B,10,8,1,0,1,7,2,0,2,0,0,0,0,0,0.178626,0.017863,52.14
+together_medium,together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo,10,10,6,0,6,4,0,0,0,0,0,0,0,0,0.003092,0.000309,1.459

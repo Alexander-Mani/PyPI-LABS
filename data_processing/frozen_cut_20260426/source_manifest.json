@@ -1,0 +1,35 @@
+{
+  "db": {
+    "sha256": "ec8aa8ffdf893d8b295077fc2d331ee888dbf607239e2d420ebc4ddcc1e0ea18",
+    "size_bytes": 22188032,
+    "source": "eval_results.db"
+  },
+  "generated_at": "2026-04-29T03:03:06.729108+00:00",
+  "out_root": "data_processing/frozen_cut_20260426",
+  "probe_summary_files": [
+    {
+      "dest": "data_processing/frozen_cut_20260426/outputs/memory_probe/dataset/model-memory-probe-20260426-022803.summary.json",
+      "sha256": "6e3e88178dc2596cd2385e02e786cc9c1515dbc57afa98b02e6aa13554fd94e6",
+      "size_bytes": 88804,
+      "source": "model_memory_probe/model-memory-probe-20260426-022803.summary.json"
+    },
+    {
+      "dest": "data_processing/frozen_cut_20260426/outputs/memory_probe/dataset/model-memory-probe-20260426-022803.summary.md",
+      "sha256": "888ad07233e91ddf674373efbc848e9fdd19c674aa9600c74a1849c4c41cb83a",
+      "size_bytes": 9064,
+      "source": "model_memory_probe/model-memory-probe-20260426-022803.summary.md"
+    },
+    {
+      "dest": "data_processing/frozen_cut_20260426/outputs/memory_probe/controls/model-memory-probe-20260426-125455.summary.json",
+      "sha256": "0afebf84062be4177f7dfe30043165c24ef7683a34157a85e633cded7db09de2",
+      "size_bytes": 88402,
+      "source": "model_memory_probe/model-memory-probe-20260426-125455.summary.json"
+    },
+    {
+      "dest": "data_processing/frozen_cut_20260426/outputs/memory_probe/controls/model-memory-probe-20260426-125455.summary.md",
+      "sha256": "9f18e2dc99a32559085d1996897368e095f48a2999f4f948793b4771cae75e12",
+      "size_bytes": 9240,
+      "source": "model_memory_probe/model-memory-probe-20260426-125455.summary.md"
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+label,calls,parsed,package_true,exact_true,package_only_true,recognized_false,recognized_unknown,schema_invalid,length_empty,transport_failures,benign_package_false_positives,benign_exact_false_positives,suspicious_exact_claims,total_cost_usd
+none,130,112,53,3,50,61,18,6,12,0,0,0,0,0.461541
