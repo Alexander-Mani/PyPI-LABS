@@ -1,0 +1,9 @@
+# Cleaned Error Inventory
+
+| family | detector | prompt_strategy | error_category | rows |
+| --- | --- | --- | --- | --- |
+| profile:frontier:agentic-only | claude_agentic | role_based | deployment_unavailable_429 | 18 |
+| profile:frontier:agentic-only | claude_agentic | zero_shot | deployment_unavailable_429 | 19 |
+| profile:frontier:llm-no-agentic | claude_opus | few_shot | empty_null_content | 1 |
+| profile:frontier:llm-no-agentic | claude_opus | role_based | empty_null_content | 1 |
+| profile:frontier:llm-no-agentic | claude_opus | zero_shot | empty_null_content | 1 |
