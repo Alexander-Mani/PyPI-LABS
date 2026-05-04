@@ -1,0 +1,583 @@
+{
+  "by_model": {
+    "claude_haiku": {
+      "calls": 13,
+      "completion_tokens": 1092,
+      "label": "claude_haiku",
+      "mean_cost_usd": 0.001271,
+      "mean_latency_s": 0.966,
+      "model_name": "claude-haiku-4-5",
+      "parse_status_counts": {
+        "ok_parsed": 13
+      },
+      "parsed": 13,
+      "prompt_tokens": 11069,
+      "recognition_matches": 0,
+      "recognition_mismatches": 0,
+      "recognized_false": 13,
+      "recognized_true": 0,
+      "recognized_unknown": 0,
+      "total_cost_usd": 0.016529,
+      "total_latency_s": 12.552,
+      "total_tokens": 12161,
+      "transport_failures": 0
+    },
+    "claude_opus": {
+      "calls": 13,
+      "completion_tokens": 999,
+      "label": "claude_opus",
+      "mean_cost_usd": 0.003853,
+      "mean_latency_s": 3.044,
+      "model_name": "claude-opus-4-6",
+      "parse_status_counts": {
+        "ok_parsed": 13
+      },
+      "parsed": 13,
+      "prompt_tokens": 5024,
+      "recognition_matches": 0,
+      "recognition_mismatches": 0,
+      "recognized_false": 5,
+      "recognized_true": 8,
+      "recognized_unknown": 0,
+      "total_cost_usd": 0.050095,
+      "total_latency_s": 39.571,
+      "total_tokens": 6023,
+      "transport_failures": 0
+    },
+    "claude_sonnet": {
+      "calls": 13,
+      "completion_tokens": 502,
+      "label": "claude_sonnet",
+      "mean_cost_usd": 0.001739,
+      "mean_latency_s": 3.527,
+      "model_name": "claude-sonnet-4-6",
+      "parse_status_counts": {
+        "ok_parsed": 13
+      },
+      "parsed": 13,
+      "prompt_tokens": 5024,
+      "recognition_matches": 0,
+      "recognition_mismatches": 0,
+      "recognized_false": 10,
+      "recognized_true": 3,
+      "recognized_unknown": 0,
+      "total_cost_usd": 0.022602,
+      "total_latency_s": 45.845,
+      "total_tokens": 5526,
+      "transport_failures": 0
+    },
+    "gemini": {
+      "calls": 13,
+      "completion_tokens": 1600,
+      "label": "gemini",
+      "mean_cost_usd": 0.001399,
+      "mean_latency_s": 3.275,
+      "model_name": "gemini-2.5-pro",
+      "parse_status_counts": {
+        "ok_parsed": 13
+      },
+      "parsed": 13,
+      "prompt_tokens": 1750,
+      "recognition_matches": 0,
+      "recognition_mismatches": 0,
+      "recognized_false": 10,
+      "recognized_true": 3,
+      "recognized_unknown": 0,
+      "total_cost_usd": 0.018188,
+      "total_latency_s": 42.581,
+      "total_tokens": 3350,
+      "transport_failures": 0
+    },
+    "gemini_flash": {
+      "calls": 13,
+      "completion_tokens": 299,
+      "label": "gemini_flash",
+      "mean_cost_usd": 9.8e-05,
+      "mean_latency_s": 0.836,
+      "model_name": "gemini-2.5-flash",
+      "parse_status_counts": {
+        "ok_parsed": 13
+      },
+      "parsed": 13,
+      "prompt_tokens": 1750,
+      "recognition_matches": 0,
+      "recognition_mismatches": 0,
+      "recognized_false": 13,
+      "recognized_true": 0,
+      "recognized_unknown": 0,
+      "total_cost_usd": 0.001273,
+      "total_latency_s": 10.865,
+      "total_tokens": 2049,
+      "transport_failures": 0
+    },
+    "gemini_flash_lite": {
+      "calls": 13,
+      "completion_tokens": 444,
+      "label": "gemini_flash_lite",
+      "mean_cost_usd": 2.7e-05,
+      "mean_latency_s": 0.703,
+      "model_name": "gemini-2.5-flash-lite",
+      "parse_status_counts": {
+        "ok_parsed": 13
+      },
+      "parsed": 13,
+      "prompt_tokens": 1750,
+      "recognition_matches": 0,
+      "recognition_mismatches": 0,
+      "recognized_false": 13,
+      "recognized_true": 0,
+      "recognized_unknown": 0,
+      "total_cost_usd": 0.000353,
+      "total_latency_s": 9.14,
+      "total_tokens": 2194,
+      "transport_failures": 0
+    },
+    "gpt": {
+      "calls": 13,
+      "completion_tokens": 351,
+      "label": "gpt",
+      "mean_cost_usd": 0.000915,
+      "mean_latency_s": 1.082,
+      "model_name": "gpt-5.4",
+      "parse_status_counts": {
+        "ok_parsed": 13
+      },
+      "parsed": 13,
+      "prompt_tokens": 2650,
+      "recognition_matches": 0,
+      "recognition_mismatches": 0,
+      "recognized_false": 13,
+      "recognized_true": 0,
+      "recognized_unknown": 0,
+      "total_cost_usd": 0.01189,
+      "total_latency_s": 14.067,
+      "total_tokens": 3001,
+      "transport_failures": 0
+    },
+    "gpt_mini": {
+      "calls": 13,
+      "completion_tokens": 351,
+      "label": "gpt_mini",
+      "mean_cost_usd": 0.000274,
+      "mean_latency_s": 1.32,
+      "model_name": "gpt-5.4-mini",
+      "parse_status_counts": {
+        "ok_parsed": 13
+      },
+      "parsed": 13,
+      "prompt_tokens": 2650,
+      "recognition_matches": 0,
+      "recognition_mismatches": 0,
+      "recognized_false": 13,
+      "recognized_true": 0,
+      "recognized_unknown": 0,
+      "total_cost_usd": 0.003567,
+      "total_latency_s": 17.166,
+      "total_tokens": 3001,
+      "transport_failures": 0
+    },
+    "gpt_nano": {
+      "calls": 13,
+      "completion_tokens": 351,
+      "label": "gpt_nano",
+      "mean_cost_usd": 7.5e-05,
+      "mean_latency_s": 1.003,
+      "model_name": "gpt-5.4-nano",
+      "parse_status_counts": {
+        "ok_parsed": 13
+      },
+      "parsed": 13,
+      "prompt_tokens": 2650,
+      "recognition_matches": 0,
+      "recognition_mismatches": 0,
+      "recognized_false": 13,
+      "recognized_true": 0,
+      "recognized_unknown": 0,
+      "total_cost_usd": 0.000969,
+      "total_latency_s": 13.04,
+      "total_tokens": 3001,
+      "transport_failures": 0
+    },
+    "together_budget": {
+      "calls": 13,
+      "completion_tokens": 23973,
+      "label": "together_budget",
+      "mean_cost_usd": 0.000584,
+      "mean_latency_s": 42.92,
+      "model_name": "together_ai/Qwen/Qwen3.5-9B",
+      "parse_status_counts": {
+        "ok_empty_length": 4,
+        "ok_parsed": 5,
+        "transport_client_error": 4
+      },
+      "parsed": 5,
+      "prompt_tokens": 1326,
+      "recognition_matches": 0,
+      "recognition_mismatches": 0,
+      "recognized_false": 5,
+      "recognized_true": 0,
+      "recognized_unknown": 8,
+      "total_cost_usd": 0.00759,
+      "total_latency_s": 557.962,
+      "total_tokens": 25299,
+      "transport_failures": 4
+    },
+    "together_frontier": {
+      "calls": 13,
+      "completion_tokens": 16557,
+      "label": "together_frontier",
+      "mean_cost_usd": 0.003608,
+      "mean_latency_s": 10.62,
+      "model_name": "together_ai/moonshotai/Kimi-K2.5",
+      "parse_status_counts": {
+        "ok_parsed": 13
+      },
+      "parsed": 13,
+      "prompt_tokens": 1869,
+      "recognition_matches": 0,
+      "recognition_mismatches": 0,
+      "recognized_false": 11,
+      "recognized_true": 2,
+      "recognized_unknown": 0,
+      "total_cost_usd": 0.04691,
+      "total_latency_s": 138.062,
+      "total_tokens": 18426,
+      "transport_failures": 0
+    },
+    "together_frontier_qwen": {
+      "calls": 13,
+      "completion_tokens": 17745,
+      "label": "together_frontier_qwen",
+      "mean_cost_usd": 0.00497,
+      "mean_latency_s": 9.992,
+      "model_name": "together_ai/Qwen/Qwen3.5-397B-A17B",
+      "parse_status_counts": {
+        "ok_empty_length": 1,
+        "ok_parsed": 12
+      },
+      "parsed": 12,
+      "prompt_tokens": 1915,
+      "recognition_matches": 0,
+      "recognition_mismatches": 0,
+      "recognized_false": 12,
+      "recognized_true": 0,
+      "recognized_unknown": 1,
+      "total_cost_usd": 0.064609,
+      "total_latency_s": 129.892,
+      "total_tokens": 19660,
+      "transport_failures": 0
+    },
+    "together_medium": {
+      "calls": 13,
+      "completion_tokens": 312,
+      "label": "together_medium",
+      "mean_cost_usd": 0.000172,
+      "mean_latency_s": 0.756,
+      "model_name": "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+      "parse_status_counts": {
+        "ok_parsed": 13
+      },
+      "parsed": 13,
+      "prompt_tokens": 2168,
+      "recognition_matches": 0,
+      "recognition_mismatches": 0,
+      "recognized_false": 13,
+      "recognized_true": 0,
+      "recognized_unknown": 0,
+      "total_cost_usd": 0.002232,
+      "total_latency_s": 9.834,
+      "total_tokens": 2480,
+      "transport_failures": 0
+    }
+  },
+  "by_sample_role": {
+    "benign": {
+      "calls": 52,
+      "completion_tokens": 29332,
+      "label": "benign",
+      "mean_cost_usd": 0.001582,
+      "mean_latency_s": 7.249,
+      "model_name": null,
+      "parse_status_counts": {
+        "ok_empty_length": 4,
+        "ok_parsed": 48
+      },
+      "parsed": 48,
+      "prompt_tokens": 12917,
+      "recognition_matches": 0,
+      "recognition_mismatches": 0,
+      "recognized_false": 47,
+      "recognized_true": 1,
+      "recognized_unknown": 4,
+      "total_cost_usd": 0.082245,
+      "total_latency_s": 376.946,
+      "total_tokens": 42249,
+      "transport_failures": 0
+    },
+    "malware": {
+      "calls": 117,
+      "completion_tokens": 35244,
+      "label": "malware",
+      "mean_cost_usd": 0.001406,
+      "mean_latency_s": 5.672,
+      "model_name": null,
+      "parse_status_counts": {
+        "ok_empty_length": 1,
+        "ok_parsed": 112,
+        "transport_client_error": 4
+      },
+      "parsed": 112,
+      "prompt_tokens": 28678,
+      "recognition_matches": 0,
+      "recognition_mismatches": 0,
+      "recognized_false": 97,
+      "recognized_true": 15,
+      "recognized_unknown": 5,
+      "total_cost_usd": 0.164559,
+      "total_latency_s": 663.632,
+      "total_tokens": 63922,
+      "transport_failures": 4
+    }
+  },
+  "case_source": "profile:all_models",
+  "cases": [
+    {
+      "category": "benign",
+      "expected_recognized": null,
+      "id": "benign-colorama-0-4-6",
+      "package_name": "colorama",
+      "sample_role": "benign",
+      "source": "production",
+      "version": "0.4.6"
+    },
+    {
+      "category": "benign",
+      "expected_recognized": null,
+      "id": "benign-python-nmap-0-7-1",
+      "package_name": "python-nmap",
+      "sample_role": "benign",
+      "source": "production",
+      "version": "0.7.1"
+    },
+    {
+      "category": "benign",
+      "expected_recognized": null,
+      "id": "benign-sisa-0-922",
+      "package_name": "sisa",
+      "sample_role": "benign",
+      "source": "production",
+      "version": "0.922"
+    },
+    {
+      "category": "benign",
+      "expected_recognized": null,
+      "id": "benign-termcolor-3-3-0",
+      "package_name": "termcolor",
+      "sample_role": "benign",
+      "source": "production",
+      "version": "3.3.0"
+    },
+    {
+      "category": "malware",
+      "expected_recognized": null,
+      "id": "malware-colourama-0-1-6",
+      "package_name": "colourama",
+      "sample_role": "malware",
+      "source": "production",
+      "version": "0.1.6"
+    },
+    {
+      "category": "malware",
+      "expected_recognized": null,
+      "id": "malware-nmap-python-0-6-1",
+      "package_name": "nmap-python",
+      "sample_role": "malware",
+      "source": "production",
+      "version": "0.6.1"
+    },
+    {
+      "category": "malware",
+      "expected_recognized": null,
+      "id": "malware-num2words-0-5-16",
+      "package_name": "num2words",
+      "sample_role": "malware",
+      "source": "production",
+      "version": "0.5.16"
+    },
+    {
+      "category": "malware",
+      "expected_recognized": null,
+      "id": "malware-secmeasure-0-1-2",
+      "package_name": "secmeasure",
+      "sample_role": "malware",
+      "source": "production",
+      "version": "0.1.2"
+    },
+    {
+      "category": "malware",
+      "expected_recognized": null,
+      "id": "malware-sisaws-2-1-6",
+      "package_name": "sisaws",
+      "sample_role": "malware",
+      "source": "production",
+      "version": "2.1.6"
+    },
+    {
+      "category": "malware",
+      "expected_recognized": null,
+      "id": "malware-termncolor-3-1-0",
+      "package_name": "termncolor",
+      "sample_role": "malware",
+      "source": "production",
+      "version": "3.1.0"
+    },
+    {
+      "category": "malware",
+      "expected_recognized": null,
+      "id": "malware-torchtriton-2-0-0-0d7e753227",
+      "package_name": "torchtriton",
+      "sample_role": "malware",
+      "source": "production",
+      "version": "2.0.0+0d7e753227"
+    },
+    {
+      "category": "malware",
+      "expected_recognized": null,
+      "id": "malware-totallysafe-2-0-0",
+      "package_name": "totallysafe",
+      "sample_role": "malware",
+      "source": "production",
+      "version": "2.0.0"
+    },
+    {
+      "category": "malware",
+      "expected_recognized": null,
+      "id": "malware-ultralytics-8-3-46",
+      "package_name": "ultralytics",
+      "sample_role": "malware",
+      "source": "production",
+      "version": "8.3.46"
+    }
+  ],
+  "created_at": "2026-04-26T01:22:01+00:00",
+  "event": "run.summary",
+  "model_source": "profile:all_models",
+  "models": [
+    {
+      "config_stem": "claude_haiku",
+      "extra_body": null,
+      "model_name": "claude-haiku-4-5",
+      "reasoning_effort": null,
+      "temperature": 0.0
+    },
+    {
+      "config_stem": "gpt_nano",
+      "extra_body": null,
+      "model_name": "gpt-5.4-nano",
+      "reasoning_effort": null,
+      "temperature": 0.0
+    },
+    {
+      "config_stem": "gemini_flash_lite",
+      "extra_body": null,
+      "model_name": "gemini-2.5-flash-lite",
+      "reasoning_effort": null,
+      "temperature": 0.0
+    },
+    {
+      "config_stem": "together_budget",
+      "extra_body": null,
+      "model_name": "together_ai/Qwen/Qwen3.5-9B",
+      "reasoning_effort": null,
+      "temperature": 0.0
+    },
+    {
+      "config_stem": "claude_sonnet",
+      "extra_body": null,
+      "model_name": "claude-sonnet-4-6",
+      "reasoning_effort": null,
+      "temperature": 0.0
+    },
+    {
+      "config_stem": "gpt_mini",
+      "extra_body": null,
+      "model_name": "gpt-5.4-mini",
+      "reasoning_effort": null,
+      "temperature": 0.0
+    },
+    {
+      "config_stem": "gemini_flash",
+      "extra_body": null,
+      "model_name": "gemini-2.5-flash",
+      "reasoning_effort": "none",
+      "temperature": 0.0
+    },
+    {
+      "config_stem": "together_medium",
+      "extra_body": null,
+      "model_name": "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+      "reasoning_effort": null,
+      "temperature": 0.0
+    },
+    {
+      "config_stem": "claude_opus",
+      "extra_body": null,
+      "model_name": "claude-opus-4-6",
+      "reasoning_effort": null,
+      "temperature": 0.0
+    },
+    {
+      "config_stem": "gpt",
+      "extra_body": null,
+      "model_name": "gpt-5.4",
+      "reasoning_effort": null,
+      "temperature": 0.0
+    },
+    {
+      "config_stem": "gemini",
+      "extra_body": null,
+      "model_name": "gemini-2.5-pro",
+      "reasoning_effort": "minimal",
+      "temperature": 0.0
+    },
+    {
+      "config_stem": "together_frontier",
+      "extra_body": null,
+      "model_name": "together_ai/moonshotai/Kimi-K2.5",
+      "reasoning_effort": null,
+      "temperature": 0.0
+    },
+    {
+      "config_stem": "together_frontier_qwen",
+      "extra_body": null,
+      "model_name": "together_ai/Qwen/Qwen3.5-397B-A17B",
+      "reasoning_effort": null,
+      "temperature": 0.0
+    }
+  ],
+  "output_path": "/home/pypi-runner/pypi-scada-repo/logs/model_memory_probe/model-memory-probe-20260426-010439.jsonl",
+  "parse_status_counts": {
+    "ok_empty_length": 5,
+    "ok_parsed": 160,
+    "transport_client_error": 4
+  },
+  "parsed_results": 160,
+  "provider_costs": {
+    "anthropic": 0.089226,
+    "google": 0.019813,
+    "openai": 0.016426,
+    "together": 0.12134
+  },
+  "recognition_matches": 0,
+  "recognition_mismatches": 0,
+  "recognized_false": 144,
+  "recognized_true": 16,
+  "recognized_unknown": 9,
+  "run_id": "memory-probe-86ca160e-871d-4ef3-853b-c101db234525",
+  "scope": "production",
+  "summary_json_path": "/home/pypi-runner/pypi-scada-repo/logs/model_memory_probe/model-memory-probe-20260426-010439.summary.json",
+  "summary_md_path": "/home/pypi-runner/pypi-scada-repo/logs/model_memory_probe/model-memory-probe-20260426-010439.summary.md",
+  "total_calls": 169,
+  "total_cost_usd": 0.246805,
+  "transport_failures": 4
+}
