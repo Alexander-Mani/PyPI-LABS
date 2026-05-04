@@ -1,0 +1,52 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#d9e8f5', 'primaryTextColor': '#15202b', 'primaryBorderColor': '#3f6f8c', 'lineColor': '#2f4858', 'secondaryColor': '#f4efe2', 'tertiaryColor': '#eef4ea', 'fontFamily': 'Helvetica' }}}%%
+flowchart TB
+    classDef service fill:#d9e8f5,stroke:#3f6f8c,stroke-width:1px,color:#15202b;
+    classDef static fill:#eef4ea,stroke:#587246,stroke-width:1px,color:#15202b;
+    classDef llm fill:#f4efe2,stroke:#8b6f3d,stroke-width:1px,color:#15202b;
+    classDef legacy fill:#f6e7dd,stroke:#a66a41,stroke-width:1px,color:#15202b;
+    classDef output fill:#f7f8fa,stroke:#5f6b76,stroke-width:1px,color:#15202b;
+
+    RES["Resolve package/version<br/>latest labelled stable<br/>all artifacts for selected version"]
+    DLOAD["Download artifact<br/>from simulator"]
+    SAFE["Static only<br/>no install / no execute"]
+    EXT["Extract entry points<br/>setup.py / __init__.py / pyproject.toml"]
+    BFS["Follow direct imports<br/>BFS depth <= 3"]
+    HEUR["Heuristic pre-filter<br/>base64, shell, network, bundled binary"]
+    EVID["Shared evidence bundle<br/>code slices + file listing + heuristic flags"]
+
+    subgraph STATIC[Static baselines]
+        BAND["Bandit"]
+        SEM["Semgrep offline pack"]
+        GD["GuardDog source-only"]
+    end
+
+    subgraph SINGLE[Single-shot LLM lanes]
+        RAW["Raw prompt<br/>code only"]
+        HYB["Hybrid prompt<br/>code + static outputs + flags"]
+        AG["Agentic lane<br/>legacy / non-canonical"]
+    end
+
+    CTRL["Detection controller<br/>normalize verdicts, timing, cost, error rows"]
+    ROWS[("eval_result rows")]
+    AGG["Package-version aggregation<br/>TP / TN / FP / FN / F1"]
+
+    RES --> DLOAD --> SAFE --> EXT --> BFS --> HEUR --> EVID
+    EVID --> BAND
+    EVID --> SEM
+    EVID --> GD
+    EVID --> RAW
+    EVID --> HYB
+    EVID -. optional legacy lane .-> AG
+    BAND --> CTRL
+    SEM --> CTRL
+    GD --> CTRL
+    RAW --> CTRL
+    HYB --> CTRL
+    AG -. non-primary results .-> CTRL
+    CTRL --> ROWS --> AGG
+
+    class RES,DLOAD,SAFE,EXT,BFS,HEUR,EVID,CTRL service;
+    class BAND,SEM,GD static;
+    class RAW,HYB llm;
+    class AG legacy;
+    class ROWS,AGG output;

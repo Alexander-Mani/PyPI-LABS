@@ -11,6 +11,7 @@ PyPi-SCADA is an isolated lab environment for studying PyPI supply chain attacks
 ## Architecture
 
 The system has three components under `src/` and a curated sample dataset under `samples/`.
+Canonical Mermaid source for the current system diagrams lives under [`docs/diagrams/mermaid/`](docs/diagrams/mermaid/README.md); rendered thesis assets are committed under `overleaf_thesis/images/`.
 
 ```
 src/
