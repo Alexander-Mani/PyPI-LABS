@@ -152,7 +152,41 @@ Snapshot discipline matters because the system explicitly does not install or ex
 
 The canonical first-run path uses two scripts in sequence: `scripts/debian_first_time_setup.sh` to bring the OS-level prerequisites into place, and `deployment.sh` to assemble the application layout under `/home/pypi-runner/pypi-scada-repo`. Both are idempotent and safe to re-run if you need to recover from a partial setup.
 
-Before you start, make sure three things are in place. A `.env` file with your vendor API keys must be staged for the `proxy-runner` account at `~proxy-runner/.env`; this is the only credential file on the system, and the analyzer never reads it. The encrypted malware sample bundle (`malware_backstabbers_knife.zip`, password `infected`) and the benign and controls bundle must be available to the operator account so the deployment script can extract them. If you are cloning the repository over HTTPS rather than SSH, a Git access token in `~/.netrc` is the easiest way for the script to authenticate.
+Before you start, two things must be in place: a `.env` file with the deployment environment variables (see the next subsection), and the two sample bundles staged on disk (see the subsection after that). `deployment.sh` will set up `~/.netrc` for you from the `PULL_TOKEN` value in `.env`; the token is a fine-grained, pull-only PAT supplied by the project author for hand-in, so do not commit it anywhere.
+
+### The `.env` file (required)
+
+`deployment.sh` reads its environment from a `.env` file in its own working directory — typically the root of the operator's checkout (`~/PyPi-SCADA/.env`). Copy [`.env.example`](.env.example) to `.env` and fill in each value:
+
+```bash
+cp .env.example .env
+$EDITOR .env
+```
+
+The variables and where to obtain them:
+
+- `PULL_TOKEN` — supplied by the project author for hand-in (a fine-grained, pull-only GitHub personal access token for this private repository). Do not generate your own; paste the supplied value verbatim.
+- `ANTHROPIC_API_KEY` — sign up at <https://console.anthropic.com> and create a key under Settings → API keys.
+- `OPENAI_API_KEY` — sign up at <https://platform.openai.com> and create a key under Dashboard → API keys.
+- `TOGETHER_API_KEY` — sign up at <https://www.together.ai> and create a key under Settings → API keys.
+- `GEMINI_API_KEY` — only required when `deployment.sh` is run with `GEMINI=on` (the default). Sign up at <https://aistudio.google.com> and create a key under "Get API key".
+
+`deployment.sh` then writes a curated subset of these (the four vendor API keys only — never `PULL_TOKEN`) to `/home/proxy-runner/.env` with mode 600. The `proxy-runner` account is the only account that ever reads the vendor keys; the analyzer process never sees them.
+
+### Sample bundles (required)
+
+Stage two zip files in the operator's home directory before invoking `deployment.sh`:
+
+- `benign_and_controlls.zip` — the benign and high-volume control corpus (note the filename has two `l`s).
+- `malware_backstabbers_knife.zip` — the malicious corpus, encrypted with password `infected` (the Backstabber's Knife Collection community password).
+
+The default staging directory is `/home/operator/samples/`. Override it by exporting `SAMPLES_DIR` before running `deployment.sh`:
+
+```bash
+export SAMPLES_DIR=/home/<your-user>/samples
+```
+
+`deployment.sh` extracts both bundles into `/home/pypi-runner/pypi-scada-repo/samples/` under the deployed-runner checkout.
 
 The four steps in order:
 
@@ -274,6 +308,8 @@ The supporting documents in `docs/ops/` explain why each isolation decision was 
 ## Troubleshooting
 
 The following are failure modes that have actually occurred during the project, with their usual causes and resolutions.
+
+**`deployment.sh` aborts with `ERROR: .env not found`.** The script needs `PULL_TOKEN` plus the four vendor API keys before it can proceed. Copy `.env.example` to `.env` in the same directory as `deployment.sh` and fill in the values described in the "The `.env` file (required)" subsection above.
 
 **Missing `.env` for the proxy.** The `proxy-runner` LiteLLM process fails to start, the analyzer detector calls all return `unauthorized` or time out, and the log under `/home/proxy-runner/litellm.log` mentions missing API keys. The cause is that `~proxy-runner/.env` was never staged. Copy the master `.env` into that account's home directory, set the owner to `proxy-runner`, set mode to `600`, then restart the proxy with `scripts/service_control.sh restart proxy`.
 
