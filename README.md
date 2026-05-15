@@ -267,6 +267,8 @@ The supporting documents in `docs/ops/` explain why each isolation decision was 
 
 [`docs/ops/DEPENDENCY_SECURITY_SOP.md`](docs/ops/DEPENDENCY_SECURITY_SOP.md) is the short standard operating procedure for the hash-pinned dependency workflow used by the lockfiles under `requirements/`.
 
+[`docs/research/CONCERNS.md`](docs/research/CONCERNS.md) is a methodology document covering the deliberate design trade-offs in ground-truth labelling, evaluation interpretation, and the known limitations a reader should keep in mind before drawing conclusions from the metrics. It is the companion to the results in `data_processing/frozen_cut_20260426/`.
+
 ---
 
 ## Troubleshooting
