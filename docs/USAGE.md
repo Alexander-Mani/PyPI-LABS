@@ -1,6 +1,12 @@
-# PyPi-SCADA — Usage Guide
+# PyPI-LABS — Notendahandbók (User Manual)
 
-Quick reference for running the Simulator and Injector locally.
+This document is the Notendahandbók (user manual) for PyPI-LABS. The companion Rekstrarhandbók (operations manual), which covers setting up the Debian VM, deploying the system, and recovering from common failure modes, is the project [`README.md`](../README.md). Use this manual once the system is deployed and you are ready to run experiments against it. The on-disk directory and the GitHub repository remain named `PyPi-SCADA` for git continuity; PyPI-LABS is the project name used throughout.
+
+## What this tool does for you
+
+PyPI-LABS is the benchmark environment used in the thesis to compare static analysis baselines (Bandit, offline Semgrep, GuardDog) against single-shot LLM detectors on a curated set of malicious Python packages. As a user, you interact with three surfaces: the **simulator**, which is a local PEP 503 package index that the analyzer reads from instead of public PyPI; the **injector**, which stages benign, control, and malicious archives into that simulator; and the **analyzer**, which downloads selected artifacts from the simulator, extracts entry-point evidence, and runs detector lanes against that evidence.
+
+A typical session means starting the simulator and proxy, uploading the sample bundle once via the injector, then running the analyzer one or more times with different model profiles. The analyzer writes every verdict, every cost reading, and every error into `src/data/eval_results.db` (or the deployed runner's equivalent), and the summarizer scripts under `scripts/` and `data_processing/` reduce those rows into the thesis-ready tables and figures. The system never installs or executes sample packages; it only reads them.
 
 ---
 
@@ -627,6 +633,30 @@ python scripts/litellm_smoke.py --all-models --retries 3 --retry-delay 20
 **VM deployment:** See `docs/ops/DEPLOYMENT_MANIFEST.md` Step 7 — LiteLLM runs as
 `proxy-runner` with keys in `~proxy-runner/.env` and egress restricted to
 deployment-time resolved vendor API IPs via iptables owner rules.
+
+---
+
+## Interpreting Results
+
+The analyzer writes one row per detector call into `eval_results.db`. A few field semantics are worth knowing before you read the summarized tables.
+
+`experiment_mode` records which detector lane produced the row: `static` for the SAST baselines, `hybrid` for the single-shot LLM lane that receives source plus mechanical heuristic context, `raw` for the source-only single-shot LLM lane, and `agentic` for the legacy multi-step lane (kept available but not part of the primary thesis scoring). Rows with `experiment_mode="error"` are protocol failures: a provider returned an empty body, prose without JSON, or a malformed verdict object. The summarizer excludes these from package-version metrics rather than counting them as benign, and the repair script can rerun the affected artifacts to fill the gaps.
+
+`run_id` carries provenance. Canonical thesis runs use the `canonical-v2-` prefix; older rows produced before the methodology change use other prefixes and should not be mixed with canonical scoring. Append-only correction runs created by `scripts/error_correct_production_data.py` end with `:repair` semantics on the source family and never overwrite the original error rows. The summarizer's "raw" tables include the original rows as scored; the "cleaned" tables include the repair overlay so you can see what changes when retried errors land verdicts.
+
+The heuristic flags surfaced in `hybrid` prompts come from `src/analyzer/heuristic_filter.py`: `base64_or_hex` (encoded payload candidates), `network_in_install_hook` (outbound calls reached during install), `shell_execution` (shell invocation primitives in install or import code), and `bundled_binary` (compiled artifacts shipped inside the archive). These are mechanical signals, not detector verdicts; they are evidence the LLM is allowed to use in `hybrid` mode but does not see in `raw` mode.
+
+`error_only_package_versions` is the count of package versions for which every selected detector returned an error row, with no clean verdict. A non-zero value here means a package-version is entirely missing from the scored metrics for that run. The repair workflow targets these directly.
+
+To produce the thesis-ready summary from the configured analysis DB:
+
+```bash
+./.venv/bin/python scripts/summarize_thesis_eval_db.py \
+  --db /home/pypi-runner/pypi-scada-repo/src/data/eval_results.db \
+  --out-dir analysis/eval_db/latest
+```
+
+Replace the `--db` path with `analysis/eval_results.db` for the local-checkout frozen-cut validation flow.
 
 ---
 
