@@ -16,7 +16,7 @@ from evaluate import EvaluationRunner  # noqa: E402
 
 
 class _FakeDB:
-    def create_eval_run(self, run_id, tier="unknown"):
+    def create_eval_run(self, run_id, tier="unknown", sample_set="dataset"):
         return None
 
 
@@ -35,6 +35,7 @@ def _runner_with_controller(controller):
     runner._tier = "budget"
     runner._profile = "budget"
     runner._run_label = "profile:budget"
+    runner._sample_set = "dataset"
     runner._db = _FakeDB()
     runner._extractor = _FakeExtractor()
     runner._filter = _FakeFilter()
