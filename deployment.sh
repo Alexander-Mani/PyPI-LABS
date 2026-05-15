@@ -115,10 +115,23 @@ if [[ "${FORCE_UNZIP_OVERWRITE:-0}" == "1" ]]; then
   UNZIP_FLAGS="-oq"
 fi
 
+# Resolve SAMPLES_DIR from the invoking operator's home directory when the
+# variable is unset. SUDO_USER survives the outer script when the operator
+# invokes deployment.sh via sudo; otherwise fall back to USER and finally
+# whoami. The operator can override SAMPLES_DIR in .env or on the command
+# line for non-standard layouts.
+_OPERATOR_USER="${SUDO_USER:-${USER:-$(whoami)}}"
+_OPERATOR_HOME=$(getent passwd "$_OPERATOR_USER" | cut -d: -f6)
+if [ -z "${_OPERATOR_HOME}" ]; then
+  _OPERATOR_HOME="/home/${_OPERATOR_USER}"
+fi
+SAMPLES_DIR="${SAMPLES_DIR:-${_OPERATOR_HOME}/samples}"
+echo "Sample bundles staging directory: ${SAMPLES_DIR}"
+
 # Malicious bundle is optional: when handing the project to a supervisor or
 # examiner who cannot legally receive the live malware corpus, omit the zip.
 # deployment.sh continues with benign and controls only.
-_MALWARE_ZIP="${SAMPLES_DIR:-/home/operator/samples}/malware_backstabbers_knife.zip"
+_MALWARE_ZIP="${SAMPLES_DIR}/malware_backstabbers_knife.zip"
 if [ -f "${_MALWARE_ZIP}" ]; then
   _HAS_MALWARE=1
   _MALWARE_EXTRACT="unzip -P infected ${UNZIP_FLAGS} \"${_MALWARE_ZIP}\" -d /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife/"
@@ -128,13 +141,24 @@ else
   _MALWARE_EXTRACT="echo 'Skipping malicious bundle extraction (zip not present).'"
 fi
 
+_BENIGN_ZIP="${SAMPLES_DIR}/benign_and_controlls.zip"
+if [ ! -f "${_BENIGN_ZIP}" ]; then
+  echo "ERROR: benign_and_controlls.zip not found at ${_BENIGN_ZIP}." >&2
+  echo "       Set SAMPLES_DIR in your environment or .env to the directory containing the sample zips." >&2
+  exit 1
+fi
+
+# Run the extraction with strict mode inside the sudo subshell so a failing
+# unzip aborts the deployment instead of silently falling through to the
+# next echo and leaving an empty samples tree.
 sudo -u pypi-runner bash -c "
+  set -euo pipefail
   mkdir -p /home/pypi-runner/pypi-scada-repo/samples/benign
   mkdir -p /home/pypi-runner/pypi-scada-repo/samples/controls
 
   echo 'Extracting benign and controls...'
   # Extract at samples/ root so both benign/ and controls/ land in expected paths.
-  unzip ${UNZIP_FLAGS} ${SAMPLES_DIR:-/home/operator/samples}/benign_and_controlls.zip -d /home/pypi-runner/pypi-scada-repo/samples/
+  unzip ${UNZIP_FLAGS} \"${_BENIGN_ZIP}\" -d /home/pypi-runner/pypi-scada-repo/samples/
 
   echo 'Preparing malicious bundle directory...'
   rm -rf /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife
