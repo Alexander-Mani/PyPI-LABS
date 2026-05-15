@@ -154,7 +154,7 @@ sys.exit(1 if missing else 0)' \"\$guarddog_rules_output\"
   rm -f \"\$guarddog_rules_output\"
   # src.injector.upload_samples shells out to python -m twine from this venv.
   pip install --require-hashes --no-deps --quiet -r requirements/injector-requirements.txt
-  echo 'Validating PyPi-SCADA package imports...'
+  echo 'Validating PyPI-LABS package imports...'
   PYTHONPATH=/home/pypi-runner/pypi-scada-repo python -c 'import src.utils.logger; import src.injector.upload_samples'
   echo 'Validating Twine upload runtime imports...'
   python -c 'import twine.commands.upload; from backports import tarfile'

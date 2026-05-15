@@ -69,8 +69,8 @@ The primary detection pipeline is the **entry-point scanning evaluation pipeline
 - `detection_controller.py` -- `EvalController` (orchestration layer)
 - `adapters.py` -- static baselines (`bandit`, custom offline-rule `semgrep`, source-only `guarddog`), `LLMAdapter` (single-shot hybrid prompts with static context), `LLMRawAdapter` (single-shot raw prompts with source only), and `AgenticAdapter` (legacy/non-primary multi-step workflow); all LLM calls route through LiteLLM on `http://127.0.0.1:4000`
 - `configs/` -- per-model YAML configs and the `models.json` pricing/tier registry.
-- `TODO.md` -- Phase III and IV task tracking
-- `CONCERNS.md` -- documented design decisions and data interpretation caveats
+
+Methodology trade-offs and known limitations for the analyzer are documented separately in [`docs/research/CONCERNS.md`](docs/research/CONCERNS.md).
 
 ---
 
