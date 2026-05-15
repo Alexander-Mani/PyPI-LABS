@@ -126,5 +126,5 @@ sudo -u pypi-runner -i
 - Full CLI flag list: `python src/analyzer/evaluate.py --help`
 - Interactive menu instead of the CLI: `python scripts/review_tui.py`
 - Setup from a clean VM: [`../README.md`](../README.md)
-- Security and isolation decisions: [`../docs/ops/RISK_DIARY.md`](ops/RISK_DIARY.md)
+- Security and isolation decisions: [`docs/ops/RISK_DIARY.md`](ops/RISK_DIARY.md)
 - The older verbose version of this manual: `git log -- docs/USAGE.md` (the previous 682-line revision is in history)
