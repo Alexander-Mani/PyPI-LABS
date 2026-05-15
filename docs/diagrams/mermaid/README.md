@@ -19,7 +19,7 @@ This directory is the canonical source for the system diagrams used in the thesi
 
 ## Rendering
 
-The repo does not expect Overleaf to render Mermaid directly. Render SVG and PNG assets into `overleaf_thesis/images/` first.
+The repo does not expect Overleaf to render Mermaid directly. Render SVG and PNG assets into `overleaf_docs/thesis/images/` first.
 
 From the repo root:
 
@@ -30,7 +30,7 @@ bash scripts/render_mermaid_diagrams.sh
 The render script uses Mermaid CLI through `npx`:
 
 ```bash
-npx -y @mermaid-js/mermaid-cli -i docs/diagrams/mermaid/system_overview.mmd -o overleaf_thesis/images/diagram_system_overview.svg
+npx -y @mermaid-js/mermaid-cli -i docs/diagrams/mermaid/system_overview.mmd -o overleaf_docs/thesis/images/diagram_system_overview.svg
 ```
 
 If the package is not already installed locally, `npx` may download it on first use.

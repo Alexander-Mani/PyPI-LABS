@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 SRC_DIR="$ROOT_DIR/docs/diagrams/mermaid"
-OUT_DIR="$ROOT_DIR/overleaf_thesis/images"
+OUT_DIR="$ROOT_DIR/overleaf_docs/thesis/images"
 
 if ! command -v npx >/dev/null 2>&1; then
   echo "error: npx is required to render Mermaid diagrams" >&2

@@ -62,23 +62,7 @@ This means the thesis should not collapse to a simple “LLMs outperform static 
 - some detectors are strong on malware and stable on common benign packages
 - some detectors over-associate benign production packages with supply-chain risk
 
-## Reliability and Validity
-
-### Reliability
-
-Dataset raw errors are dominated by:
-
-- frontier agentic `deployment_unavailable_429`: `37`
-- budget Together truncation (`empty_finish_reason_length`): `22`
-- frontier Together Qwen truncation (`empty_finish_reason_length`): `7`
-- smaller `claude_opus` null/unparseable rows and one `gpt` unparseable row
-
-Cleaned overlays already present in the DB repaired:
-
-- `13` dataset rows
-- `20` controls rows
-
-These repairs are useful robustness evidence, but they are not the primary thesis metric surface for this frozen cut.
+## Validity
 
 ### Alias Sensitivity
 
@@ -140,7 +124,7 @@ Interpretation:
 
 ## Thesis Insertions
 
-The current data supports these writeup choices in `overleaf_thesis/main.tex`:
+The current data supports these writeup choices in `overleaf_docs/thesis/main.tex`:
 
 - `Results -> Static Baseline Comparison`
   - add one compact dataset table and one controls FP comparison
@@ -153,8 +137,6 @@ The current data supports these writeup choices in `overleaf_thesis/main.tex`:
   - report this as an operational negative result
 - `Results -> Runtime and API Cost Comparison`
   - emphasize cost/performance separation across budget, medium, and frontier
-- `Results -> Error Rate and Provider Reliability`
-  - make reliability a first-class RQ3 result
 - `Results -> Per-Attack-Vector Observations`
   - use alias sensitivity to show typosquatting is the most identity-sensitive vector
 - `Validity and Threats to Validity`
@@ -172,7 +154,6 @@ Recommended slide sequence:
 4. raw versus hybrid
 5. static versus LLM comparison
 6. controls false positives
-7. provider reliability and error burden
-8. alias sensitivity
-9. memory-probe validity
-10. direct answers to RQ1, RQ2, and RQ3
+7. alias sensitivity
+8. memory-probe validity
+9. direct answers to RQ1, RQ2, and RQ3
