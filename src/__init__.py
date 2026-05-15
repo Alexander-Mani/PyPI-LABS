@@ -1,1 +1,1 @@
-"""Top-level package for PyPi-SCADA source modules."""
+"""Top-level package for PyPI-LABS source modules."""

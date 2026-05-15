@@ -307,7 +307,7 @@ class AnalyzerProgress:
         table.add_row("Heuristics", self.heuristics)
         if self.package_verdict:
             table.add_row("Last verdict", self.package_verdict)
-        return Panel(table, title="PyPI-SCADA Evaluation", border_style="cyan")
+        return Panel(table, title="PyPI-LABS Evaluation", border_style="cyan")
 
     def _detector_table(self):
         table = Table(title="Current Artifact Detectors", expand=True)

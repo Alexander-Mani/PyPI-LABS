@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke-test LiteLLM proxy routing for PyPI-SCADA model profiles."""
+"""Smoke-test LiteLLM proxy routing for PyPI-LABS model profiles."""
 
 from __future__ import annotations
 

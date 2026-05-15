@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-upload_samples.py — VM-targeted batch uploader for the PyPi-SCADA injector.
+upload_samples.py — VM-targeted batch uploader for the PyPI-LABS injector.
 
 Scans a pre-extracted samples directory and uploads all distribution artifacts to the
 local simulator via twine. Handles three archive categories:
@@ -607,7 +607,7 @@ def _controls_dir(samples_dir: Path) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Upload all samples from samples-extracted/ to the PyPi-SCADA simulator."
+        description="Upload all samples from samples-extracted/ to the PyPI-LABS simulator."
     )
     parser.add_argument(
         "--samples-dir",

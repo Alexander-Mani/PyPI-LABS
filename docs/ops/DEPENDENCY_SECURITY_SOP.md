@@ -1,6 +1,6 @@
-# Standard Operating Procedure: PyPi-SCADA Dependency Security
+# Standard Operating Procedure: PyPI-LABS Dependency Security
 
-This document defines the security standard for Python package management within the PyPi-SCADA project. It establishes defense-in-depth mechanisms against supply chain attacks affecting the project's own infrastructure.
+This document defines the security standard for Python package management within the PyPI-LABS project. It establishes defense-in-depth mechanisms against supply chain attacks affecting the project's own infrastructure.
 
 ## 1. Cryptographic Resolution
 Package resolution requires strict cryptographic verification. Developers generate dependency lockfiles using `pip-tools`. The lockfile records the exact version and SHA-256 hash of every top-level package and sub-dependency. Installation executes exclusively via `pip install --require-hashes --no-deps`. This prevents upstream mutability from altering the local execution environment.

@@ -1,1 +1,1 @@
-"""Shared utility helpers for PyPi-SCADA."""
+"""Shared utility helpers for PyPI-LABS."""

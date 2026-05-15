@@ -1,4 +1,4 @@
-# Risk Diary — PyPi-SCADA Experiment
+# Risk Diary — PyPI-LABS Experiment
 
 Records security decisions made for the VM deployment phase.
 Each entry states the decision, the threat it addresses, and any residual risk.
@@ -222,8 +222,8 @@ incorrectly labeled as malicious. This leads to:
 "Pre-existing Knowledge Bias" in Frontier LLMs. If a model has seen security
 reports for `num2words 0.5.15` during its training, it may flag the package
 based on memory rather than code analysis. This is documented as a limitation
-in the final thesis and addressed via the "Reasoning" analysis in the rubric.
-The source-free `scripts/model_memory_probe.py` sidecar records whether models
+in the final thesis and examined through the source-free memory probe and the
+identity-alias validity sidecar. The source-free `scripts/model_memory_probe.py` records whether models
 recognize selected package names/versions without source evidence; those JSONL
 results are validity evidence only and are not included in detector metrics.
 
@@ -391,7 +391,7 @@ from scratch with the new model under `--run-id-prefix canonical-v2`.
 ## Decision 10 — Agentic workflow framing and safety boundary
 
 **Decision:**
-For the agentic condition, PyPI-SCADA implements an automated, safety-bounded
+For the agentic condition, PyPI-LABS implements an automated, safety-bounded
 RAG workflow inspired by modern coding agents such as Codex and Claude Code. The
 model is required to plan its investigation, retrieve package evidence through
 read-only tools, and produce a structured malicious/benign verdict. This design

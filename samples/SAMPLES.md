@@ -1,6 +1,6 @@
-# PyPi-SCADA Sample Dataset Documentation
+# PyPI-LABS Sample Dataset Documentation
 
-This document provides a detailed forensic backstory for every package in the PyPi-SCADA sample corpus -- both the malicious artifacts and their benign counterparts. It explains how each attack works mechanically, why the samples were chosen, and how they fit into the detection pipeline.
+This document provides a detailed forensic backstory for every package in the PyPI-LABS sample corpus -- both the malicious artifacts and their benign counterparts. It explains how each attack works mechanically, why the samples were chosen, and how they fit into the detection pipeline.
 
 ---
 
@@ -58,7 +58,7 @@ pip picks: 2.0.0  <-- highest version wins
 
 The legitimate internal package is silently replaced by the attacker's code. The internal package was **never on public PyPI** -- the name was simply unclaimed empty space until the attacker grabbed it. This is why there are no "historical benign versions" to download from pypi.org for these packages. The benign versions only ever existed on private servers that we cannot access.
 
-For the PyPi-SCADA simulator, we create **synthetic benign stubs** to represent what the private registry would have hosted, then inject the malicious version with the inflated number to demonstrate the attack.
+For the PyPI-LABS simulator, we create **synthetic benign stubs** to represent what the private registry would have hosted, then inject the malicious version with the inflated number to demonstrate the attack.
 
 **Key detection signals:**
 - A brand-new package name appears on the index with no prior history
@@ -168,7 +168,7 @@ To bypass network egress filters and DLP systems, the stolen data was encoded an
 
 Exact version metrics are obscured by its early removal from PyPI and subsequent academic archival. Its purpose in the BKC dataset is to demonstrate how malicious actors embed secondary payloads within standard Python setup scripts -- specifically, how `setup.py` can contain arbitrary code execution buried beneath layers of seemingly benign string manipulation and obfuscation.
 
-**Role in PyPi-SCADA:** Used as a baseline control to test whether the diffing engine and SAST adapters can identify hidden arbitrary code execution, regardless of a package's specific version history. The synthetic benign stub provides the "before" state for the simulator.
+**Role in PyPI-LABS:** Used as a baseline control to test whether the diffing engine and SAST adapters can identify hidden arbitrary code execution, regardless of a package's specific version history. The synthetic benign stub provides the "before" state for the simulator.
 
 **Further Reading:**
 - [Backstabber's Knife Collection: A Review of Open Source Software Supply Chain Attacks](https://pmc.ncbi.nlm.nih.gov/articles/PMC7338168/) (Ohm et al., DIMVA 2020) — the original academic paper that catalogued totallysafe and defined the BKC dataset

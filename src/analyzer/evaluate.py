@@ -1380,7 +1380,7 @@ if __name__ == "__main__":
     import yaml
 
     parser = argparse.ArgumentParser(
-        description="PyPi-SCADA entry-point evaluation pipeline"
+        description="PyPI-LABS entry-point evaluation pipeline"
     )
     parser.add_argument(
         "--config", default=str(_ANALYZER_DIR / "config.yaml"),

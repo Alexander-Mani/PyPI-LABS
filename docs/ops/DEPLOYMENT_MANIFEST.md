@@ -1,6 +1,6 @@
-# Deployment Manifest: PyPI-SCADA VM
+# Deployment Manifest: PyPI-LABS VM
 
-The human operator executes these sequential steps to deploy the PyPI-SCADA pipeline on the provisioned virtual machine. This architecture implements **Entry-Point Scanning**, resolves package artifacts from the local PyPI simulator, and routes all LLM requests through a local LiteLLM proxy.
+The human operator executes these sequential steps to deploy the PyPI-LABS pipeline on the provisioned virtual machine. This architecture implements **Entry-Point Scanning**, resolves package artifacts from the local PyPI simulator, and routes all LLM requests through a local LiteLLM proxy.
 
 ***
 

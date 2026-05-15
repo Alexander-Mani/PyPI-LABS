@@ -1,4 +1,4 @@
-"""Real Semgrep regression tests for the offline PyPI-SCADA ruleset."""
+"""Real Semgrep regression tests for the offline PyPI-LABS ruleset."""
 
 from __future__ import annotations
 

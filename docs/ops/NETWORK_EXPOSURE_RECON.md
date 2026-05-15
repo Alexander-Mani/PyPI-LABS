@@ -16,7 +16,7 @@ The script checks:
 - all detected local IPv4 addresses
 - an optional remote target host
 
-## Typical Ports for PyPi-SCADA
+## Typical Ports for PyPI-LABS
 
 - `4000` (LiteLLM proxy)
 - `8080` (PyPI simulator)
