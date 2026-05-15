@@ -217,3 +217,13 @@ src/simulator/data/
 
 logs/
 overleaf_thesis/
+overleaf_docs/
+
+# PyPI-LABS handoff: internal scaffolding kept outside the examiner-facing tree
+.internal-handoff/
+**/.idea/
+**/.vscode/
+**/.DS_Store
+system_overhaul*.md
+analysis/system_audit/
+docs/agents/
