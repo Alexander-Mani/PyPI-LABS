@@ -30,14 +30,6 @@ This digest is generated from the packaged evaluation summaries and selected mem
 - `claude_sonnet` summed FP across mode rows: `3`.
 - `semgrep` summed FP across mode rows: `3`.
 
-## Reliability
-
-- `claude_agentic` `deployment_unavailable_429` in `profile:frontier:agentic-only`: `37` rows.
-- `together_budget` `empty_finish_reason_length` in `profile:budget:llm-no-agentic`: `22` rows.
-- `together_frontier_qwen` `empty_finish_reason_length` in `profile:frontier:llm-no-agentic`: `7` rows.
-- `together_frontier_qwen` `empty_finish_reason_length` in `profile:all_models:identity-alias-probe`: `6` rows.
-- `claude_opus` `empty_null_content` in `profile:frontier:llm-no-agentic`: `3` rows.
-
 ## Alias Sensitivity
 
 - Dataset lost detections under alias masking: `10`.

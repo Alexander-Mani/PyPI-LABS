@@ -19,8 +19,6 @@ Recommended section mapping:
   - use `figures/raw_vs_hybrid_means.{png,pdf}`
 - `Results -> Runtime and API Cost Comparison`
   - use `figures/cost_performance_tradeoff.{png,pdf}` plus `outputs/eval/dataset/cost_summary.csv`
-- `Results -> Error Rate and Provider Reliability`
-  - use `figures/dataset_error_burden.{png,pdf}` and `outputs/eval/dataset/raw_error_inventory.csv`
 - `Results -> Per-Attack-Vector Observations`
   - use `figures/alias_losses_by_attack_vector.{png,pdf}` and `outputs/eval/dataset/raw_alias_sensitivity.csv`
 - `Validity and Threats to Validity`
@@ -29,6 +27,5 @@ Recommended section mapping:
   - use `figures/memory_probe_exact_vs_association.{png,pdf}`
 
 Key writing discipline:
-- separate detector quality from provider/runtime failure
 - separate identity sensitivity from exact-version memory
 - separate dataset accuracy claims from controls false-positive claims

@@ -19,26 +19,21 @@ Suggested slide block for the defense/results presentation:
 5. `Controls False Positives`
 - use `figures/controls_false_positive_totals.{png,pdf}`
 
-6. `Reliability and Error Burden`
-- use `figures/dataset_error_burden.{png,pdf}`
-- tie this explicitly to RQ3
-
-7. `Alias Sensitivity`
+6. `Alias Sensitivity`
 - use `figures/alias_losses_by_attack_vector.{png,pdf}`
 - explain that identity masking can remove both true positives and benign false positives
 
-8. `Memory-Probe Validity`
+7. `Memory-Probe Validity`
 - use `figures/memory_probe_exact_vs_association.{png,pdf}`
 - explain exact-version vs package-only association
 
-9. `Cost / Performance Tradeoff`
+8. `Cost / Performance Tradeoff`
 - use `figures/cost_performance_tradeoff.{png,pdf}`
 
-10. `Answers to RQ1-RQ3`
+9. `Answers to RQ1-RQ3`
 - use `results_digest.md` for the exact wording anchors
 
 Backup slide sources:
 - `outputs/eval/dataset/raw_primary_detector_metrics.md`
 - `outputs/eval/controls/raw_primary_detector_metrics.md`
-- `outputs/eval/dataset/raw_error_inventory.md`
 - `outputs/eval/dataset/raw_alias_sensitivity.md`
