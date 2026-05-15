@@ -1,6 +1,0 @@
-family,run_id,detector,rows,total_cost_usd,total_exec_time_ms,mean_cost_usd,mean_exec_time_ms
-profile:all_models:identity-alias-probe,canonical-v2-alias-974c6857-1fda-4221-9ea2-aa501b62920e--repair-20260426-181336,together_budget,2,0.0009,12009,0.00045,6004.5
-profile:all_models:identity-alias-probe,canonical-v2-alias-974c6857-1fda-4221-9ea2-aa501b62920e--repair-20260426-181336,together_frontier_qwen,1,0.026397,57196,0.026397,57196.0
-profile:budget:llm-no-agentic,canonical-v2-budget-72786291-e57a-4d48-b9e1-2d9951ce832d--repair-20260426-181336,together_budget,4,0.002096,57150,0.000524,14287.5
-profile:frontier:llm-no-agentic,canonical-v2-frontier-d1172173-f62d-46a2-9247-b1fec3c7a393--repair-20260426-181336,claude_opus,6,0.08643,23428,0.014405,3904.7
-profile:frontier:llm-no-agentic,canonical-v2-frontier-d1172173-f62d-46a2-9247-b1fec3c7a393--repair-20260426-181336,together_frontier_qwen,7,0.141845,616555,0.020264,88079.3

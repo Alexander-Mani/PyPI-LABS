@@ -1,3 +1,0 @@
-# Repair Inventory
-
-No rows

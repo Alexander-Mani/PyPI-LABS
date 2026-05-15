@@ -227,3 +227,12 @@ overleaf_docs/
 system_overhaul*.md
 analysis/system_audit/
 docs/agents/
+
+# PyPI-LABS second-pass cleanup: historical material and derived outputs
+archive/
+.claude/
+analysis/eval_db/
+img/
+model_memory_probe/
+old_model_memory_probe/
+data_processing/raw_memory_probe_runs_*/
