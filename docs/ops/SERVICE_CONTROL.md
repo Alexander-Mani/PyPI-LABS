@@ -1,6 +1,6 @@
 # Service Control Script
 
-Use this script to shut services off and on for PyPi-SCADA.
+Use this script to shut services off and on for PyPI-LABS.
 
 Script:
 - `scripts/service_control.sh`

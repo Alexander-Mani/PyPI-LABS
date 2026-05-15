@@ -1,4 +1,4 @@
-# LiteLLM proxy configuration for PyPi-SCADA.
+# LiteLLM proxy configuration for PyPI-LABS.
 # Maps bare model names used in src/analyzer/configs/*.yaml to provider routes.
 # Deploy to /home/proxy-runner/litellm_config.yaml on the VM.
 # Start with: litellm --config litellm_config.yaml --port 4000

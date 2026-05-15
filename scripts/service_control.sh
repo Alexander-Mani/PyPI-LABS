@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # service_control.sh
-# Manage PyPi-SCADA runtime services (LiteLLM + simulator).
+# Manage PyPI-LABS runtime services (LiteLLM + simulator).
 #
 # Defaults are VM-oriented and can be overridden with flags.
 #
