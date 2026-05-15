@@ -9,8 +9,17 @@ Primary entrypoints:
 - `python data_processing/scripts/build_frozen_cut.py`
 - `python data_processing/scripts/plot_frozen_cut.py --out-root data_processing/frozen_cut_20260426`
 
+Reviewer validation command:
+
+```bash
+MPLCONFIGDIR=/tmp/matplotlib-cache ./.venv/bin/python \
+  data_processing/scripts/build_frozen_cut.py \
+  --db analysis/eval_results.db \
+  --out-root /tmp/pypi_labs_frozen_cut_check
+```
+
 What this package does:
-- regenerates dataset and controls eval summaries from `eval_results.db`
+- regenerates dataset and controls eval summaries from the supplied evaluation DB
 - stages the selected model-memory probe summaries used in the frozen writeup
 - writes a compact markdown digest for report and presentation use
 - produces matplotlib figures as `png` and `pdf`

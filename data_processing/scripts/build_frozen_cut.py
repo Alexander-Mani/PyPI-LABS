@@ -86,6 +86,14 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _display_path(path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return str(resolved.relative_to(_REPO_ROOT))
+    except ValueError:
+        return str(resolved)
+
+
 def _float(value: str | float | int | None) -> float:
     if value in (None, ""):
         return 0.0
@@ -125,8 +133,8 @@ def _copy_probe_pair(json_src: Path, md_src: Path, target_dir: Path) -> list[dic
         shutil.copy2(src, dest)
         copied.append(
             {
-                "source": str(src.relative_to(_REPO_ROOT)),
-                "dest": str(dest.relative_to(_REPO_ROOT)),
+                "source": _display_path(src),
+                "dest": _display_path(dest),
                 "size_bytes": src.stat().st_size,
                 "sha256": _sha256(src),
             }
@@ -415,12 +423,12 @@ def _write_manifest(
     manifest = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "db": {
-            "source": str(db_path.relative_to(_REPO_ROOT)),
+            "source": _display_path(db_path),
             "size_bytes": db_path.stat().st_size,
             "sha256": _sha256(db_path),
         },
         "probe_summary_files": copied_probe_entries,
-        "out_root": str(out_root.relative_to(_REPO_ROOT)),
+        "out_root": _display_path(out_root),
     }
     (out_root / "source_manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 

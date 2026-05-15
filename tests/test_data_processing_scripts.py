@@ -1,4 +1,10 @@
-from data_processing.scripts.build_frozen_cut import _best_row as build_best_row, _top_errors
+from pathlib import Path
+
+from data_processing.scripts.build_frozen_cut import (
+    _best_row as build_best_row,
+    _display_path,
+    _top_errors,
+)
 from data_processing.scripts.plot_frozen_cut import _best_row as plot_best_row
 
 
@@ -75,3 +81,16 @@ def test_top_errors_aggregates_same_detector_and_category() -> None:
     assert top[0]["rows"] == 37
     assert top[1]["detector"] == "together_budget"
     assert top[1]["rows"] == 3
+
+
+def test_display_path_keeps_repo_local_paths_relative() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    path = repo_root / "data_processing" / "frozen_cut_20260426"
+
+    assert _display_path(path) == "data_processing/frozen_cut_20260426"
+
+
+def test_display_path_allows_external_temp_paths(tmp_path) -> None:
+    external = tmp_path / "frozen_cut_check"
+
+    assert _display_path(external) == str(external)
