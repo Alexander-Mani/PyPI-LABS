@@ -103,18 +103,29 @@ if [[ "${FORCE_UNZIP_OVERWRITE:-0}" == "1" ]]; then
   UNZIP_FLAGS="-oq"
 fi
 
+# Malicious bundle is optional: when handing the project to a supervisor or
+# examiner who cannot legally receive the live malware corpus, omit the zip.
+# deployment.sh continues with benign and controls only.
+_MALWARE_ZIP="${SAMPLES_DIR:-/home/operator/samples}/malware_backstabbers_knife.zip"
+if [ -f "${_MALWARE_ZIP}" ]; then
+  _MALWARE_EXTRACT="unzip -P infected ${UNZIP_FLAGS} \"${_MALWARE_ZIP}\" -d /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife/"
+else
+  echo "NOTICE: malicious bundle not found at ${_MALWARE_ZIP}; deployment will continue with benign and controls only."
+  _MALWARE_EXTRACT="echo 'Skipping malicious bundle extraction (zip not present).'"
+fi
+
 sudo -u pypi-runner bash -c "
   mkdir -p /home/pypi-runner/pypi-scada-repo/samples/benign
   mkdir -p /home/pypi-runner/pypi-scada-repo/samples/controls
-  
+
   echo 'Extracting benign and controls...'
   # Extract at samples/ root so both benign/ and controls/ land in expected paths.
   unzip ${UNZIP_FLAGS} ${SAMPLES_DIR:-/home/operator/samples}/benign_and_controlls.zip -d /home/pypi-runner/pypi-scada-repo/samples/
-  
-  echo 'Extracting malicious bundle...'
+
+  echo 'Preparing malicious bundle directory...'
   rm -rf /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife
   mkdir -p /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife
-  unzip -P infected ${UNZIP_FLAGS} ${SAMPLES_DIR:-/home/operator/samples}/malware_backstabbers_knife.zip -d /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife/
+  ${_MALWARE_EXTRACT}
 "
 
 echo "Step 4: Setting up Python virtual environments"

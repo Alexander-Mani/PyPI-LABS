@@ -173,12 +173,12 @@ The variables and where to obtain them:
 
 `deployment.sh` then writes a curated subset of these (the four vendor API keys only — never `PULL_TOKEN`) to `/home/proxy-runner/.env` with mode 600. The `proxy-runner` account is the only account that ever reads the vendor keys; the analyzer process never sees them.
 
-### Sample bundles (required)
+### Sample bundles
 
-Stage two zip files in the operator's home directory before invoking `deployment.sh`:
+Stage these zip files in the operator's home directory before invoking `deployment.sh`:
 
-- `benign_and_controlls.zip` — the benign and high-volume control corpus (note the filename has two `l`s).
-- `malware_backstabbers_knife.zip` — the malicious corpus, encrypted with password `infected` (the Backstabber's Knife Collection community password).
+- `benign_and_controlls.zip` (required) — the benign and high-volume control corpus. Note the filename has two `l`s.
+- `malware_backstabbers_knife.zip` (optional) — the malicious corpus, encrypted with password `infected` (the Backstabber's Knife Collection community password). Omit this file when handing the project to a supervisor or examiner who cannot legally receive the live malware corpus; `deployment.sh` prints a `NOTICE` and continues with benign and controls only. Analyzer actions that touch malicious packages will simply find an empty malware directory and skip those rows; the review TUI and the controls-only evaluation paths still work.
 
 The default staging directory is `/home/operator/samples/`. Override it by exporting `SAMPLES_DIR` before running `deployment.sh`:
 
@@ -186,7 +186,7 @@ The default staging directory is `/home/operator/samples/`. Override it by expor
 export SAMPLES_DIR=/home/<your-user>/samples
 ```
 
-`deployment.sh` extracts both bundles into `/home/pypi-runner/pypi-scada-repo/samples/` under the deployed-runner checkout.
+`deployment.sh` extracts the supplied bundles into `/home/pypi-runner/pypi-scada-repo/samples/` under the deployed-runner checkout.
 
 The four steps in order:
 
