@@ -656,7 +656,7 @@ To produce the thesis-ready summary from the configured analysis DB:
   --out-dir analysis/eval_db/latest
 ```
 
-Replace the `--db` path with `analysis/eval_results.db` for the local-checkout frozen-cut validation flow.
+Replace the `--db` path with `data_processing/source_eval_results.db` for the local-checkout frozen-cut validation flow (see `data_processing/README.md` for how to obtain that DB).
 
 ---
 

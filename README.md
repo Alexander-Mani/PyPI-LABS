@@ -194,11 +194,11 @@ To validate the packaged frozen cut without modifying the committed outputs, poi
 ```bash
 MPLCONFIGDIR=/tmp/matplotlib-cache ./.venv/bin/python \
   data_processing/scripts/build_frozen_cut.py \
-  --db analysis/eval_results.db \
+  --db data_processing/source_eval_results.db \
   --out-root /tmp/pypi_labs_frozen_cut_check
 ```
 
-The repository root `eval_results.db` is not the frozen-cut evidence source in this checkout. The local validation DB is `analysis/eval_results.db`, which matches the SHA recorded in `data_processing/frozen_cut_20260426/source_manifest.json`.
+The repository root `eval_results.db` is not the frozen-cut evidence source. The validation DB is `data_processing/source_eval_results.db`, which lives alongside the packaged frozen-cut outputs and matches the SHA recorded in `data_processing/frozen_cut_20260426/source_manifest.json`. The file is gitignored; see `data_processing/README.md` for how to obtain it.
 
 For end-to-end validation that actually exercises the simulator, injector, and analyzer together, follow the Debian VM path above rather than running the lab pipeline directly on a workstation.
 
@@ -253,7 +253,7 @@ The following are failure modes that have actually occurred during the project, 
 
 **Analyzer hangs at the SAST step.** The analyzer console stops updating during GuardDog or Semgrep against an unusually large package version. This is expected behaviour (see `docs/ops/RISK_DIARY.md` Decision 11): GuardDog in particular pays a large startup and full-tree scanning cost on big packages. If the hang exceeds the configured timeout, the row is written as an error and can be repaired later. Do not kill the process mid-scan unless the timeout has clearly expired.
 
-**Frozen-cut validation diff non-empty.** A re-run of `data_processing/scripts/build_frozen_cut.py --db analysis/eval_results.db --out-root /tmp/...` produces files that do not byte-match the packaged `data_processing/frozen_cut_20260426/`. The most likely cause is running against the wrong database. Only `analysis/eval_results.db` in the local checkout matches the SHA recorded in `data_processing/frozen_cut_20260426/source_manifest.json`. The repository root `eval_results.db` is not the frozen-cut evidence source.
+**Frozen-cut validation diff non-empty.** A re-run of `data_processing/scripts/build_frozen_cut.py --db data_processing/source_eval_results.db --out-root /tmp/...` produces files that do not byte-match the packaged `data_processing/frozen_cut_20260426/`. The most likely cause is running against the wrong database. Only `data_processing/source_eval_results.db` matches the SHA recorded in `data_processing/frozen_cut_20260426/source_manifest.json`. The repository root `eval_results.db` is not the frozen-cut evidence source.
 
 **Analyzer accidentally run as the operator account.** The analyzer starts, but logs show paths under the operator home directory rather than `/home/pypi-runner/pypi-scada-repo`, and database writes land in the operator checkout's `src/data/eval_results.db` instead of the deployed runner's database. The cause is invoking `evaluate.py` from the wrong account. Always run analyzer commands as `pypi-runner`, for example with `sudo -u pypi-runner -i`. The operator checkout is for editing code, not for running evaluations.
 
