@@ -42,7 +42,7 @@ for _guarddog_rule in "${GUARDDOG_SOURCE_RULES[@]}"; do
   _GUARDDOG_RULE_ARGS+=" --rules ${_guarddog_rule}"
 done
 
-# PyPI-SCADA Deployment Script (VM-Targeted)
+# PyPI-LABS Deployment Script (VM-Targeted)
 # This script automates the setup of the entry-point scanning pipeline.
 # It assumes a clean Ubuntu 22.04 LTS environment.
 
@@ -109,12 +109,12 @@ sudo -u pypi-runner bash -c "
   
   echo 'Extracting benign and controls...'
   # Extract at samples/ root so both benign/ and controls/ land in expected paths.
-  unzip ${UNZIP_FLAGS} /home/lexi/samples/benign_and_controlls.zip -d /home/pypi-runner/pypi-scada-repo/samples/
+  unzip ${UNZIP_FLAGS} ${SAMPLES_DIR:-/home/operator/samples}/benign_and_controlls.zip -d /home/pypi-runner/pypi-scada-repo/samples/
   
   echo 'Extracting malicious bundle...'
   rm -rf /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife
   mkdir -p /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife
-  unzip -P infected ${UNZIP_FLAGS} /home/lexi/samples/malware_backstabbers_knife.zip -d /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife/
+  unzip -P infected ${UNZIP_FLAGS} ${SAMPLES_DIR:-/home/operator/samples}/malware_backstabbers_knife.zip -d /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife/
 "
 
 echo "Step 4: Setting up Python virtual environments"

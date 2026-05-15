@@ -11,7 +11,7 @@ The human operator executes these sequential steps to deploy the PyPI-LABS pipel
 | OS | Ubuntu 22.04 LTS |
 | Python | 3.11+ |
 | Tools | `git`, `unzip`, `curl`, `pip`, `iptables` |
-| VM home | `/home/lexi/` |
+| Operator home | `/home/<operator>/` (the unprivileged user that owns the sample bundles before deployment.sh extracts them; set `SAMPLES_DIR` to override the default `/home/operator/samples`) |
 | Samples archive | `~/samples/benign_and_controlls.zip` |
 | Malicious bundle | `~/samples/malware_backstabbers_knife.zip` (password: `infected`) |
 | Environment | `~/.env` with `PULL_TOKEN`, `ANTHROPIC_API_KEY`, etc. |
@@ -69,11 +69,11 @@ sudo -u pypi-runner bash -c "
   mkdir -p /home/pypi-runner/pypi-scada-repo/samples/controls
   mkdir -p /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife
   
-  unzip -q /home/lexi/samples/benign_and_controlls.zip -d /home/pypi-runner/pypi-scada-repo/samples/
+  unzip -q "${SAMPLES_DIR:-/home/operator/samples}/benign_and_controlls.zip" -d /home/pypi-runner/pypi-scada-repo/samples/
 
   rm -rf /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife
   mkdir -p /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife
-  unzip -P infected -q /home/lexi/samples/malware_backstabbers_knife.zip -d /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife/
+  unzip -P infected -q "${SAMPLES_DIR:-/home/operator/samples}/malware_backstabbers_knife.zip" -d /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife/
 "
 ```
 
