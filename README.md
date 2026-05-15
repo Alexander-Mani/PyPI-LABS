@@ -4,73 +4,46 @@
 
 BSc Computer Science thesis, Reykjavik University, Spring 2026.
 
-PyPI-LABS is an isolated lab benchmark for studying malicious Python packages. It stages real-world malicious package artifacts in a local PEP 503 server, extracts static entry-point evidence (`setup.py`, `__init__.py`, `pyproject.toml`, and direct imports), and compares static analysis baselines with single-shot LLM detectors. The analyzer downloads and unpacks artifacts for inspection. It does not install or execute sample packages.
+PyPI-LABS is an isolated lab benchmark for studying malicious Python packages. It stages real-world malicious package artifacts in a local PEP 503 server, extracts static entry-point evidence (`setup.py`, `__init__.py`, `pyproject.toml`, and direct imports), and compares static analysis baselines with single-shot LLM detectors. Samples are unpacked for inspection but never installed or executed.
 
-The GitHub repository was renamed to `PyPI-LABS` in May 2026; older clones using `https://github.com/Alexander-Mani/PyPi-SCADA.git` continue to work through GitHub's automatic redirect, but new clones should use the current URL in the Resources section below. The local on-disk directory is still named `PyPi-SCADA` for working-tree continuity. PyPI-LABS is the project name used in the thesis, in the user-facing tooling, and in the rest of this document; `PyPi-SCADA` only remains as a literal path component (for example in the deployed runner checkout at `/home/pypi-runner/pypi-scada-repo`).
+The GitHub repo was renamed to `PyPI-LABS` in May 2026; the on-disk directory is still `PyPi-SCADA` for working-tree continuity, and that legacy name only appears in literal paths such as the deployed checkout at `/home/pypi-runner/pypi-scada-repo`.
 
 ---
 
 ## Hand-in note for supervisor and examiner
 
-This README is the Rekstrarhandbók (operations manual) for PyPI-LABS. It describes how to set up a Debian VM, deploy the system inside it, run the analyzer pipeline, and recover from common failure modes. The companion Notendahandbók (user manual) for day-to-day analyzer use is [`docs/USAGE.md`](docs/USAGE.md).
+This README is the Rekstrarhandbók (operations manual). The companion Notendahandbók (user manual) is [`docs/USAGE.md`](docs/USAGE.md). For an interactive way to drive the system without memorising commands, run [`scripts/review_tui.py`](scripts/review_tui.py) — it wraps every operation in a menu (deployment, dry runs, experiments, database inspection, logs, tests).
 
-The thesis source lives in the nested repository under `overleaf_docs/thesis/` and is compiled on Overleaf with the IEEE biblatex style. The frozen results cut packaged for thesis reuse is at `data_processing/frozen_cut_20260426/`. The separate project-management document is under `overleaf_docs/project_management_doc/`. Both Overleaf folders are their own git repositories and have independent commit histories from the main repository, so checking the main repository status does not tell you whether thesis edits are committed.
+Key locations:
 
-Code access for supervisor and examiner is provided through this repository. The hand-in does not require checking the code into Skemman; access is via the GitHub URL in the Resources section below.
+- Thesis source: `overleaf_docs/thesis/` (nested git repo, compiled on Overleaf with IEEE biblatex)
+- Project-management document: `overleaf_docs/project_management_doc/` (separate nested git repo)
+- Frozen results cut: `data_processing/frozen_cut_20260426/`
+
+Code access is through this repository — no Skemman code submission required.
 
 ---
 
 ## Architecture
-
-The system has three components under `src/` and a curated sample dataset under `samples/`.
-Canonical Mermaid source for the current system diagrams lives under [`docs/diagrams/mermaid/`](docs/diagrams/mermaid/README.md); rendered thesis assets are committed under `overleaf_docs/thesis/images/`.
 
 ```
 src/
   simulator/       Flask-based PEP 503 server (pip + twine compatible)
   injector/        Uploads benign and malicious packages to the simulator
   analyzer/        Entry-point scanning + SAST/LLM detection pipeline
-  data/            Shared SQLite utilities (db_core, db_manager)
-  utils/           Shared logger (loguru) and TUI helpers (rich)
+  data/            Shared SQLite utilities
+  utils/           Shared logger and TUI helpers
 
 samples/
-  benign/          Legitimate historical versions downloaded from PyPI
-  malware_backstabbers_knife/   Malicious samples by attack vector
+  benign/                           Legitimate historical versions from PyPI
+  malware_backstabbers_knife/       Malicious samples by attack vector
 ```
 
-### Simulator (`src/simulator/`)
+- **Simulator** — minimal PyPI-compatible HTTP server with attack-simulation flags (`allow_similar_names` for typosquatting, `allow_arbitrary_versions` for dependency confusion, `enforce_version_bump` for the wheel-vs-sdist constraint).
+- **Injector** — `src/injector/upload_samples.py` batch-uploads benign, controls, and malware archives in version order, skipping anything already in the simulator.
+- **Analyzer** — `src/analyzer/evaluate.py` resolves package artifacts from the simulator, extracts `setup.py`, `pyproject.toml`, `__init__.py` and their direct imports up to 3 levels deep via BFS, then runs SAST baselines (`bandit`, offline `semgrep`, source-only `guarddog`) plus single-shot LLM detectors (raw and hybrid lanes; legacy agentic kept for reference). LLM calls route through LiteLLM on `127.0.0.1:4000`.
 
-A minimal PyPI-compatible HTTP server for controlled experiments. Hosts a flat-file package index and exposes endpoints for `pip install`, `twine upload`, artifact download, and metadata checks used by the injector and analyzer.
-
-- `main.py` -- `PyPISimulatorApp`, `PackageIndex` (Flask app, upload handling)
-- `simple.py` -- `SimpleAPI`, `ProjectIndex`, `SimpleIndexRenderer` (PEP 503 HTML index)
-- `metadata.py` -- `MetadataStore` (SQLite metadata for uploaded packages)
-- `config.yaml` -- bind address, storage paths, attack-simulation flags
-
-Attack simulation flags control the simulator's acceptance behavior:
-- `allow_similar_names` -- disables Levenshtein guards (enables typosquatting)
-- `allow_arbitrary_versions` -- accepts inflated version numbers (enables dependency confusion)
-- `enforce_version_bump` -- rejects duplicate distribution files while still allowing multiple artifacts for the same release, matching PyPI wheel/sdist behavior
-
-### Injector (`src/injector/`)
-
-Feeds packages from the sample dataset into the simulator in the correct chronological order.
-
-- `upload_samples.py` -- batch uploader for benign, controls, and malware; sorts benign and control archives by version before upload, supports the single encrypted malware bundle layout, skips artifacts already present in the simulator, and writes per-run upload logs while keeping the terminal output compact.
-
-### Analyzer (`src/analyzer/`)
-
-The primary detection pipeline is the **entry-point scanning evaluation pipeline**, which resolves package artifacts from the local PyPI simulator without installing or executing them. This captures install-time (`setup.py`, `pyproject.toml`) and import-time (`__init__.py`) attack surface while keeping malware inert.
-
-**Entry-point scanning evaluation pipeline** (primary):
-- `evaluate.py` -- `EvaluationRunner` (resolve from simulator → download artifact → extract → filter → detect → print TP/TN/FP/FN/F1 table)
-- `entry_extractor.py` -- `EntryPointExtractor`, `PackageInfo` (unpacks `.tar.gz`/`.whl`/`.zip`, extracts `setup.py`, `__init__.py`, `pyproject.toml` and their imports up to **3 levels deep** via BFS)
-- `heuristic_filter.py` -- `HeuristicFilter` (flags `base64_or_hex`, `network_in_install_hook`, `shell_execution`, `bundled_binary` before LLM evaluation)
-- `detection_controller.py` -- `EvalController` (orchestration layer)
-- `adapters.py` -- static baselines (`bandit`, custom offline-rule `semgrep`, source-only `guarddog`), `LLMAdapter` (single-shot hybrid prompts with static context), `LLMRawAdapter` (single-shot raw prompts with source only), and `AgenticAdapter` (legacy/non-primary multi-step workflow); all LLM calls route through LiteLLM on `http://127.0.0.1:4000`
-- `configs/` -- per-model YAML configs and the `models.json` pricing/tier registry.
-
-Methodology trade-offs and known limitations for the analyzer are documented separately in [`docs/research/CONCERNS.md`](docs/research/CONCERNS.md).
+Diagram sources: [`docs/diagrams/mermaid/`](docs/diagrams/mermaid/README.md). Methodology trade-offs and known limitations: [`docs/research/CONCERNS.md`](docs/research/CONCERNS.md).
 
 ---
 
@@ -90,88 +63,69 @@ The dataset covers four real-world attack vectors with 9 packages total. Each ha
 | Typosquatting | colourama | colorama (46 versions) | Entry-point SAST + LLM |
 | Typosquatting | nmap-python | python-nmap (18 versions) | Entry-point SAST + LLM |
 
-Malicious samples are sourced from the [Backstabber's Knife Collection](https://dasfreak.github.io/Backstabbers-Knife-Collection/) and contemporary threat intelligence databases. Benign samples are real historical releases downloaded directly from PyPI.
-
-The benign dataset is structured in four tiers, each serving a distinct pipeline role:
-
-| Tier | Location | Packages | Purpose |
-|---|---|---|---|
-| Differential baselines | `benign/{num2words,ultralytics}/` | All versions ≤ LKGR | Benign counterparts for account-takeover malware (false-positive baseline) |
-| Targeted controls | `benign/{colorama,python-nmap,termcolor,sisa}/` | All versions of target | Benign counterparts for typosquatting/multi-stage malware (false-positive baseline) |
-| Synthetic stubs | `benign/{torchtriton,totallysafe}/` | 1 generated version | Benign counterpart for dependency-confusion malware (false-positive baseline) |
-| High-volume controls | `benign/controls/{boto3,...}/` | All historical versions | Latency benchmark and broad false-positive baseline |
-
-The high-volume controls cover the 10 most-downloaded PyPI packages (`boto3`, `urllib3`, `requests`, `certifi`, `botocore`, `setuptools`, `packaging`, `idna`, `charset-normalizer`, `python-dateutil`), approximately 5,500 versions in total. They are kept under `benign/controls/` and skipped by the evaluation runner's default mode to avoid thousands of redundant API calls.
-
-**Sample management scripts:**
-
-These helper scripts live in the ignored local/VM `samples/` workspace and are not repo-tracked files:
-- `samples/download_benign.py` -- downloads versions from PyPI for differential baseline and targeted control tiers
-- `samples/create_synthetic.py` -- builds minimal benign stubs for dependency confusion packages
-- `samples/download_controls.py` -- downloads all historical versions of the top-10 packages into `benign/controls/`; supports `--dry-run`
+Malicious samples come from the [Backstabber's Knife Collection](https://dasfreak.github.io/Backstabbers-Knife-Collection/) and contemporary threat intel sources. Benign samples are real historical releases downloaded directly from PyPI. The benign corpus is split into four tiers (differential baselines, targeted controls, synthetic stubs, and ten high-volume controls covering ~5,500 versions of `boto3`, `urllib3`, `requests`, etc.); the high-volume controls are skipped by the analyzer's default mode to avoid thousands of redundant API calls. See [`samples/SAMPLES.md`](samples/SAMPLES.md) for the full tier breakdown and per-package forensics.
 
 ---
 
 ## Runtime topology
 
-PyPI-LABS runs across two Linux user accounts that are deliberately kept apart, and across two distinct phases of network policy. The split exists because the analyzer touches malware archives while the LLM proxy is the only component that holds API keys; keeping them on separate accounts means a compromise in one cannot directly leak credentials from the other.
+Two Linux user accounts on the VM, kept deliberately apart:
 
-The `pypi-runner` account owns the simulator, the injector, and the analyzer. It never holds API keys. It runs the simulator on `127.0.0.1:8080` and talks to the LiteLLM proxy on `127.0.0.1:4000` over the loopback interface only. The `proxy-runner` account owns the LiteLLM proxy and is the only account on the machine that reads vendor API keys from a `.env` file. Vendor calls from any analyzer detector are routed through this proxy; the analyzer process itself never sees a vendor credential.
+- **`pypi-runner`** — owns the simulator, injector, and analyzer. Never holds API keys. Simulator on `127.0.0.1:8080`; talks to the proxy on `127.0.0.1:4000` over loopback only.
+- **`proxy-runner`** — owns the LiteLLM proxy and is the only account that reads vendor API keys from a `.env` file. The analyzer never sees vendor credentials.
 
-There are two checkout layouts to keep straight. The operator (or dev) checkout is the working tree you edit code in, typically in your own home directory or wherever you cloned during development. The deployed runner checkout is at `/home/pypi-runner/pypi-scada-repo` and is the working tree the analyzer actually runs from inside the VM. They are separate trees with independent state, so code edits on the operator checkout are not visible to the deployed runner until they are pulled.
+Two checkouts: the operator/dev checkout you edit code in, and the deployed runner checkout at `/home/pypi-runner/pypi-scada-repo` that the analyzer runs from. Edits in one don't appear in the other until pulled.
 
-Networking goes through two phases. During bootstrap, the VM has outbound network access so `apt`, `pip`, and `git clone` can fetch their dependencies. Once the first-time setup script finishes, the runtime (post-hardening) phase begins: the analyzer process is restricted to loopback, the simulator and proxy are reachable only through `127.0.0.1`, and external egress for vendor traffic is allowed only from the `proxy-runner` account through iptables owner rules. The rationale for this split, including the March 2026 LiteLLM supply-chain incident that motivated treating the proxy as a separate credential-bearing component, is documented in [`docs/ops/RISK_DIARY.md`](docs/ops/RISK_DIARY.md).
+Two network phases: bootstrap allows outbound for `apt`, `pip`, and `git clone`; once the first-time setup finishes, the runtime phase restricts the analyzer to loopback and routes external egress only through `proxy-runner` via iptables owner rules. The rationale, including the March 2026 LiteLLM supply-chain incident, is in [`docs/ops/RISK_DIARY.md`](docs/ops/RISK_DIARY.md).
 
 ---
 
 ## Setting up a Debian VM
 
-PyPI-LABS is designed to run inside a dedicated Debian 12 (Bookworm) virtual machine, not on a host workstation and not inside a Linux container. The system handles live malware artifacts: archives are extracted, parsed, and read by static analyzers, all of which have non-trivial parsing surface and have historically been targeted by adversarial inputs. A VM gives kernel-level isolation between the analyzer and the host, the option to take VM-level snapshots before each sample run and roll back afterwards, and a network namespace that can be scoped down to host-only mode for the actual evaluation. Containers share the host kernel and would give weaker isolation guarantees against archive-extractor or analyzer bugs, which is why PyPI-LABS is optimised for the Debian VM path rather than for `docker run`.
+PyPI-LABS runs inside a dedicated Debian 12 (Bookworm) VM, not on a host workstation and not in a container — archive extraction and the static analyzers themselves are non-trivial parsing surface, and kernel-level isolation plus VM snapshots are the safety net.
 
-Pick a hypervisor that matches your host operating system. The following are the supported options; each link points to its current official setup documentation rather than reproducing the install steps in this manual:
+Pick the hypervisor that matches your host OS (links to current official docs):
 
-- VirtualBox (Windows, macOS Intel, and Linux): <https://www.virtualbox.org/wiki/End-user_documentation>
-- Hyper-V (Windows 10/11 Pro and above): <https://learn.microsoft.com/en-us/virtualization/hyper-v-on-windows/quick-start/enable-hyper-v>
+- VirtualBox (Windows, macOS Intel, Linux): <https://www.virtualbox.org/wiki/End-user_documentation>
+- Hyper-V (Windows 10/11 Pro+): <https://learn.microsoft.com/en-us/virtualization/hyper-v-on-windows/quick-start/enable-hyper-v>
 - UTM (Apple Silicon and Intel macOS): <https://docs.getutm.app/installation/macos/>
 
-Download the Debian 12 installer from <https://www.debian.org/distrib/>. A standard netinst ISO is sufficient and is the smallest download.
+Get the Debian 12 netinst ISO from <https://www.debian.org/distrib/>.
 
-Create the VM with the following shape. These numbers come from the deployment that produced the frozen results cut and have a small amount of headroom for re-runs.
+VM shape:
 
-- Disk: 30 GB. The sample bundle, virtualenv, and SQLite databases fit comfortably within this.
-- Memory: 4 GB RAM minimum. The LLM proxy, simulator, and analyzer can run concurrently on this allocation.
-- CPU: 2 vCPU.
-- Networking: NAT during setup so the VM can fetch `apt` packages, pull the repository, and install hashed Python dependencies. After setup finishes, switch the adapter to host-only for evaluation runs. The proxy reaches vendor APIs only through explicit iptables rules created during deployment, and switching to host-only enforces that nothing else leaks.
-- Snapshots: take the first snapshot immediately after `scripts/debian_first_time_setup.sh` finishes successfully and before any malware sample is staged. This is the clean baseline you can roll back to. Take a second snapshot after the first sample bundle is uploaded, so subsequent reruns can start from a known-good but populated state.
-
-Snapshot discipline matters because the system explicitly does not install or execute sample packages, but the act of extracting and reading them is itself parsing surface. Rolling back to the pre-sample snapshot after each sweep guarantees that no residual state from a previous run can confuse a later one.
+- Disk: 30 GB
+- RAM: 4 GB minimum
+- CPU: 2 vCPU
+- Network: NAT during setup, switch to host-only after the first-time script finishes
+- Snapshot immediately after setup completes (clean baseline) and again after the first sample upload (populated baseline). Roll back between evaluation runs.
 
 ---
 
 ## First-time setup
 
-The canonical first-run path uses two scripts in sequence: `scripts/debian_first_time_setup.sh` to bring the OS-level prerequisites into place, and `deployment.sh` to assemble the application layout under `/home/pypi-runner/pypi-scada-repo`. Both are idempotent and safe to re-run if you need to recover from a partial setup.
+Two scripts in sequence: `scripts/debian_first_time_setup.sh` (OS-level prerequisites) then `deployment.sh` (assembles the application under `/home/pypi-runner/pypi-scada-repo`). Both are idempotent.
 
-Before you start, two things must be in place: a `.env` file with the deployment environment variables (see the next subsection), and the two sample bundles staged on disk (see the subsection after that). `deployment.sh` will set up `~/.netrc` for you from the `PULL_TOKEN` value in `.env`; the token is a fine-grained, pull-only PAT supplied by the project author for hand-in, so do not commit it anywhere.
+Two prerequisites before invoking them: a `.env` file (next subsection) and the sample bundles staged on disk (subsection after). `deployment.sh` builds `~/.netrc` from the `PULL_TOKEN` value in `.env`; the token is a pull-only PAT supplied by the project author — do not commit it anywhere.
 
 ### The `.env` file (required)
 
-`deployment.sh` reads its environment from a `.env` file in its own working directory — typically the root of the operator's checkout (`~/PyPi-SCADA/.env`). Copy [`.env.example`](.env.example) to `.env` and fill in each value:
+`deployment.sh` reads `.env` from its own working directory (typically `~/PyPi-SCADA/.env`). Copy the template and fill in values:
 
 ```bash
 cp .env.example .env
 $EDITOR .env
 ```
 
-The variables and where to obtain them:
+Variables:
 
-- `PULL_TOKEN` — supplied by the project author for hand-in (a fine-grained, pull-only GitHub personal access token for this private repository). Do not generate your own; paste the supplied value verbatim.
-- `ANTHROPIC_API_KEY` — sign up at <https://console.anthropic.com> and create a key under Settings → API keys.
-- `OPENAI_API_KEY` — sign up at <https://platform.openai.com> and create a key under Dashboard → API keys.
-- `TOGETHER_API_KEY` — sign up at <https://www.together.ai> and create a key under Settings → API keys.
-- `GEMINI_API_KEY` — only required when `deployment.sh` is run with `GEMINI=on` (the default). Sign up at <https://aistudio.google.com> and create a key under "Get API key".
+- `PULL_TOKEN` — supplied by the project author. Paste verbatim; do not generate your own.
+- `ANTHROPIC_API_KEY` — <https://console.anthropic.com> → Settings → API keys.
+- `OPENAI_API_KEY` — <https://platform.openai.com> → Dashboard → API keys.
+- `TOGETHER_API_KEY` — <https://www.together.ai> → Settings → API keys.
+- `GEMINI_API_KEY` — <https://aistudio.google.com> → Get API key. Only needed when `GEMINI=on` (default).
 
-`deployment.sh` then writes a curated subset of these (the four vendor API keys only — never `PULL_TOKEN`) to `/home/proxy-runner/.env` with mode 600. The `proxy-runner` account is the only account that ever reads the vendor keys; the analyzer process never sees them.
+`deployment.sh` then writes the four vendor keys (never `PULL_TOKEN`) to `/home/proxy-runner/.env` mode 600. The analyzer never sees vendor keys directly.
 
 ### Sample bundles
 
@@ -188,65 +142,62 @@ export SAMPLES_DIR=/home/<your-user>/samples
 
 `deployment.sh` extracts the supplied bundles into `/home/pypi-runner/pypi-scada-repo/samples/` under the deployed-runner checkout.
 
-The four steps in order:
+Four steps:
 
-1. **Run the first-time setup script.** From the operator account in the freshly installed Debian VM, run `scripts/debian_first_time_setup.sh`. This installs the system packages listed in `requirements/apt.txt` (Python 3, venv, git, curl, unzip, iptables, sqlite3, and a few build helpers), creates the dedicated `pypi-runner` and `proxy-runner` system users, builds the Python virtual environment, and installs the hash-pinned dependencies from `requirements/requirements.txt` with `--require-hashes --no-deps`. The script ends by calling `deployment.sh DEPLOY_PHASE=setup` followed by `DEPLOY_PHASE=smoke`, so for a fresh install you usually do not need to invoke `deployment.sh` separately.
+1. **First-time setup script.** Installs apt packages from `requirements/apt.txt`, creates the `pypi-runner` and `proxy-runner` accounts, builds the venv, installs hash-pinned Python deps, then chains into `deployment.sh DEPLOY_PHASE=setup` and `=smoke`. For a fresh install you only run this:
 
    ```bash
    cd ~/PyPi-SCADA
    ./scripts/debian_first_time_setup.sh
    ```
 
-2. **Run `deployment.sh DEPLOY_PHASE=setup` if needed.** If the first-time script ran cleanly, this step is already done. If you are repairing a partially-deployed VM, invoke it explicitly: it lays the repository under `/home/pypi-runner/pypi-scada-repo`, extracts the sample bundles into the tmpfs-backed staging directory, brings up the simulator, primes the injector, registers the analyzer entry points, and brings up the LiteLLM proxy on `127.0.0.1:4000`.
+2. **Re-run setup if needed** (only for recovering a partial deployment):
 
    ```bash
-   MALWARE_ZIP_PASSWORD=infected ./deployment.sh DEPLOY_PHASE=setup
+   ./deployment.sh DEPLOY_PHASE=setup
    ```
 
-3. **Confirm the smoke test passes.** `deployment.sh DEPLOY_PHASE=smoke` runs the first health check: it verifies that the simulator answers on `127.0.0.1:8080`, that the proxy answers on `127.0.0.1:4000`, that the analyzer entry points are importable, and that the test suite passes. Green looks like a clean exit code. Failures usually surface here rather than later, so do not skip this step.
+3. **Smoke test** — confirms simulator on `127.0.0.1:8080`, proxy on `127.0.0.1:4000`, analyzer imports, and the test suite all work. Don't skip this:
 
    ```bash
    ./deployment.sh DEPLOY_PHASE=smoke
    ```
 
-4. **Snapshot the VM.** Once the smoke test is green, take a VM-level snapshot from your hypervisor's interface. This is the clean baseline to which you will return between evaluation runs. From this point onwards the operator never needs to run the setup scripts again unless the dependency lockfile changes.
-
-   > Snapshot the running VM in VirtualBox, Hyper-V, or UTM. No shell command — use the hypervisor menu.
+4. **Snapshot the VM** through your hypervisor menu (VirtualBox, Hyper-V, or UTM — no shell command). This is the baseline to roll back to between runs.
 
 ---
 
 ## Running the system
 
-Day-to-day operations are handled through `scripts/service_control.sh`, which wraps systemd-style start, stop, and status helpers for the four long-running components: the simulator, the injector worker, the analyzer worker, and the LiteLLM proxy.
+The easiest way to drive day-to-day operations is the interactive review TUI:
 
-To start everything in the right order — the proxy and simulator come up first, the injector and analyzer wait for them:
+```bash
+python scripts/review_tui.py
+```
+
+It wraps every operation in a menu — deployment, dry runs, experiments, database inspection, logs, tests — with safety tags and confirmation prompts. Sample-set, Gemini, and analysis-DB context are togglable from inside the menu. The TUI calls the same scripts described below; it just removes the need to memorise flags.
+
+For scripted day-to-day operations, `scripts/service_control.sh` wraps start/stop/status for the simulator, injector, analyzer, and LiteLLM proxy:
 
 ```bash
 scripts/service_control.sh start all
-```
-
-To bring the system down at the end of a session:
-
-```bash
 scripts/service_control.sh stop all
 ```
 
-To confirm the proxy and the simulator are both reachable from inside the VM:
+Confirm both services are up:
 
 ```bash
 curl -sf http://127.0.0.1:4000/health
 curl -sf http://127.0.0.1:8080/simple/
 ```
 
-Logs are documented in the Logs table in [`docs/USAGE.md`](docs/USAGE.md). The analyzer log under `src/analyzer/logs/analyzer-*.log` is the first place to look when a run is misbehaving. The LiteLLM log under `/home/proxy-runner/litellm.log` is where you check whether vendor calls reached the proxy at all.
-
-Vendor API calls always traverse `proxy-runner`. If the analyzer log shows a model call timing out, check the proxy log before assuming the network is at fault. If both show the call reaching the proxy and the proxy reaching the vendor, the failure is upstream and will appear in `eval_results.db` as an error row that the repair script (`scripts/error_correct_production_data.py`) can rerun later.
+Logs: analyzer at `src/analyzer/logs/analyzer-*.log`, LiteLLM at `/home/proxy-runner/litellm.log`. Vendor API calls always traverse `proxy-runner` — if a model call times out, check the proxy log first. Upstream failures land in `eval_results.db` as error rows that `scripts/error_correct_production_data.py` can rerun.
 
 ---
 
 ## Reviewer / examiner quick checks
 
-These checks do not execute sample packages and are safe to run on a clean operator checkout without going through the full VM setup. Use the existing project virtualenv when one is present; the current validation environment is `.venv` with Python 3.14. Fresh installs should use the hash-pinned lockfile under `requirements/`. On Python 3.14, `pygit2` may require system `libgit2` headers if no compatible wheel is available.
+Safe checks that do not execute sample packages, runnable on a clean operator checkout without going through full VM setup. Current validation environment is `.venv` with Python 3.14.
 
 ```bash
 ./.venv/bin/python src/analyzer/evaluate.py --help
@@ -255,7 +206,7 @@ These checks do not execute sample packages and are safe to run on a clean opera
 MPLCONFIGDIR=/tmp/matplotlib-cache ./.venv/bin/pytest tests/
 ```
 
-To validate the packaged frozen cut without modifying the committed outputs, point the build at the local analysis DB copy and a temporary output root:
+Validate the packaged frozen cut against a temporary output root:
 
 ```bash
 MPLCONFIGDIR=/tmp/matplotlib-cache ./.venv/bin/python \
@@ -264,9 +215,9 @@ MPLCONFIGDIR=/tmp/matplotlib-cache ./.venv/bin/python \
   --out-root /tmp/pypi_labs_frozen_cut_check
 ```
 
-The repository root `eval_results.db` is not the frozen-cut evidence source. The validation DB is `data_processing/source_eval_results.db`, which lives alongside the packaged frozen-cut outputs and matches the SHA recorded in `data_processing/frozen_cut_20260426/source_manifest.json`. The file is gitignored; see `data_processing/README.md` for how to obtain it.
+The validation DB `data_processing/source_eval_results.db` is gitignored — see [`data_processing/README.md`](data_processing/README.md) for how to obtain it and verify its SHA against `source_manifest.json`. The repo-root `eval_results.db` is not the frozen-cut source.
 
-For end-to-end validation that actually exercises the simulator, injector, and analyzer together, follow the Debian VM path above rather than running the lab pipeline directly on a workstation.
+For end-to-end validation follow the Debian VM path above rather than running the lab pipeline directly on a workstation.
 
 ---
 
@@ -291,17 +242,13 @@ For end-to-end validation that actually exercises the simulator, injector, and a
 
 ## Security and isolation rationale
 
-The supporting documents in `docs/ops/` explain why each isolation decision was made and how to verify the system is behaving accordingly.
+Supporting documents under `docs/ops/` and `docs/research/`:
 
-[`docs/ops/RISK_DIARY.md`](docs/ops/RISK_DIARY.md) is the decision log. It records each substantive isolation, credential, and process-boundary decision and the incident or argument that motivated it. The March 2026 LiteLLM PyPI supply-chain incident, for example, is what motivated treating LiteLLM as a separate credential-bearing component rather than as harmless analyzer internals.
-
-[`docs/ops/DEPLOYMENT_MANIFEST.md`](docs/ops/DEPLOYMENT_MANIFEST.md) is the deeper deployment reference. It expands the first-time setup steps above with the full sequence used on the provisioned experiment VM, including the exact account creation, sample extraction, and service ordering.
-
-[`docs/ops/NETWORK_EXPOSURE_RECON.md`](docs/ops/NETWORK_EXPOSURE_RECON.md) provides verification scripts that confirm the runtime network surface matches the intended policy: loopback-only for the analyzer, scoped egress for the proxy. Run it after deployment if you want to double-check that nothing else can talk out.
-
-[`docs/ops/DEPENDENCY_SECURITY_SOP.md`](docs/ops/DEPENDENCY_SECURITY_SOP.md) is the short standard operating procedure for the hash-pinned dependency workflow used by the lockfiles under `requirements/`.
-
-[`docs/research/CONCERNS.md`](docs/research/CONCERNS.md) is a methodology document covering the deliberate design trade-offs in ground-truth labelling, evaluation interpretation, and the known limitations a reader should keep in mind before drawing conclusions from the metrics. It is the companion to the results in `data_processing/frozen_cut_20260426/`.
+- [`docs/ops/RISK_DIARY.md`](docs/ops/RISK_DIARY.md) — decision log for each isolation, credential, and process-boundary choice (e.g. the March 2026 LiteLLM supply-chain incident that drove the proxy-runner split).
+- [`docs/ops/DEPLOYMENT_MANIFEST.md`](docs/ops/DEPLOYMENT_MANIFEST.md) — deeper deployment reference with full account creation, sample extraction, and service ordering.
+- [`docs/ops/NETWORK_EXPOSURE_RECON.md`](docs/ops/NETWORK_EXPOSURE_RECON.md) — verification scripts confirming loopback-only analyzer and scoped proxy egress.
+- [`docs/ops/DEPENDENCY_SECURITY_SOP.md`](docs/ops/DEPENDENCY_SECURITY_SOP.md) — hash-pinned dependency SOP.
+- [`docs/research/CONCERNS.md`](docs/research/CONCERNS.md) — methodology trade-offs and known limitations; the companion to `data_processing/frozen_cut_20260426/`.
 
 ---
 
@@ -331,6 +278,7 @@ The following are failure modes that have actually occurred during the project, 
 
 ## Resources
 
+- [`scripts/review_tui.py`](scripts/review_tui.py) -- interactive menu wrapping deployment, dry runs, experiments, DB inspection, logs, and tests
 - [`docs/USAGE.md`](docs/USAGE.md) -- Notendahandbók (user manual)
 - [`docs/ops/`](docs/ops/) -- security decisions, deployment manifest, dependency SOP, network exposure recon
 - [`overleaf_docs/thesis/`](overleaf_docs/thesis/) -- thesis source (nested git repo)
