@@ -1,28 +1,44 @@
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#d9e8f5', 'primaryTextColor': '#15202b', 'primaryBorderColor': '#3f6f8c', 'lineColor': '#2f4858', 'secondaryColor': '#f4efe2', 'tertiaryColor': '#eef4ea', 'fontFamily': 'Helvetica' }}}%%
-flowchart LR
+flowchart TD
     classDef service fill:#d9e8f5,stroke:#3f6f8c,stroke-width:1px,color:#15202b;
-    classDef sidecar fill:#f6e7dd,stroke:#a66a41,stroke-width:1px,color:#15202b;
+    classDef probe fill:#f6e7dd,stroke:#a66a41,stroke-width:1px,color:#15202b;
     classDef output fill:#f4efe2,stroke:#8b6f3d,stroke-width:1px,color:#15202b;
 
-    DB[("eval_run / eval_result DB")]
-    REPAIR["error_correct_production_data.py<br/>append-only :repair runs"]
-    SUM["summarize_thesis_eval_db.py<br/>dataset / controls<br/>raw vs cleaned + alias outputs"]
-    MEM["model_memory_probe summaries<br/>dataset + controls"]
-    CUT["data_processing frozen cut<br/>digests, derived CSVs, figures, manifests"]
-    THESIS["Thesis tables + figures"]
-    SLIDES["Sitrep / defense slides"]
-    DEMO["Demo summaries + live DB inspection"]
+    DB[("1. Evaluation Database<br/>(Raw eval_run & eval_result rows)")]
 
-    DB -->|raw canonical rows| SUM
-    DB -->|recent runs| DEMO
-    REPAIR -. latest repair overlays .-> SUM
-    DB -. source error rows .-> REPAIR
-    MEM --> CUT
-    SUM --> CUT
-    CUT --> THESIS
-    CUT --> SLIDES
-    SUM --> DEMO
+    subgraph PROCESSING[2. Data Processing & Repair]
+        direction LR
+        REPAIR["Error Correction Script<br/>(Appends repair overlays)"]
+        SUM["Thesis Summarizer Script<br/>(Aggregates raw + cleaned metrics)"]
+    end
+
+    MEM["Memory Probe Runs<br/>(Separate validity summaries)"]
+    CUT["3. Frozen Cut Package<br/>(Locks digests, CSVs, & manifests)"]
+
+    subgraph DELIVERABLES[4. Final Reporting]
+        direction LR
+        THESIS["Thesis Tables & Figures"]
+        SLIDES["Defense Slides"]
+        DEMO["Live Demo / Inspection"]
+    end
+
+    %% Database to Processing
+    DB -.->|Source error rows| REPAIR
+    REPAIR -.->|Repair overlays| SUM
+    DB ===>|Raw canonical rows| SUM
+    
+    %% Live inspection routes
+    DB --->|Recent runs| DEMO
+    SUM --->|Summary views| DEMO
+
+    %% To Frozen Cut
+    SUM ===> CUT
+    MEM --->|Validity data| CUT
+
+    %% To Deliverables
+    CUT ===> THESIS
+    CUT ---> SLIDES
 
     class DB service;
-    class REPAIR,MEM sidecar;
+    class REPAIR,MEM probe;
     class SUM,CUT,THESIS,SLIDES,DEMO output;

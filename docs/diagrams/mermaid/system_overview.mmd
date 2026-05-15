@@ -1,34 +1,43 @@
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#d9e8f5', 'primaryTextColor': '#15202b', 'primaryBorderColor': '#3f6f8c', 'lineColor': '#2f4858', 'secondaryColor': '#f4efe2', 'tertiaryColor': '#eef4ea', 'fontFamily': 'Helvetica' }}}%%
-flowchart LR
+flowchart TD
     classDef dataset fill:#eef4ea,stroke:#587246,stroke-width:1px,color:#15202b;
     classDef service fill:#d9e8f5,stroke:#3f6f8c,stroke-width:1px,color:#15202b;
     classDef output fill:#f4efe2,stroke:#8b6f3d,stroke-width:1px,color:#15202b;
     classDef sidecar fill:#f6e7dd,stroke:#a66a41,stroke-width:1px,color:#15202b;
 
-    subgraph SAMPLES[Curated Sample Corpus]
+    subgraph SAMPLES[Curated Samples]
+        direction LR
         MAL["Malicious packages<br/>9 package-version units"]
-        BEN["Targeted benign counterparts<br/>4 package-version units"]
+        BEN["Targeted benign counterparts (to the 9 malicious packages)<br/>4 package-version units"]
         CTRL["High-volume controls<br/>10 benign packages"]
     end
 
     INJ["Injector<br/>upload_samples.py<br/>twine + pip verification"]
-    SIM["Simulator<br/>PEP 503 simple index<br/>version API + artifact store"]
+    SIM["PyPI Laboratory Simulator<br/>PEP 503 simple index<br/>version API + artifact store"]
     ANA["Analyzer<br/>resolve latest labelled stable version<br/>scan all artifacts for that version"]
-    DB[("eval_run / eval_result DB")]
+    
+    subgraph DATA[Data & Validity]
+        direction LR
+        DB[("eval_run / eval_result DB")]
+        PROBE["Memory-probe evaluation runs<br/>dataset + controls"]
+    end
+    
     SUM["Thesis summaries<br/>raw vs cleaned metrics<br/>package-version aggregation"]
-    PROBE["Memory-probe sidecars<br/>dataset + controls"]
     CUT["Frozen-cut package<br/>data_processing/<br/>figures + digests + manifests"]
 
     MAL --> INJ
     BEN --> INJ
     CTRL --> INJ
+    
     INJ --> SIM
     SIM --> ANA
     ANA --> DB
+    
     DB --> SUM
     SUM --> CUT
+    
     SAMPLES -. package identities .-> PROBE
-    PROBE -. validity sidecar .-> CUT
+    PROBE -. validity Script .-> CUT
 
     class MAL,BEN,CTRL dataset;
     class INJ,SIM,ANA,DB service;

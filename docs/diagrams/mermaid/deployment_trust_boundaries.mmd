@@ -1,45 +1,52 @@
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#d9e8f5', 'primaryTextColor': '#15202b', 'primaryBorderColor': '#3f6f8c', 'lineColor': '#2f4858', 'secondaryColor': '#f4efe2', 'tertiaryColor': '#eef4ea', 'fontFamily': 'Helvetica' }}}%%
-flowchart LR
-    classDef boundary fill:#f7f8fa,stroke:#5f6b76,stroke-width:1.5px,color:#15202b;
+flowchart TD
+    classDef boundary fill:#f7f8fa,stroke:#5f6b76,stroke-width:2px,color:#15202b,stroke-dasharray: 5 5;
     classDef service fill:#d9e8f5,stroke:#3f6f8c,stroke-width:1px,color:#15202b;
     classDef security fill:#f6e7dd,stroke:#a66a41,stroke-width:1px,color:#15202b;
     classDef output fill:#f4efe2,stroke:#8b6f3d,stroke-width:1px,color:#15202b;
 
-    OP["Operator repo + TUI<br/>/home/lexi/PyPi-SCADA"]
+    OP["Operator repo + TUI"]
 
-    subgraph PRUN["pypi-runner boundary"]
+    subgraph PRUN["pypi-runner boundary (No outbound egress)"]
+        direction TB
         AN["Analyzer + review TUI<br/>no API keys<br/>loopback only"]
         SIM["Simulator<br/>127.0.0.1:8080"]
-        DB[("eval_results.db<br/>src/data/eval_results.db")]
+        DB[("eval_results.db")]
         FW["owner-based iptables<br/>non-loopback egress DROP"]
+        
+        AN -->|loopback| SIM
+        AN -->|writes| DB
+        
+        %% Invisible link to force FW to the bottom of this box
+        SIM ~~~ FW
     end
 
-    subgraph XRUN["proxy-runner boundary"]
+    subgraph XRUN["proxy-runner boundary (Holds credentials)"]
+        direction TB
         LLM["LiteLLM proxy<br/>127.0.0.1:4000<br/>provider keys only here"]
-        ALLOW["allowlisted HTTPS egress<br/>OpenAI / Anthropic / Gemini / Together"]
+        ALLOW["allowlisted HTTPS egress"]
+        
+        LLM --> ALLOW
     end
 
-    subgraph VENDORS["Allowed external vendor endpoints"]
-        OAI["api.openai.com"]
-        ANT["api.anthropic.com"]
-        GEM["generativelanguage.googleapis.com"]
-        TOG["api.together.xyz"]
+    subgraph NET["Public Internet"]
+        direction TB
+        VENDORS["Allowed external endpoints:<br/>api.openai.com<br/>api.anthropic.com<br/>api.together.xyz<br/>generativelanguage.googleapis.com"]
+        BLOCKED["All other internet destinations"]
     end
-
-    NET["Public internet"]
 
     OP --> AN
-    AN -->|loopback| SIM
-    AN -->|writes results| DB
+    
+    %% The critical loopback bridge
     AN -->|OpenAI-compatible HTTP<br/>loopback only| LLM
-    FW -. blocks direct egress .-> NET
-    LLM --> ALLOW
-    ALLOW --> OAI
-    ALLOW --> ANT
-    ALLOW --> GEM
-    ALLOW --> TOG
+    
+    %% Firewall rule pointing to the bottom
+    FW -. blocks direct egress .-> BLOCKED
+    
+    %% Egress routing pointing to the bottom
+    ALLOW -->|HTTPS| VENDORS
 
     class OP,AN,SIM,LLM service;
     class DB output;
-    class FW,ALLOW,NET security;
-    class PRUN,XRUN,VENDORS boundary;
+    class FW,ALLOW,NET,VENDORS,BLOCKED security;
+    class PRUN,XRUN boundary;
