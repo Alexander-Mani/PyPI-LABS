@@ -132,7 +132,7 @@ Variables:
 Stage these zip files in the operator's home directory before invoking `deployment.sh`:
 
 - `benign_and_controlls.zip` (required) — the benign and high-volume control corpus. Note the filename has two `l`s.
-- `malware_backstabbers_knife.zip` (optional) — the malicious corpus, encrypted with password `infected` (the Backstabber's Knife Collection community password). Omit this file when handing the project to a supervisor or examiner who cannot legally receive the live malware corpus; `deployment.sh` prints a `NOTICE` and continues with benign and controls only. Analyzer actions that touch malicious packages will simply find an empty malware directory and skip those rows; the review TUI and the controls-only evaluation paths still work.
+- `malware_backstabbers_knife.zip` (optional) — the malicious corpus, encrypted with password `infected` (the Backstabber's Knife Collection community password). Omit this file when handing the project to a supervisor or examiner who cannot legally receive the live malware corpus; `deployment.sh` prints a `NOTICE` and continues with benign and controls only. When the malware bundle is omitted, `deployment.sh` also skips the final evaluation step (Step 10) with a clean `exit 0`, so `scripts/debian_first_time_setup.sh` succeeds end-to-end. To exercise the analyzer against the high-volume controls after that, run `scripts/review_tui.py` or `python src/analyzer/evaluate.py --sample-set controls --profile test` as the `pypi-runner` account.
 
 The default staging directory is `/home/operator/samples/`. Override it by exporting `SAMPLES_DIR` before running `deployment.sh`:
 

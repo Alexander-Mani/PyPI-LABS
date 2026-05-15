@@ -120,8 +120,10 @@ fi
 # deployment.sh continues with benign and controls only.
 _MALWARE_ZIP="${SAMPLES_DIR:-/home/operator/samples}/malware_backstabbers_knife.zip"
 if [ -f "${_MALWARE_ZIP}" ]; then
+  _HAS_MALWARE=1
   _MALWARE_EXTRACT="unzip -P infected ${UNZIP_FLAGS} \"${_MALWARE_ZIP}\" -d /home/pypi-runner/pypi-scada-repo/samples/malware_backstabbers_knife/"
 else
+  _HAS_MALWARE=0
   echo "NOTICE: malicious bundle not found at ${_MALWARE_ZIP}; deployment will continue with benign and controls only."
   _MALWARE_EXTRACT="echo 'Skipping malicious bundle extraction (zip not present).'"
 fi
@@ -423,6 +425,14 @@ case "$_EVAL_PROGRESS" in
     exit 1
     ;;
 esac
+
+if [[ "${_HAS_MALWARE}" == "0" ]]; then
+  echo "Step 10: Skipping evaluation pipeline (no labelled malicious samples present)."
+  echo "         The smoke phase completed bootstrap, sample upload, and the static-tool smoke checks."
+  echo "         To exercise the analyzer against the high-volume controls, run scripts/review_tui.py"
+  echo "         or python src/analyzer/evaluate.py --sample-set controls --profile test as pypi-runner."
+  exit 0
+fi
 
 echo "Step 10: Running the evaluation pipeline (phase: ${_DEPLOY_PHASE})"
 sudo -u pypi-runner bash -c "
