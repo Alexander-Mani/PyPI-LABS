@@ -50,7 +50,7 @@ echo "Sourcing operator environment variables..."
 if [ -f .env ]; then
   source .env 
 else
-  echo "ERROR: .env not found. Ensure PULL_TOKEN and API keys are exported."
+  echo "ERROR: .env not found. Ensure the four vendor API keys are exported (PULL_TOKEN is only needed for a private fork)."
   exit 1
 fi
 
@@ -69,28 +69,40 @@ id -u proxy-runner &>/dev/null || sudo useradd --system --create-home --home-dir
 sudo iptables -F OUTPUT || true
 
 echo "Step 2: Cloning the repository"
+# PULL_TOKEN is optional. The Alexander-Mani/PyPI-LABS repo is public, so the
+# default path clones without any credentials. If PULL_TOKEN is set (private
+# fork or rate-limit avoidance), an ephemeral .netrc is created so the token
+# never lands in .git/config or in the process table.
 if [ ! -d "/home/pypi-runner/pypi-scada-repo" ]; then
-  # Use an ephemeral .netrc so PULL_TOKEN is never embedded in the git remote URL
-  # (.git/config) or visible in the process table during the clone.
-  echo "machine github.com login Alexander-Mani password $PULL_TOKEN" \
-    | sudo -u pypi-runner tee /home/pypi-runner/.netrc > /dev/null
-  sudo chmod 600 /home/pypi-runner/.netrc
+  if [ -n "${PULL_TOKEN:-}" ]; then
+    echo "machine github.com login Alexander-Mani password $PULL_TOKEN" \
+      | sudo -u pypi-runner tee /home/pypi-runner/.netrc > /dev/null
+    sudo chmod 600 /home/pypi-runner/.netrc
 
-  sudo -u pypi-runner git clone \
-    https://github.com/Alexander-Mani/PyPI-LABS.git \
-    /home/pypi-runner/pypi-scada-repo/ || { sudo -u pypi-runner rm -f /home/pypi-runner/.netrc; exit 1; }
+    sudo -u pypi-runner git clone \
+      https://github.com/Alexander-Mani/PyPI-LABS.git \
+      /home/pypi-runner/pypi-scada-repo/ || { sudo -u pypi-runner rm -f /home/pypi-runner/.netrc; exit 1; }
 
-  sudo -u pypi-runner rm -f /home/pypi-runner/.netrc
+    sudo -u pypi-runner rm -f /home/pypi-runner/.netrc
+  else
+    sudo -u pypi-runner git clone \
+      https://github.com/Alexander-Mani/PyPI-LABS.git \
+      /home/pypi-runner/pypi-scada-repo/
+  fi
   sudo chown -R pypi-runner:pypi-runner /home/pypi-runner/pypi-scada-repo
 else
   echo "Repository already exists at /home/pypi-runner/pypi-scada-repo, pulling latest changes."
-  echo "machine github.com login Alexander-Mani password $PULL_TOKEN" \
-    | sudo -u pypi-runner tee /home/pypi-runner/.netrc > /dev/null
-  sudo chmod 600 /home/pypi-runner/.netrc
+  if [ -n "${PULL_TOKEN:-}" ]; then
+    echo "machine github.com login Alexander-Mani password $PULL_TOKEN" \
+      | sudo -u pypi-runner tee /home/pypi-runner/.netrc > /dev/null
+    sudo chmod 600 /home/pypi-runner/.netrc
 
-  sudo -u pypi-runner bash -c "cd /home/pypi-runner/pypi-scada-repo && git pull" || { sudo -u pypi-runner rm -f /home/pypi-runner/.netrc; exit 1; }
+    sudo -u pypi-runner bash -c "cd /home/pypi-runner/pypi-scada-repo && git pull" || { sudo -u pypi-runner rm -f /home/pypi-runner/.netrc; exit 1; }
 
-  sudo -u pypi-runner rm -f /home/pypi-runner/.netrc
+    sudo -u pypi-runner rm -f /home/pypi-runner/.netrc
+  else
+    sudo -u pypi-runner bash -c "cd /home/pypi-runner/pypi-scada-repo && git pull"
+  fi
 fi
 
 echo "Step 3: Staging samples for the research pipeline"
