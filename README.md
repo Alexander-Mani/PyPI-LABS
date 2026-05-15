@@ -158,11 +158,26 @@ The four steps in order:
 
 1. **Run the first-time setup script.** From the operator account in the freshly installed Debian VM, run `scripts/debian_first_time_setup.sh`. This installs the system packages listed in `requirements/apt.txt` (Python 3, venv, git, curl, unzip, iptables, sqlite3, and a few build helpers), creates the dedicated `pypi-runner` and `proxy-runner` system users, builds the Python virtual environment, and installs the hash-pinned dependencies from `requirements/requirements.txt` with `--require-hashes --no-deps`. The script ends by calling `deployment.sh DEPLOY_PHASE=setup` followed by `DEPLOY_PHASE=smoke`, so for a fresh install you usually do not need to invoke `deployment.sh` separately.
 
+   ```bash
+   cd ~/PyPi-SCADA
+   ./scripts/debian_first_time_setup.sh
+   ```
+
 2. **Run `deployment.sh DEPLOY_PHASE=setup` if needed.** If the first-time script ran cleanly, this step is already done. If you are repairing a partially-deployed VM, invoke it explicitly: it lays the repository under `/home/pypi-runner/pypi-scada-repo`, extracts the sample bundles into the tmpfs-backed staging directory, brings up the simulator, primes the injector, registers the analyzer entry points, and brings up the LiteLLM proxy on `127.0.0.1:4000`.
+
+   ```bash
+   MALWARE_ZIP_PASSWORD=infected ./deployment.sh DEPLOY_PHASE=setup
+   ```
 
 3. **Confirm the smoke test passes.** `deployment.sh DEPLOY_PHASE=smoke` runs the first health check: it verifies that the simulator answers on `127.0.0.1:8080`, that the proxy answers on `127.0.0.1:4000`, that the analyzer entry points are importable, and that the test suite passes. Green looks like a clean exit code. Failures usually surface here rather than later, so do not skip this step.
 
-4. **Snapshot the VM.** Once the smoke test is green, take a VM-level snapshot. This is the clean baseline to which you will return between evaluation runs. From this point onwards the operator never needs to run the setup scripts again unless the dependency lockfile changes.
+   ```bash
+   ./deployment.sh DEPLOY_PHASE=smoke
+   ```
+
+4. **Snapshot the VM.** Once the smoke test is green, take a VM-level snapshot from your hypervisor's interface. This is the clean baseline to which you will return between evaluation runs. From this point onwards the operator never needs to run the setup scripts again unless the dependency lockfile changes.
+
+   > Snapshot the running VM in VirtualBox, Hyper-V, or UTM. No shell command — use the hypervisor menu.
 
 ---
 
@@ -170,7 +185,24 @@ The four steps in order:
 
 Day-to-day operations are handled through `scripts/service_control.sh`, which wraps systemd-style start, stop, and status helpers for the four long-running components: the simulator, the injector worker, the analyzer worker, and the LiteLLM proxy.
 
-To start everything in the right order, run `scripts/service_control.sh start all`. The proxy and simulator come up first; the injector and analyzer wait for them. To bring the system down at the end of a session, `scripts/service_control.sh stop all` is the inverse. To confirm the proxy is reachable, the quickest check from inside the VM is `curl -sf http://127.0.0.1:4000/health`, which should return a 200.
+To start everything in the right order — the proxy and simulator come up first, the injector and analyzer wait for them:
+
+```bash
+scripts/service_control.sh start all
+```
+
+To bring the system down at the end of a session:
+
+```bash
+scripts/service_control.sh stop all
+```
+
+To confirm the proxy and the simulator are both reachable from inside the VM:
+
+```bash
+curl -sf http://127.0.0.1:4000/health
+curl -sf http://127.0.0.1:8080/simple/
+```
 
 Logs are documented in the Logs table in [`docs/USAGE.md`](docs/USAGE.md). The analyzer log under `src/analyzer/logs/analyzer-*.log` is the first place to look when a run is misbehaving. The LiteLLM log under `/home/proxy-runner/litellm.log` is where you check whether vendor calls reached the proxy at all.
 
