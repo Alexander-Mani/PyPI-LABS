@@ -106,7 +106,7 @@ VM shape:
 
 Two scripts in sequence: `scripts/debian_first_time_setup.sh` (OS-level prerequisites) then `deployment.sh` (assembles the application under `/home/pypi-runner/pypi-scada-repo`). Both are idempotent.
 
-Two prerequisites before invoking them: a `.env` file (next subsection) and the sample bundles staged on disk (subsection after). `deployment.sh` builds `~/.netrc` from the `PULL_TOKEN` value in `.env`; the token is a pull-only PAT supplied by the project author — do not commit it anywhere.
+Two prerequisites before invoking them: a `.env` file (next subsection) and the sample bundles staged on disk (subsection after). The repo is public, so `git clone` needs no GitHub credentials. `PULL_TOKEN` is only relevant if you point `deployment.sh` at a private fork — leave it blank otherwise.
 
 ### The `.env` file (required)
 
@@ -119,7 +119,7 @@ $EDITOR .env
 
 Variables:
 
-- `PULL_TOKEN` — supplied by the project author. Paste verbatim; do not generate your own.
+- `PULL_TOKEN` — optional. Leave blank for a public clone of `Alexander-Mani/PyPI-LABS`. Set it to a fine-grained, pull-only GitHub PAT only if you are running `deployment.sh` against a private fork.
 - `ANTHROPIC_API_KEY` — <https://console.anthropic.com> → Settings → API keys.
 - `OPENAI_API_KEY` — <https://platform.openai.com> → Dashboard → API keys.
 - `TOGETHER_API_KEY` — <https://www.together.ai> → Settings → API keys.
@@ -256,7 +256,7 @@ Supporting documents under `docs/ops/` and `docs/research/`:
 
 The following are failure modes that have actually occurred during the project, with their usual causes and resolutions.
 
-**`deployment.sh` aborts with `ERROR: .env not found`.** The script needs `PULL_TOKEN` plus the four vendor API keys before it can proceed. Copy `.env.example` to `.env` in the same directory as `deployment.sh` and fill in the values described in the "The `.env` file (required)" subsection above.
+**`deployment.sh` aborts with `ERROR: .env not found`.** The script needs the four vendor API keys before it can proceed. Copy `.env.example` to `.env` in the same directory as `deployment.sh` and fill in the values described in the "The `.env` file (required)" subsection above. `PULL_TOKEN` can stay empty for the public clone.
 
 **Missing `.env` for the proxy.** The `proxy-runner` LiteLLM process fails to start, the analyzer detector calls all return `unauthorized` or time out, and the log under `/home/proxy-runner/litellm.log` mentions missing API keys. The cause is that `~proxy-runner/.env` was never staged. Copy the master `.env` into that account's home directory, set the owner to `proxy-runner`, set mode to `600`, then restart the proxy with `scripts/service_control.sh restart proxy`.
 
@@ -284,5 +284,5 @@ The following are failure modes that have actually occurred during the project, 
 - [`overleaf_docs/thesis/`](overleaf_docs/thesis/) -- thesis source (nested git repo)
 - [`overleaf_docs/project_management_doc/`](overleaf_docs/project_management_doc/) -- project-management document (nested git repo)
 - [Kanban](https://github.com/users/Alexander-Mani/projects/2) -- task management
-- [GitHub](https://github.com/Alexander-Mani/PyPI-LABS) -- version control (private, request access)
+- [GitHub](https://github.com/Alexander-Mani/PyPI-LABS) -- version control (public clone, no token required)
 - [Backstabber's Knife Collection](https://dasfreak.github.io/Backstabbers-Knife-Collection/) -- malicious sample source (access via University of Bonn)
