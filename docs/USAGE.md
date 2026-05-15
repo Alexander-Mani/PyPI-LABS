@@ -1,6 +1,6 @@
 # PyPI-LABS — Notendahandbók (User Manual)
 
-This document is the Notendahandbók (user manual) for PyPI-LABS. The companion Rekstrarhandbók (operations manual), which covers setting up the Debian VM, deploying the system, and recovering from common failure modes, is the project [`README.md`](../README.md). Use this manual once the system is deployed and you are ready to run experiments against it. The on-disk directory and the GitHub repository remain named `PyPi-SCADA` for git continuity; PyPI-LABS is the project name used throughout.
+This document is the Notendahandbók (user manual) for PyPI-LABS. The companion Rekstrarhandbók (operations manual), which covers setting up the Debian VM, deploying the system, and recovering from common failure modes, is the project [`README.md`](../README.md). Use this manual once the system is deployed and you are ready to run experiments against it. The GitHub repository was renamed to `PyPI-LABS` in May 2026; the local on-disk directory is still named `PyPi-SCADA` for working-tree continuity. PyPI-LABS is the project name used throughout.
 
 ## What this tool does for you
 

@@ -77,7 +77,7 @@ if [ ! -d "/home/pypi-runner/pypi-scada-repo" ]; then
   sudo chmod 600 /home/pypi-runner/.netrc
 
   sudo -u pypi-runner git clone \
-    https://github.com/Alexander-Mani/PyPi-SCADA.git \
+    https://github.com/Alexander-Mani/PyPI-LABS.git \
     /home/pypi-runner/pypi-scada-repo/ || { sudo -u pypi-runner rm -f /home/pypi-runner/.netrc; exit 1; }
 
   sudo -u pypi-runner rm -f /home/pypi-runner/.netrc

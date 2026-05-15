@@ -6,7 +6,7 @@ BSc Computer Science thesis, Reykjavik University, Spring 2026.
 
 PyPI-LABS is an isolated lab benchmark for studying malicious Python packages. It stages real-world malicious package artifacts in a local PEP 503 server, extracts static entry-point evidence (`setup.py`, `__init__.py`, `pyproject.toml`, and direct imports), and compares static analysis baselines with single-shot LLM detectors. The analyzer downloads and unpacks artifacts for inspection. It does not install or execute sample packages.
 
-The on-disk directory and the GitHub repository are named `PyPi-SCADA` for git continuity. PyPI-LABS is the project name used in the thesis, in the user-facing tooling, and in the rest of this document; `PyPi-SCADA` only appears here as part of literal paths (such as `/home/pypi-runner/pypi-scada-repo`) and the GitHub URL.
+The GitHub repository was renamed to `PyPI-LABS` in May 2026; older clones using `https://github.com/Alexander-Mani/PyPi-SCADA.git` continue to work through GitHub's automatic redirect, but new clones should use the current URL in the Resources section below. The local on-disk directory is still named `PyPi-SCADA` for working-tree continuity. PyPI-LABS is the project name used in the thesis, in the user-facing tooling, and in the rest of this document; `PyPi-SCADA` only remains as a literal path component (for example in the deployed runner checkout at `/home/pypi-runner/pypi-scada-repo`).
 
 ---
 
@@ -266,5 +266,5 @@ The following are failure modes that have actually occurred during the project, 
 - [`overleaf_docs/thesis/`](overleaf_docs/thesis/) -- thesis source (nested git repo)
 - [`overleaf_docs/project_management_doc/`](overleaf_docs/project_management_doc/) -- project-management document (nested git repo)
 - [Kanban](https://github.com/users/Alexander-Mani/projects/2) -- task management
-- [GitHub](https://github.com/Alexander-Mani/PyPi-SCADA) -- version control (private, request access)
+- [GitHub](https://github.com/Alexander-Mani/PyPI-LABS) -- version control (private, request access)
 - [Backstabber's Knife Collection](https://dasfreak.github.io/Backstabbers-Knife-Collection/) -- malicious sample source (access via University of Bonn)
